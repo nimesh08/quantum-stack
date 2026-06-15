@@ -1,0 +1,64 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# RULE 4: pinned versions live in cmake/Versions.cmake. CI re-reads them
+# from there so a bump only needs one edit.
+
+jobs:
+  configure-skeleton:
+    name: configure-skeleton (no LLVM, sanity only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential
+
+      - name: Show pinned versions
+        run: |
+          echo "--- cmake/Versions.cmake ---"
+          cat cmake/Versions.cmake
+
+      - name: Configure (skeleton, LLVM not present)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQSTACK_ENABLE_TESTS=ON
+
+      - name: Build (skeleton interfaces only)
+        run: cmake --build build -j
+
+  configure-with-llvm:
+    name: configure-with-llvm (Phase A+ gate)
+    runs-on: ubuntu-24.04
+    # Until LLVM/MLIR 22.1.x is wired into CI (cache or prebuilt image),
+    # this job is a placeholder: it documents the intended gate. Phase A
+    # flips `if: false` -> `if: github.event_name != 'workflow_dispatch'`.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM/MLIR (pinned)
+        run: |
+          # Phase A wires this in: either apt.llvm.org pin, or a cached
+          # prebuilt of llvmorg-${QSTACK_LLVM_VERSION}.
+          echo "Phase A: install LLVM/MLIR per cmake/Versions.cmake"
+          exit 1
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=/opt/llvm/lib/cmake/llvm \
+            -DMLIR_DIR=/opt/llvm/lib/cmake/mlir
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

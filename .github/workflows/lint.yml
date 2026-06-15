@@ -1,0 +1,51 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  spec-and-docs:
+    name: spec & docs sanity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required handoff doc is present
+        run: |
+          test -f docs/specs/00_implementation_handoff_and_repo_strategy.docx
+          echo "OK: handoff document present in docs/specs/"
+
+      - name: docs/build/ stub files exist
+        run: |
+          for f in README.md decisions.md versions.md \
+                   phase-a-progress.md phase-a-usage.md phase-a-decisions.md; do
+            test -f "docs/build/$f" || { echo "missing docs/build/$f"; exit 1; }
+          done
+          echo "OK: docs/build/ stubs present"
+
+      - name: Folder layout matches the brief (§3)
+        run: |
+          set -e
+          for d in spinor/dialect spinor/parser spinor/passes spinor/registry \
+                   spinor/sim spinor/emit spinor/submit spinor/tests \
+                   phonon/dialect phonon/lower phonon/types phonon/optimizer \
+                   phonon/tests \
+                   photon/lang photon/frontends/python photon/frontends/cpp \
+                   photon/bindings photon/tests \
+                   platform/jobsvc platform/calibration platform/playground \
+                   platform/deploy \
+                   docs/specs docs/build; do
+            test -d "$d" || { echo "missing $d"; exit 1; }
+          done
+          echo "OK: folder layout matches §3"
+
+      - name: README mentions all seven critical rules
+        run: |
+          for n in 1 2 3 4 5 6 7; do
+            grep -q "RULE $n" README.md || { echo "README missing RULE $n"; exit 1; }
+          done
+          echo "OK: README mentions RULE 1..7"
