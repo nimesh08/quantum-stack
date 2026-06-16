@@ -63,6 +63,17 @@ jobs:
             'mkdocs-section-index>=0.3.9' \
             'mkdocs-glightbox>=0.4.0'
 
+      - name: Copy canonical guide files into the docs tree
+        run: |
+          # The page-level snippet `--8<-- "phaseD_*.md"` resolves
+          # against the mkdocs CWD via os.path.abspath; instead of
+          # fighting that, just copy the canonical files into the
+          # site's content tree at build time.
+          mkdir -p docs/site/content/_includes
+          cp docs/build/phaseD_progress.md docs/site/content/_includes/
+          cp docs/build/phaseD_decisions.md docs/site/content/_includes/
+          cp docs/build/phaseD_platform_guide.md docs/site/content/_includes/
+
       - name: Generate OpenAPI snapshot from FastAPI app
         run: |
           mkdir -p docs/site/content/api/rest

@@ -30,9 +30,12 @@ dist/
 # Phase D additions
 platform/playground/dist/
 docs/site/site/
-docs/site/api/rest/index.html
-docs/site/api/typescript/
-docs/site/openapi.json
+docs/site/build/
+docs/site/content/_includes/
+docs/site/content/api/rest/index.html
+docs/site/content/api/rest/openapi.json
+docs/site/content/api/typescript/
+docs/site/content/openapi.json
 
 # coverage / tooling caches
 .coverage
