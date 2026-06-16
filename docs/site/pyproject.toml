@@ -1,0 +1,27 @@
+[project]
+name = "heisenberg-docs"
+version = "0.1.0"
+description = "Build dependencies for the Heisenberg quantum-stack docs site"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+
+# Pinned upstream 2026-06-16. See ../../docs/build/phaseD_decisions.md D7
+# for the maintenance-mode notice on mkdocs-material 9.7.x.
+dependencies = [
+  "mkdocs>=1.6,<2.0",
+  "mkdocs-material==9.7.6",
+  "mkdocstrings==1.0.4",
+  "mkdocstrings-python==2.0.4",
+  "pymdown-extensions>=10.7,<11",
+  "mkdocs-section-index>=0.3.9",
+  "mkdocs-glightbox>=0.4.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# This is a docs-build environment, not a Python package — disable
+# auto-discovery so `pip install` doesn't try to import sources.
+py-modules = []

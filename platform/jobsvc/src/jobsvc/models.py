@@ -90,6 +90,21 @@ def _utc_now() -> datetime:
 
 
 class JobState(str, enum.Enum):
+    """States a [`Job`][jobsvc.models.Job] passes through.
+
+    Diagram of legal transitions: see ``LEGAL_TRANSITIONS``.
+
+    Members:
+        Submitted: Initial state, set by the API on POST.
+        Queued: Cost check passed; awaiting a worker claim.
+        Running: A worker holds the job (``claim_expires_at`` set).
+        Completed: Worker stored a histogram in
+            [`Result`][jobsvc.models.Result].
+        Rejected: Cost check failed up front, or user cancelled.
+        Failed: Worker errored — see ``error_kind`` to disambiguate
+            "our" vs "provider".
+    """
+
     Submitted = "Submitted"
     Queued = "Queued"
     Running = "Running"
@@ -99,12 +114,30 @@ class JobState(str, enum.Enum):
 
 
 class SourceKind(str, enum.Enum):
+    """Which source language is being submitted.
+
+    Members:
+        photon: Object-oriented Photon language. Lowered to Phonon by
+            the Phase C frontend.
+        phonon: Phonon source — the engine's native input.
+        spinor: Hand-written Spinor assembly. Wrapped as a trivial
+            Phonon program before lowering.
+    """
+
     photon = "photon"
     phonon = "phonon"
     spinor = "spinor"
 
 
 class UserRole(str, enum.Enum):
+    """Authorisation role on a [`User`][jobsvc.models.User].
+
+    Members:
+        user: Can manage own jobs / budget / API keys.
+        admin: Can list and cancel any user's jobs; can create
+            users via ``/api/v1/admin/users``.
+    """
+
     user = "user"
     admin = "admin"
 
@@ -300,10 +333,40 @@ class Job(Base):
         reason: str | None = None,
         error_kind: str | None = None,
     ) -> None:
-        """Mutate state in-memory and stamp timestamps. The caller is
-        expected to insert a corresponding `AuditLog` entry inside the
-        same SQLAlchemy session/transaction (helpers in
-        :mod:`jobsvc.audit`).
+        """Apply a state-machine transition with timestamp stamping.
+
+        Mutates the in-memory object — does **not** flush. The caller
+        is expected to insert a corresponding
+        [`AuditLog`][jobsvc.models.AuditLog] entry inside the same
+        SQLAlchemy session/transaction (see
+        [`jobsvc.audit.record`][jobsvc.audit.record]).
+
+        Stamps ``queued_at``, ``started_at``, or ``finished_at`` on
+        the corresponding state changes. Records ``rejection_reason``
+        on ``Rejected`` and on ``Failed`` (along with
+        ``error_kind`` when classifying our-vs-provider errors).
+
+        Args:
+            new_state: Target state. Must be a legal transition from
+                the current state per
+                [`LEGAL_TRANSITIONS`][jobsvc.models.LEGAL_TRANSITIONS].
+            reason: Free-text explanation; persisted on
+                ``rejection_reason``.
+            error_kind: Either ``"our"`` (compile error, unknown
+                chip, etc.) or ``"provider"`` (provider adapter
+                raised). Only honoured on transitions to ``Failed``.
+
+        Raises:
+            IllegalTransitionError: ``(self.state, new_state)`` is
+                not in
+                [`LEGAL_TRANSITIONS`][jobsvc.models.LEGAL_TRANSITIONS].
+
+        Example:
+            >>> j = Job(user_id=None, target="generic", shots=1,
+            ...         source="x", source_kind=SourceKind.spinor)
+            >>> j.transition(JobState.Queued)
+            >>> j.state is JobState.Queued
+            True
         """
         cur = self.state
         if (cur, new_state) not in LEGAL_TRANSITIONS:

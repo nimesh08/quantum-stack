@@ -1,7 +1,8 @@
-"""Chip registry — reads `spinor/registry/chips/*.yaml`.
+"""Chip registry — reads ``spinor/registry/chips/*.yaml``.
 
 The compiler already owns the registry; here we just expose a Python
-view for the API surface (`GET /targets`) and the cost-control seam.
+view for the API surface ([`GET /api/v1/targets`][jobsvc.routers.targets])
+and the cost-control seam.
 """
 
 from __future__ import annotations
@@ -19,6 +20,30 @@ from .config import get_settings
 
 @dataclass(slots=True, frozen=True)
 class ChipInfo:
+    """Compact view over a chip YAML.
+
+    Loaded by [`list_chips`][jobsvc.registry.list_chips] from the
+    files in ``spinor/registry/chips/``. Hashable + frozen so it can
+    be cached by the lru_cache.
+
+    Attributes:
+        id: Stable chip identifier (e.g. ``"ibm_heron_r2"``,
+            ``"generic"``). Matches the value users pass as
+            ``Job.target``.
+        provider: Submission backend — one of ``ibm | aws | azure |
+            local``. Routes the worker to the right adapter.
+        qubits: Number of qubits the chip exposes.
+        native_gates: Tuple of native-gate names (e.g.
+            ``("ecr", "rz", "sx", "x")``).
+        coupling_topology: Topology name (e.g. ``"heavy_hex_156"``,
+            ``"all_to_all"``).
+        supports: Capability flags (``mid_circuit_measure``,
+            ``feedforward``, ``reset``).
+        pricing_per_shot_usd: USD per shot. Multiplied by ``shots``
+            in [`jobsvc.cost.dollar_cost`][jobsvc.cost.dollar_cost].
+        notes: Free-text notes from the YAML.
+    """
+
     id: str
     provider: str
     qubits: int
@@ -29,6 +54,13 @@ class ChipInfo:
     notes: str = ""
 
     def to_public(self) -> dict[str, Any]:
+        """Return the JSON shape served at ``GET /api/v1/targets``.
+
+        Drops the ``notes`` field. Coerces ``Decimal`` to ``float``
+        because Pydantic's ``TargetOut`` declares the field as
+        ``float`` for backwards compatibility with non-Decimal JSON
+        consumers.
+        """
         return {
             "id": self.id,
             "provider": self.provider,
@@ -66,6 +98,19 @@ def _load_one(path: Path) -> ChipInfo:
 
 @functools.lru_cache(maxsize=1)
 def list_chips() -> list[ChipInfo]:
+    """Read every chip YAML under ``$JOBSVC_SPINOR_REGISTRY_ROOT/chips``.
+
+    Cached for the life of the process — call
+    [`reset_cache`][jobsvc.registry.reset_cache] in tests that need to
+    re-read the registry after writing a new chip YAML.
+
+    Returns:
+        Sorted list of [`ChipInfo`][jobsvc.registry.ChipInfo].
+
+    Example:
+        >>> [c.id for c in list_chips()]  # doctest: +SKIP
+        ['ibm_heron_r2', 'ionq_aria_proto', 'ionq_forte', 'quantinuum_helios']
+    """
     root = _registry_root() / "chips"
     if not root.exists():
         return []
@@ -74,6 +119,24 @@ def list_chips() -> list[ChipInfo]:
 
 
 def get_chip(chip_id: str) -> ChipInfo | None:
+    """Look up a chip by id.
+
+    The synthetic ``"generic"`` target is not a YAML — it's
+    materialised here so the API can serve it without a per-test
+    fixture.
+
+    Args:
+        chip_id: Chip id (matches ``Job.target``).
+
+    Returns:
+        [`ChipInfo`][jobsvc.registry.ChipInfo], or ``None`` for unknown
+        ids.
+
+    Example:
+        >>> g = get_chip("generic")
+        >>> g is not None and g.provider == "local"
+        True
+    """
     for c in list_chips():
         if c.id == chip_id:
             return c
@@ -92,6 +155,7 @@ def get_chip(chip_id: str) -> ChipInfo | None:
 
 
 def reset_cache() -> None:
+    """Drop the chip-list cache. Call from tests that mutate the registry."""
     list_chips.cache_clear()
     _registry_root.cache_clear()
 

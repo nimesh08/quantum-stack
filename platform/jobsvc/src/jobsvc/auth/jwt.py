@@ -32,6 +32,18 @@ def _encode(payload: dict[str, Any]) -> str:
 def create_token_pair(
     user_id: uuid.UUID, role: str
 ) -> tuple[str, str, int]:
+    """Mint a fresh access + refresh JWT pair.
+
+    Args:
+        user_id: Subject of the token (becomes the ``sub`` claim).
+        role: ``"user"`` or ``"admin"`` (becomes the ``role`` claim).
+
+    Returns:
+        ``(access_token, refresh_token, expires_in_seconds)``. The
+        access token is short-lived
+        (``settings.jwt_access_minutes`` * 60); the refresh token
+        lives for ``settings.jwt_refresh_days`` days.
+    """
     s = get_settings()
     access_exp = _now_ts() + s.jwt_access_minutes * 60
     refresh_exp = _now_ts() + s.jwt_refresh_days * 24 * 3600
@@ -45,6 +57,18 @@ def create_token_pair(
 
 
 def decode_token(token: str) -> TokenClaims:
+    """Verify signature + expiry, return parsed claims.
+
+    Args:
+        token: JWT string from the ``Authorization: Bearer …`` header
+            (or from ``refresh_token``).
+
+    Returns:
+        [`TokenClaims`][jobsvc.auth.jwt.TokenClaims].
+
+    Raises:
+        jose.JWTError: Signature or expiry check failed.
+    """
     s = get_settings()
     payload = jwt.decode(token, s.jwt_secret, algorithms=[s.jwt_algorithm])
     return TokenClaims(

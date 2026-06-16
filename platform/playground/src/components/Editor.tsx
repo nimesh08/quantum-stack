@@ -6,9 +6,13 @@ import { photonLanguage } from "../languages/photon";
 
 type Kind = "photon" | "phonon" | "spinor";
 
+/** Props for {@link Editor}. */
 export interface EditorProps {
+  /** Current editor contents. */
   value: string;
+  /** Selects the Monaco language for syntax highlighting. */
   kind: Kind;
+  /** Called on every keystroke with the new buffer contents. */
   onChange: (s: string) => void;
 }
 

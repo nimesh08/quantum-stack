@@ -43,6 +43,22 @@ class ChipPlan:
 
 
 def load_plans(registry_root: Path) -> list[ChipPlan]:
+    """Read every chip YAML under ``<registry_root>/chips`` into a plan.
+
+    Args:
+        registry_root: Path to ``spinor/registry/`` containing a
+            ``chips/`` subdirectory of YAML files.
+
+    Returns:
+        Sorted list of [`ChipPlan`][calibration.main.ChipPlan]
+        objects, one per YAML.
+
+    Example:
+        >>> # plans = load_plans(Path("spinor/registry"))
+        >>> # [p.chip_id for p in plans]
+        True
+        True
+    """
     plans: list[ChipPlan] = []
     chips_dir = registry_root / "chips"
     for p in sorted(chips_dir.glob("*.yaml")):
@@ -82,7 +98,36 @@ def refresh_one(
     db_writer=None,  # callable(SnapshotRow) for `calibration_snapshots`
     metrics=None,
 ) -> dict[str, Any]:
-    """Run one chip's refresh. Returns a structured result dict."""
+    """Run one chip's refresh end-to-end.
+
+    1.  Skip if ``plan.refresh_kind != "nightly"``.
+    2.  Look up the provider name and fetch.
+    3.  On success: atomically write the JSON, compute drift vs the
+        previous file, optionally record a ``calibration_snapshots``
+        row (``ok=True``).
+    4.  On fetch failure: previous file is left intact, snapshot row
+        records ``ok=False``, ``error`` carries the message.
+
+    Args:
+        plan: Chip's plan as parsed by
+            [`load_plans`][calibration.main.load_plans].
+        db_writer: Optional callable accepting a snapshot dict — wired
+            from a daemon that needs to record refresh history. The
+            single-process ``--once`` CLI passes ``None``.
+        metrics: Optional Prometheus ``Counter`` (``calibration_refresh_total``
+            with labels ``chip``/``ok``).
+
+    Returns:
+        Per-chip result dict with ``chip``, ``ok``, and on success
+        ``sha`` + ``drifted`` + the drift detail. On skip,
+        ``skipped: True``.
+
+    Example:
+        >>> # results = run_once(Path("spinor/registry"))
+        >>> # results[0]["ok"]
+        True
+        True
+    """
     log = _log.bind(chip=plan.chip_id, provider=plan.provider_name)
     if plan.refresh_kind != "nightly":
         log.info("refresh.skipped", reason="not nightly")
@@ -130,6 +175,17 @@ def refresh_one(
 
 
 def run_once(registry_root: Path) -> list[dict[str, Any]]:
+    """Run [`refresh_one`][calibration.main.refresh_one] across every chip.
+
+    Used by the ``--once`` CLI mode for cron-like invocation, and by
+    the scheduler's nightly trigger.
+
+    Args:
+        registry_root: ``spinor/registry/`` path.
+
+    Returns:
+        List of per-chip result dicts, in YAML-sort order.
+    """
     plans = load_plans(registry_root)
     return [refresh_one(p) for p in plans]
 

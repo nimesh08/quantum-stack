@@ -1,0 +1,55 @@
+/* Heisenberg quantum-stack docs — small style additions on top of
+ * mkdocs-material. */
+
+:root {
+  --md-primary-fg-color: #4f46e5;
+  --md-accent-fg-color: #7c3aed;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #818cf8;
+  --md-accent-fg-color: #a78bfa;
+  --md-default-bg-color: #0f172a;
+}
+
+/* Make admonitions a touch denser. */
+.md-typeset .admonition,
+.md-typeset details {
+  font-size: 0.85rem;
+}
+
+/* Inline code: a hint of accent color. */
+.md-typeset code {
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+/* Reference page headers tighter. */
+.doc-heading {
+  margin-top: 1.6em !important;
+}
+.doc-symbol-type-parameter,
+.doc-symbol-type-attribute {
+  font-family: var(--md-code-font);
+}
+
+/* The four-layer diagram on index.md should sit large and centered. */
+.hero {
+  text-align: center;
+  padding: 2rem 0 1rem;
+}
+.hero h1 {
+  font-size: 2.4rem;
+  margin: 0;
+}
+.hero p.lead {
+  font-size: 1.1rem;
+  opacity: 0.85;
+  max-width: 720px;
+  margin: 0.5rem auto 1.2rem;
+}
+
+/* Pinned-versions table compactness on the home page. */
+.md-typeset table:not([class]) th {
+  background: rgba(127, 127, 127, 0.06);
+}

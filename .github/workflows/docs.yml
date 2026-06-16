@@ -1,0 +1,131 @@
+# Build the documentation site and publish to GitHub Pages.
+#
+# Pinned versions (re-verified upstream 2026-06-16):
+#   - mkdocs                  <2.0
+#   - mkdocs-material         9.7.6
+#   - mkdocstrings[python]    1.0.4
+#   - mkdocstrings-python     2.0.4
+#   - @redocly/cli            2.32.2
+#   - typedoc-plugin-markdown 4.12.0
+#   - actions/deploy-pages    @v4
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  DISABLE_MKDOCS_2_WARNING: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install platform packages (for mkdocstrings autodoc)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e platform/jobsvc
+          pip install -e platform/calibration
+          pip install -e spinor/submit/python
+          pip install 'bcrypt>=3.2,<4.1'
+
+      - name: Install docs build deps (pinned)
+        run: |
+          pip install \
+            'mkdocs>=1.6,<2.0' \
+            'mkdocs-material==9.7.6' \
+            'mkdocstrings==1.0.4' \
+            'mkdocstrings-python==2.0.4' \
+            'pymdown-extensions>=10.7,<11' \
+            'mkdocs-section-index>=0.3.9' \
+            'mkdocs-glightbox>=0.4.0'
+
+      - name: Generate OpenAPI snapshot from FastAPI app
+        run: |
+          mkdir -p docs/site/content/api/rest
+          python - <<'PY' > docs/site/content/openapi.json
+          from jobsvc.main import app
+          import json, sys
+          json.dump(app.openapi(), sys.stdout, indent=2)
+          PY
+          echo "openapi.json size: $(wc -c < docs/site/content/openapi.json) bytes"
+
+      - name: Render REST reference (Redocly)
+        run: |
+          npx -y @redocly/cli@2.32.2 build-docs \
+            docs/site/content/openapi.json \
+            -o docs/site/content/api/rest/index.html \
+            || (echo "redoc fallback" && \
+                cp docs/site/content/openapi.json \
+                   docs/site/content/api/rest/openapi.json && \
+                cat > docs/site/content/api/rest/index.html <<'HTML'
+          <!doctype html><html><body>
+          <p>Redoc render failed; openapi.json is at <a href="openapi.json">./openapi.json</a>.</p>
+          </body></html>
+          HTML
+                )
+
+      - name: Render TypeScript reference (TypeDoc)
+        working-directory: platform/playground
+        run: |
+          npm ci || npm install
+          npx -y typedoc \
+            --plugin typedoc-plugin-markdown@4.12.0 \
+            --out ../../docs/site/content/api/typescript \
+            --readme none \
+            --hideBreadcrumbs true \
+            --hidePageHeader true \
+            src/api/jobs.ts \
+            src/hooks/useJob.ts \
+            src/hooks/useAuth.ts \
+            src/components/Editor.tsx \
+            src/components/Histogram.tsx \
+            src/components/TargetPicker.tsx \
+            src/languages/spinor.ts \
+            src/languages/phonon.ts \
+            src/languages/photon.ts \
+            || echo "typedoc render failed; falling back to handwritten index"
+
+      - name: Build site
+        working-directory: docs/site
+        run: mkdocs build
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site/build/site
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

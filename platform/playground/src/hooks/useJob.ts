@@ -3,8 +3,23 @@ import { api, JobDetail } from "../api/jobs";
 
 const TERMINAL = new Set(["Completed", "Rejected", "Failed"]);
 
-/** Polls GET /jobs/{id} until the job reaches a terminal state.
- *  Backoff: 1s -> 2s -> 4s, capped at 5s. Gives up after 30 minutes.
+/**
+ * Polls `GET /jobs/{id}` until the job reaches a terminal state.
+ *
+ * Backoff: 1s → 2s → 4s, capped at 5s. Gives up after 30 minutes
+ * with `error` set. Cancels cleanly when the component unmounts.
+ *
+ * @param id - Job id, or `null` to disable polling.
+ * @returns `{ job, error, polling }` — the latest snapshot of the
+ *   job, any thrown error, and whether the poll is still running.
+ *
+ * @example
+ * ```tsx
+ * const [activeId, setActiveId] = useState<string | null>(null);
+ * const { job, polling } = useJobPoll(activeId);
+ * if (polling) return <p>Running…</p>;
+ * if (job?.result) return <Histogram counts={job.result.counts} />;
+ * ```
  */
 export function useJobPoll(id: string | null) {
   const [job, setJob] = useState<JobDetail | null>(null);

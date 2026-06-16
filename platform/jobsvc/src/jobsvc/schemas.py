@@ -104,6 +104,32 @@ class TargetOut(BaseModel):
 
 
 class JobCreate(BaseModel):
+    """Request body for ``POST /api/v1/jobs``.
+
+    Attributes:
+        source: Program text (1-200 000 chars). Format depends on
+            ``source_kind``.
+        source_kind: One of ``photon | phonon | spinor``.
+        target: Chip id from
+            [`GET /targets`][jobsvc.routers.targets]. Use
+            ``"generic"`` for the portable target.
+        shots: Number of shots to run (1..10 000 000).
+        name: Optional human label; surfaces in
+            [`Job.name`][jobsvc.models.Job] and is the cassette key
+            for cassette-mode submissions.
+
+    Example:
+        ```json
+        {
+          "source": "target generic\\nqubit q[2]\\nh q[0]\\ncx q[0], q[1]\\n",
+          "source_kind": "spinor",
+          "target": "ibm_heron_r2",
+          "shots": 1000,
+          "name": "bell"
+        }
+        ```
+    """
+
     source: str = Field(min_length=1, max_length=200_000)
     source_kind: SourceKind = SourceKind.spinor
     target: str = Field(min_length=1, max_length=64)
@@ -112,6 +138,8 @@ class JobCreate(BaseModel):
 
 
 class EstimateOut(BaseModel):
+    """Resource estimate as exposed in ``Job.estimate``."""
+
     num_qubits: int
     depth: int
     two_qubit_count: int
@@ -119,6 +147,13 @@ class EstimateOut(BaseModel):
 
 
 class JobOut(BaseModel):
+    """Compact view of a job (no source, no result).
+
+    Used by ``GET /jobs`` (list) and as the response body of
+    ``POST /jobs``. For the full view see
+    [`JobDetail`][jobsvc.schemas.JobDetail].
+    """
+
     id: uuid.UUID
     user_id: uuid.UUID
     name: str
@@ -140,16 +175,29 @@ class JobOut(BaseModel):
 
 
 class HistogramOut(BaseModel):
+    """Measurement histogram returned with a Completed job."""
+
     counts: dict[str, int]
     shots: int
 
 
 class JobDetail(JobOut):
+    """Full view of a job: ``JobOut`` plus ``source`` and ``result``."""
+
     source: str
     result: HistogramOut | None = None
 
 
 class JobList(BaseModel):
+    """Paginated listing returned by ``GET /jobs``.
+
+    Attributes:
+        items: Page of jobs (most-recent-first).
+        next_cursor: Opaque cursor to pass back as the ``cursor``
+            query param for the next page. ``None`` when there are
+            no more results.
+    """
+
     items: list[JobOut]
     next_cursor: str | None = None
 

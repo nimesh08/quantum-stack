@@ -24,6 +24,31 @@ async def record(
     ip: str | None = None,
     ua: str | None = None,
 ) -> AuditLog:
+    """Append an audit-log entry inside the caller's transaction.
+
+    Never opens a new session; never commits — your transaction
+    decides when (and whether) to flush. By keeping audit writes in
+    the same transaction as the change they record, we get
+    "audit-or-it-didn't-happen" semantics for free.
+
+    Args:
+        session: Async SQLAlchemy session in your enclosing
+            transaction.
+        user_id: User performing the action, or ``None`` for system
+            events.
+        action: Stable action code (e.g. ``"job.created"``,
+            ``"login"``, ``"api_key.revoked"``).
+        target_type: Type of the affected entity (e.g. ``"job"``,
+            ``"user"``, ``"api_key"``). Optional.
+        target_id: Id of the affected entity. Coerced to ``str``.
+        detail: Optional structured payload (becomes JSONB in
+            Postgres).
+        ip: Caller's IP (set from request when available).
+        ua: Caller's User-Agent (set from request when available).
+
+    Returns:
+        The persisted [`AuditLog`][jobsvc.models.AuditLog] row.
+    """
     log = AuditLog(
         user_id=user_id,
         action=action,

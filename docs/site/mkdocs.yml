@@ -1,0 +1,194 @@
+# mkdocs.yml — Heisenberg Quantum Stack documentation site
+#
+# Pinned versions (re-verified upstream 2026-06-16):
+#   - mkdocs                <2.0
+#   - mkdocs-material       9.7.6 (in maintenance mode through Nov 2026; D7)
+#   - mkdocstrings[python]  1.0.4
+#   - mkdocstrings-python   2.0.4
+#   - pymdown-extensions    >=10.7
+#   - typedoc-plugin-markdown 4.12.0 (run separately, output rendered as MD)
+#   - @redocly/cli          2.32.2  (run separately, output is HTML embed)
+#
+# Built and deployed by .github/workflows/docs.yml on every push to main.
+
+site_name: Heisenberg Quantum Stack
+site_description: >
+  Photon · Phonon · Spinor — a four-layer quantum compiler with
+  cost-controlled job execution and a browser playground.
+site_author: Heisenberg Research
+site_url: https://nimesh08.github.io/quantum-stack/
+repo_url: https://github.com/nimesh08/quantum-stack
+repo_name: nimesh08/quantum-stack
+edit_uri: edit/main/docs/site/
+
+docs_dir: content
+site_dir: build/site
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - toc.follow
+    - announce.dismiss
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep-purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep-purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/nimesh08/quantum-stack
+  generator: false
+
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - section-index
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths:
+            - ../../platform/jobsvc/src
+            - ../../platform/calibration/src
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            line_length: 80
+            merge_init_into_class: true
+            members_order: source
+            heading_level: 2
+            docstring_section_style: table
+            filters:
+              - "!^_"
+              - "!^Base$"
+            show_bases: true
+            inherited_members: false
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      base_path: [".", "../.."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Tutorials:
+      - tutorial/index.md
+      - "Bell state, end to end": tutorial/bell.md
+      - "GHZ on a real chip": tutorial/ghz.md
+      - "Add a chip in 30 minutes": tutorial/add_a_chip.md
+      - "Add a calibration provider": tutorial/add_a_provider.md
+  - Guide:
+      - guide/index.md
+      - "Platform guide": guide/platform_guide.md
+      - "Operations": guide/operations.md
+      - "Decisions": guide/decisions.md
+      - "Build journal": guide/progress.md
+  - "API Reference":
+      - api/index.md
+      - "REST API": api/rest/index.md
+      - "Python (jobsvc)":
+          - api/python/jobsvc/index.md
+          - "jobsvc.engine": api/python/jobsvc/engine.md
+          - "jobsvc.cost": api/python/jobsvc/cost.md
+          - "jobsvc.queue": api/python/jobsvc/queue.md
+          - "jobsvc.worker": api/python/jobsvc/worker.md
+          - "jobsvc.models": api/python/jobsvc/models.md
+          - "jobsvc.registry": api/python/jobsvc/registry.md
+          - "jobsvc.providers": api/python/jobsvc/providers.md
+          - "jobsvc.schemas": api/python/jobsvc/schemas.md
+          - "jobsvc.config": api/python/jobsvc/config.md
+          - "jobsvc.audit": api/python/jobsvc/audit.md
+          - "jobsvc.metrics": api/python/jobsvc/metrics.md
+          - "jobsvc.auth": api/python/jobsvc/auth.md
+          - "jobsvc.routers": api/python/jobsvc/routers.md
+      - "Python (calibration)":
+          - api/python/calibration/index.md
+          - "calibration.providers": api/python/calibration/providers.md
+          - "calibration.writer": api/python/calibration/writer.md
+          - "calibration.diff": api/python/calibration/diff.md
+          - "calibration.main": api/python/calibration/main.md
+      - "TypeScript (playground)": api/typescript/index.md
+  - Glossary: glossary.md
+  - Changelog: changelog.md
+
+watch:
+  - ../../platform/jobsvc/src
+  - ../../platform/calibration/src

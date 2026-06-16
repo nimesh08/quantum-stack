@@ -19,8 +19,17 @@ _context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def new_api_key() -> tuple[str, str, str]:
-    """Returns (full_plaintext, prefix, hash). Caller stores prefix +
-    hash; gives plaintext to the user once.
+    """Mint a brand new API key.
+
+    The plaintext is shown to the user **once** — at creation. We
+    store only the prefix (for indexed lookup) and the bcrypt hash.
+
+    Returns:
+        ``(plaintext, prefix, hash)``. Plaintext format is
+        ``<8-char-prefix>.<32-char-body>``. Persist ``prefix`` and
+        ``hash`` on
+        [`ApiKey`][jobsvc.models.ApiKey]; return ``plaintext`` to the
+        caller exactly once.
     """
     prefix = "".join(secrets.choice(_ALPHABET) for _ in range(KEY_PREFIX_LEN))
     body = "".join(secrets.choice(_ALPHABET) for _ in range(_KEY_BODY_LEN))
@@ -29,10 +38,12 @@ def new_api_key() -> tuple[str, str, str]:
 
 
 def hash_api_key(plaintext: str) -> str:
+    """Hash a plaintext API key for storage."""
     return _context.hash(plaintext)
 
 
 def verify_api_key(plaintext: str, hashed: str) -> bool:
+    """Constant-time check of an inbound key against a stored hash."""
     try:
         return _context.verify(plaintext, hashed)
     except ValueError:
@@ -40,6 +51,13 @@ def verify_api_key(plaintext: str, hashed: str) -> bool:
 
 
 def split_prefix(plaintext: str) -> str | None:
+    """Return the 8-char prefix of a well-formed API key, else ``None``.
+
+    Used to scope the bcrypt-verify loop to only the keys whose
+    prefix matches — a database index can't help with bcrypt
+    comparison, but an index on ``prefix`` cuts the candidate set to
+    ~1 in practice.
+    """
     if "." not in plaintext:
         return None
     p, _, _ = plaintext.partition(".")

@@ -26,6 +26,18 @@ const useAuthStore = create<AuthState>((set) => ({
   },
 }));
 
+/**
+ * Auth state hook. Reads tokens from local-storage at first render,
+ * exposes `setTokens` to replace them and `clear` to log out.
+ *
+ * @returns `{ isAuthed, accessToken, email, setTokens, clear }`.
+ *
+ * @example
+ * ```tsx
+ * const auth = useAuth();
+ * if (!auth.isAuthed) return <Navigate to="/login" />;
+ * ```
+ */
 export function useAuth() {
   const s = useAuthStore();
   return {
@@ -37,6 +49,13 @@ export function useAuth() {
   };
 }
 
+/**
+ * Read the bearer token from local-storage (sync).
+ *
+ * Used by the {@link api} client outside the React tree, where the
+ * Zustand store isn't reachable. Returns `null` if no token is
+ * stored.
+ */
 export function getStoredAccessToken(): string | null {
   return localStorage.getItem("access_token");
 }

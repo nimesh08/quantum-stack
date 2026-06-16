@@ -40,6 +40,35 @@ def submit_to_provider(
     *, engine: EngineResult, chip: ChipInfo, shots: int,
     program_name: str = "default",
 ) -> SubmissionOutcome:
+    """Submit one compiled program to its target provider, verbatim.
+
+    Routing:
+
+    | ``chip.provider`` | path |
+    |---|---|
+    | ``local`` | in-process simulator |
+    | ``ibm`` / ``aws`` / ``azure`` | Phase A ``spinor_submit.submit`` |
+
+    The Phase A adapter respects ``SPINOR_SUBMIT_MODE``:
+    ``cassette`` (CI default) replays recorded JSON, ``live`` hits
+    the real provider, ``local`` runs the C++ simulator.
+
+    Args:
+        engine: Successful
+            [`EngineResult`][jobsvc.engine.EngineResult] from
+            [`compile_program`][jobsvc.engine.compile_program].
+            Its ``spinor_qasm3`` field is the verbatim payload.
+        chip: Target chip.
+        shots: Shot count (already validated by the cost seam).
+        program_name: Cassette key for cassette mode (the worker
+            passes the user's ``Job.name`` here so cassette files
+            are scoped to a logical program).
+
+    Returns:
+        [`SubmissionOutcome`][jobsvc.providers.SubmissionOutcome]. On
+        ``ok=False``, ``error_kind`` is one of ``"our"`` or
+        ``"provider"``.
+    """
     provider = chip.provider
     qasm = engine.spinor_qasm3 or _fallback_qasm(engine, chip)
     t0 = time.monotonic()

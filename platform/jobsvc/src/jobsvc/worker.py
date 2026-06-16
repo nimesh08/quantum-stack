@@ -60,8 +60,34 @@ async def update_queue_depth(session: AsyncSession) -> None:
 
 
 async def process_one(session: AsyncSession, *, worker_id: str | None = None) -> bool:
-    """Try to claim and process one Queued job. Returns True if a job
-    was processed (success or failure), False if the queue was empty.
+    """Process exactly one Queued job (if any).
+
+    Lifecycle:
+
+    1.  [`reclaim_expired`][jobsvc.queue.reclaim_expired] — push
+        Running jobs whose lease lapsed back to Queued.
+    2.  [`claim`][jobsvc.queue.claim] — atomically pull the oldest
+        Queued job onto this worker.
+    3.  Recompile the source (we don't keep the artifact across the
+        queue boundary).
+    4.  Route to the provider via
+        [`submit_to_provider`][jobsvc.providers.submit_to_provider]
+        (verbatim mode).
+    5.  On success: ``state=Completed``, persist the histogram to
+        [`Result`][jobsvc.models.Result]. On failure:
+        ``state=Failed`` with classified ``error_kind``.
+
+    Args:
+        session: Async SQLAlchemy session bound to a transaction.
+            ``process_one`` does its own ``commit`` calls between
+            phases so a slow provider call doesn't keep a write
+            transaction open.
+        worker_id: Optional override for the writer of
+            ``Job.claimed_by``; defaults to ``"<hostname>-<pid>"``.
+
+    Returns:
+        True if a job was processed (success or failure), False if
+        the queue was empty.
     """
     wid = worker_id or _worker_id()
 

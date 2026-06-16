@@ -1,16 +1,18 @@
 """Postgres-as-queue helpers.
 
-Implements the contract described in `phaseD_decisions.md` D1:
+Implements the contract described in
+[`phaseD_decisions.md`](../../docs/build/phaseD_decisions.md) D1:
 
-  - `enqueue(session, job_id)` — fires `NOTIFY jobs_new, '<job_id>'`
-    inside the same transaction as the row update. SQLite tests
-    silently skip the NOTIFY.
-  - `claim(session, worker_id)` — `SELECT ... FOR UPDATE SKIP LOCKED`
-    plus a state transition to Running with `claimed_by` and
-    `claim_expires_at`. SQLite path uses a plain UPDATE (single-writer
-    only — fine for tests).
-  - `reclaim_expired(session)` — sweeps Running jobs whose lease has
-    expired back to Queued so another worker can pick them up.
+- [`enqueue`][jobsvc.queue.enqueue] — fires
+  ``NOTIFY jobs_new, '<job_id>'`` inside the same transaction as the
+  row update. SQLite tests silently skip the NOTIFY.
+- [`claim`][jobsvc.queue.claim] —
+  ``SELECT ... FOR UPDATE SKIP LOCKED`` plus a state transition to
+  ``Running`` with ``claimed_by`` and ``claim_expires_at``. SQLite
+  path uses a plain UPDATE (single-writer only — fine for tests).
+- [`reclaim_expired`][jobsvc.queue.reclaim_expired] — sweeps Running
+  jobs whose lease has expired back to Queued so another worker can
+  pick them up.
 """
 
 from __future__ import annotations
@@ -38,6 +40,23 @@ def _is_postgres(session: AsyncSession) -> bool:
 
 
 async def enqueue(session: AsyncSession, job_id: uuid.UUID) -> None:
+    """Wake up workers via Postgres ``LISTEN/NOTIFY``.
+
+    Best-effort: when the engine isn't Postgres (SQLite tests), this
+    is a no-op. The worker poll loop still picks the job up on its
+    next tick.
+
+    Args:
+        session: Async SQLAlchemy session. Must be the same session
+            that just inserted the ``Queued`` row, so the NOTIFY
+            ships in the same transaction.
+        job_id: Newly-queued job's id (becomes the NOTIFY payload).
+
+    Example:
+        >>> # await enqueue(session, job.id)
+        True
+        True
+    """
     if _is_postgres(session):
         await session.execute(text(f"NOTIFY jobs_new, '{job_id}'"))
 
@@ -50,14 +69,36 @@ async def claim(
 ) -> Optional[Job]:
     """Atomically transition the oldest Queued job to Running.
 
-    Returns the claimed Job or None if the queue is empty.
+    On Postgres, uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so two
+    workers running in parallel never claim the same job. On SQLite
+    (single-writer; tests only) the same query without the lock works
+    because there is exactly one writer.
+
+    Args:
+        session: Async SQLAlchemy session.
+        worker_id: Stable identifier for this worker process; written
+            to ``Job.claimed_by`` so reclaim and observability know
+            who held the lease. Convention:
+            ``"<hostname>-<pid>"``.
+        lease_seconds: How long this worker may hold the job before
+            another may steal it. Defaults to
+            ``settings.worker_lease_seconds`` (300 seconds).
+
+    Returns:
+        The claimed [`Job`][jobsvc.models.Job], or ``None`` if the
+        queue is empty.
+
+    Example:
+        >>> # job = await claim(session, "host-1234")
+        >>> # if job is not None: ...
+        True
+        True
     """
     settings = get_settings()
     lease = lease_seconds or settings.worker_lease_seconds
     expires_at = _now() + timedelta(seconds=lease)
 
     if _is_postgres(session):
-        # SELECT id ... FOR UPDATE SKIP LOCKED, then UPDATE that id.
         row = (
             await session.execute(
                 select(Job)
@@ -88,8 +129,23 @@ async def claim(
 
 
 async def reclaim_expired(session: AsyncSession) -> int:
-    """Push Running jobs whose lease expired back to Queued. Returns
-    the number of jobs reclaimed.
+    """Push Running jobs whose lease expired back to Queued.
+
+    Called once at the top of every
+    [`worker.process_one`][jobsvc.worker.process_one] cycle so a
+    worker that crashes mid-job doesn't leave its work stranded.
+
+    Args:
+        session: Async SQLAlchemy session.
+
+    Returns:
+        Number of jobs re-queued. 0 in the common case.
+
+    Example:
+        >>> # n = await reclaim_expired(session)
+        >>> # if n: log.warning("reclaimed", count=n)
+        True
+        True
     """
     now = _now()
     rows = (
