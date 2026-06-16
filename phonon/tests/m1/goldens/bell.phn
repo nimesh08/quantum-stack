@@ -1,0 +1,8 @@
+phonon.module @main attributes {target = "generic"} {
+  %q0 = spinor.alloc_qubit : !spinor.qubit
+  %q1 = spinor.alloc_qubit : !spinor.qubit
+  %q0_1 = spinor.h %q0 : !spinor.qubit
+  %q0_2, %q1_1 = spinor.cx %q0_1, %q1 : !spinor.qubit, !spinor.qubit
+  %c0 = spinor.measure %q0_2 : !spinor.bit
+  %c1 = spinor.measure %q1_1 : !spinor.bit
+}

@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "quantinuum_helios (Azure Quantum simulator)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 503,
+    "11": 497
+  }
+}

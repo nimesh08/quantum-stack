@@ -1,0 +1,6 @@
+{
+  "module": "main",
+  "transformation": "identity",
+  "note": "Phase B M6 ships identity-transform cassettes for the corpus modules. Real PyZX/quizx wiring lands in Phase D when the calibration ingestion pipeline exists.",
+  "output": []
+}

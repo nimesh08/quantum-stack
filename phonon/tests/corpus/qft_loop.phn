@@ -1,0 +1,11 @@
+; qft_loop.phn — counted loop applying Hs to every qubit.
+
+target generic
+qubit q[4]
+bit c[4]
+
+for i in 0..4 {
+  h q[i]
+}
+
+c = measure q

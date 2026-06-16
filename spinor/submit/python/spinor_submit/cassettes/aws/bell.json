@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "ionq_forte (Braket simulator)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 506,
+    "11": 494
+  }
+}

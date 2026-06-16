@@ -1,0 +1,8 @@
+target ibm_heron_r2
+
+kernel bell_kernel() -> int {
+  QReg q(2)
+  q.h(0)
+  q.cx(0, 1)
+  return q.measure_int()
+}

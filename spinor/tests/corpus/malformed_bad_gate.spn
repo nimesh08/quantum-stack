@@ -1,0 +1,5 @@
+; malformed_bad_gate.spn — uses a gate name that isn't in the grammar.
+
+target generic
+qubit q[1]
+hadamard q[0]

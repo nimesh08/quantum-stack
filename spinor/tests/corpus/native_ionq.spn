@@ -1,0 +1,6 @@
+; native_ionq.spn — IonQ Forte native gates.
+target ionq_forte
+qubit q[2]
+ms q[0], q[1]
+gpi(0.5) q[0]
+gpi2(-0.25) q[1]

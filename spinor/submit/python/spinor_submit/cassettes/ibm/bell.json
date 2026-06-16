@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "ibm_heron_r2 (simulator-backed)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 498,
+    "11": 502
+  }
+}

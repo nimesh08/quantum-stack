@@ -1,0 +1,24 @@
+; teleportation.phn — quantum teleportation with mid-circuit
+; measurement and classical feed-forward.
+
+target ibm_heron_r2
+qubit q[3]
+bit c[2]
+
+; Prepare entangled pair on q[1], q[2].
+h q[1]
+cx q[1], q[2]
+
+; Bell measurement on q[0], q[1].
+cx q[0], q[1]
+h q[0]
+c[0] = measure q[0]
+c[1] = measure q[1]
+
+; Feed-forward corrections on q[2].
+if (c[1] == 1) {
+  x q[2]
+}
+if (c[0] == 1) {
+  z q[2]
+}

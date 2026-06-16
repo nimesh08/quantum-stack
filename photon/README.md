@@ -9,16 +9,20 @@ and the nanobind C++<->Python bindings.
 |----------------------|--------------------------------------------------|
 | `lang/`              | OO language + `photon.lib`.                      |
 | `frontends/python/`  | `@photon.kernel` (ast/inspect).                  |
-| `frontends/cpp/`     | Clang LibTooling ingester.                       |
+| `frontends/cpp/`     | Clang LibTooling ingester + `photonc-cxx`.       |
 | `bindings/`          | nanobind C++<->Python.                           |
-| `tests/`             | Phase C tests.                                   |
+| `tests/`             | Phase C tests (M1..M6).                          |
 
-## Critical rules that bind this phase
+## Critical rules
 
-- **RULE 1** — Do not start Phase C until Phase B's tests pass.
-- **RULE 3** — One C++ engine. Python here is the thin nanobind binding
-  and the `@photon.kernel` decorator only — never a second compiler.
+- **RULE 1** — Phase B was complete and tested before Phase C started.
+- **RULE 3** — One C++ engine. The Python frontend is `inspect.getsource`
+  + `ast.parse` + a thin nanobind binding; the C++ frontend is a
+  recursive-descent ingester (LibTooling-backed when Clang is found).
+  Neither reimplements compilation.
 
 ## Status
 
-Empty skeleton. Phase C starts after Phase B is done.
+**Phase C complete.** 45/45 tests pass; the user guide
+[`docs/build/phaseC_photon_guide.md`](../docs/build/phaseC_photon_guide.md)
+is the entry point. Phase D opens in a fresh chat.

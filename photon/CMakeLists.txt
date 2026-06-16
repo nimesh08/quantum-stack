@@ -12,19 +12,22 @@
 # This file is the empty, compiling skeleton. Phase C adds real targets.
 
 if(NOT QSTACK_HAVE_LLVM)
-  message(STATUS "photon: LLVM/MLIR not available; skeleton only.")
-  return()
+  message(STATUS "photon: LLVM/MLIR not available; building lang without MLIR backend.")
 endif()
 
 add_library(photon INTERFACE)
 target_include_directories(photon INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-# target_link_libraries(photon INTERFACE phonon)
+target_link_libraries(photon INTERFACE phonon_dialect)
 
-# Phase C subdirectories will be wired here as their CMakeLists.txt are added.
-# add_subdirectory(lang)
-# add_subdirectory(frontends/cpp)
-# add_subdirectory(bindings)
+add_subdirectory(lang)
+add_subdirectory(bindings)
+add_subdirectory(frontends/cpp)
 
 if(QSTACK_ENABLE_TESTS)
-  # add_subdirectory(tests)
+  add_subdirectory(tests/m1)
+  add_subdirectory(tests/m2)
+  add_subdirectory(tests/m3)
+  add_subdirectory(tests/m4)
+  add_subdirectory(tests/m5)
+  add_subdirectory(tests/m6)
 endif()

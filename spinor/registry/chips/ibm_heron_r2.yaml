@@ -1,0 +1,40 @@
+# spinor/registry/chips/ibm_heron_r2.yaml
+
+id: ibm_heron_r2
+provider: ibm
+qubits: 156
+native_gates: [ecr, rz, sx, x]
+
+coupling_map:
+  topology: heavy_hex_156
+  size: 156
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: ibm_runtime_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ibm_heron_r2.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: sx
+  two_qubit:
+    recipe: kak
+    entangler: ecr
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00033
+
+notes: |
+  Heron r2: 156 qubits, heavy-hex lattice. ECR is the native
+  two-qubit gate; rz is virtual. The exact heavy-hex edge list
+  shipped with Phase A is a procedural approximation (see
+  topologies/heavy_hex_156.yaml notes). Replaced with
+  IBM-verified data when calibration ingestion lands.

@@ -1,0 +1,5 @@
+target generic
+kernel qft3() {
+  QReg q(3)
+  q.qft()
+}

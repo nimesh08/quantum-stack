@@ -1,0 +1,8 @@
+spinor.module @main attributes {target = "generic"} {
+  %q = spinor.alloc_qubit : !spinor.qubit
+  %a = spinor.rx %q {angle = 0.5} : !spinor.qubit
+  %b = spinor.ry %a {angle = -1} : !spinor.qubit
+  %c = spinor.rz %b {angle = 3.141592653589793} : !spinor.qubit
+  %d = spinor.t %c : !spinor.qubit
+  %e = spinor.s %d : !spinor.qubit
+}

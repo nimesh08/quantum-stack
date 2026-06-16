@@ -1,0 +1,8 @@
+target generic
+
+kernel sweep() {
+  QReg q(4)
+  for i in 0..4 {
+    q.h(0)
+  }
+}

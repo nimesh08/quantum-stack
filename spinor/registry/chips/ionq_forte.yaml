@@ -1,0 +1,38 @@
+# spinor/registry/chips/ionq_forte.yaml
+
+id: ionq_forte
+provider: aws
+qubits: 36
+native_gates: [gpi, gpi2, ms]
+
+coupling_map:
+  topology: all_to_all
+  size: 36
+
+supports:
+  mid_circuit_measure: false
+  feedforward: none
+  reset: false
+
+calibration:
+  source: braket_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ionq_forte.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: gpi
+    pi_2_gate: gpi2
+  two_qubit:
+    recipe: kak
+    entangler: ms
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0125
+  per_minute_usd: 0.30
+
+notes: |
+  IonQ Forte: 36 qubits, all-to-all. Reachable via AWS Braket.
+  Mølmer-Sørensen (MS) is the native two-qubit interaction.

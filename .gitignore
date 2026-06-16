@@ -20,12 +20,29 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 
 node_modules/
 .pnpm-store/
 dist/
 .next/
 
+# Phase D additions
+platform/playground/dist/
+docs/site/site/
+docs/site/api/rest/index.html
+docs/site/api/typescript/
+docs/site/openapi.json
+
+# coverage / tooling caches
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# editor / OS
 .idea/
 .vscode/
 *.swp

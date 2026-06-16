@@ -1,0 +1,5 @@
+target generic
+kernel vqe2() {
+  QReg q(3)
+  q.vqe_ansatz(2)
+}

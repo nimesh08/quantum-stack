@@ -1,0 +1,14 @@
+; bell_pair_func.phn — function inlining example.
+
+target generic
+qubit q[4]
+bit c[4]
+
+def bell_pair(qubit a, qubit b) {
+  h a
+  cx a, b
+}
+
+bell_pair(q[0], q[1])
+bell_pair(q[2], q[3])
+c = measure q

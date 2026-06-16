@@ -1,0 +1,5 @@
+target ibm_heron_r2
+kernel teleport_lib() {
+  QReg q(3)
+  q.teleport(0, 1, 2)
+}

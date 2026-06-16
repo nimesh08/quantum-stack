@@ -19,10 +19,13 @@ project(quantum_stack
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Versions.cmake)
 
 # ----- project-wide defaults --------------------------------------------------
-set(CMAKE_CXX_STANDARD          17)
+set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS         OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# All static libraries get -fPIC so they can be linked into the
+# photon._engine shared module (Phase C M3).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)

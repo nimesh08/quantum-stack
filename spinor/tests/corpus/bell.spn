@@ -1,0 +1,9 @@
+; bell.spn — the canonical hello-world for a quantum compiler.
+; Two qubits, entangled into the Bell state, measured into two bits.
+
+target generic
+qubit q[2]
+bit c[2]
+h q[0]
+cx q[0], q[1]
+c = measure q

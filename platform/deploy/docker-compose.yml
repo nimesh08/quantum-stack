@@ -1,0 +1,87 @@
+name: heisenberg-quantum-stack
+
+# docker-compose.yml — the whole product layer for Phase D.
+#
+# Build context is the quantum-stack/ root so the Dockerfiles can
+# COPY both `platform/...` and `spinor/...` (the registry data).
+# Run from `platform/deploy/`:
+#
+#   cd platform/deploy
+#   docker compose --project-directory ../.. -f docker-compose.yml build
+#   docker compose --project-directory ../.. -f docker-compose.yml up
+#
+# Or via the convenience script in `platform/deploy/run.sh`.
+
+services:
+  db:
+    image: postgres:17.10-alpine
+    environment:
+      POSTGRES_DB: jobsvc
+      POSTGRES_USER: jobsvc
+      POSTGRES_PASSWORD: jobsvc
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobsvc"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jobsvc:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.jobsvc
+    environment:
+      JOBSVC_DATABASE_URL: postgresql+asyncpg://jobsvc:jobsvc@db:5432/jobsvc
+      JOBSVC_JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      JOBSVC_LOG_JSON: "true"
+      JOBSVC_CORS_ORIGINS: '["http://localhost:8080"]'
+      SPINOR_SUBMIT_MODE: ${SPINOR_SUBMIT_MODE:-cassette}
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m jobsvc.seed admin@local admin-password admin || true &&
+             uvicorn jobsvc.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.worker
+    environment:
+      JOBSVC_DATABASE_URL: postgresql+asyncpg://jobsvc:jobsvc@db:5432/jobsvc
+      JOBSVC_LOG_JSON: "true"
+      SPINOR_SUBMIT_MODE: ${SPINOR_SUBMIT_MODE:-cassette}
+    depends_on:
+      jobsvc:
+        condition: service_started
+    deploy:
+      replicas: 2
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.calibration
+    environment:
+      HOME: /var/cache
+    volumes:
+      - calibration:/var/cache/spinor/calibration
+    depends_on:
+      jobsvc:
+        condition: service_started
+
+  playground:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.playground
+    ports: ["8080:80"]
+    depends_on:
+      jobsvc:
+        condition: service_started
+
+volumes:
+  pgdata:
+  calibration:

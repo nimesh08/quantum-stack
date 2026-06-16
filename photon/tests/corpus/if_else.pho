@@ -1,0 +1,15 @@
+target ibm_heron_r2
+
+kernel teleport() {
+  QReg q(3)
+  q.h(1)
+  q.cx(1, 2)
+  q.cx(0, 1)
+  q.h(0)
+  Bit c0 = q.measure()
+  if (c0 == 1) {
+    q.x(2)
+  } else {
+    q.z(2)
+  }
+}

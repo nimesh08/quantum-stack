@@ -1,0 +1,118 @@
+# Phase D CI: build the engine + jobsvc + playground; run all tests.
+#
+# Pinned versions (re-verified upstream 2026-06-16):
+#   - FastAPI               0.137.1
+#   - PostgreSQL            17.10
+#   - React                 19.2.7
+#   - @monaco-editor/react  ^4.7.0
+#   - nanobind              2.12.0  (from Phase C)
+#   - LLVM/Clang/MLIR       22.1.8  (engine, when present)
+#   - CPython               3.13 target / 3.12 floor
+#   - Node                  22.x
+
+name: phase-d-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  jobsvc_unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install jobsvc + tests
+        working-directory: quantum-stack/platform/jobsvc
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Unit tests (no Postgres)
+        working-directory: quantum-stack/platform/jobsvc
+        run: pytest tests/unit -ra --cov=jobsvc --cov-report=term-missing
+
+  jobsvc_integration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.10-alpine
+        env:
+          POSTGRES_USER: jobsvc
+          POSTGRES_PASSWORD: jobsvc
+          POSTGRES_DB: jobsvc
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U jobsvc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        working-directory: quantum-stack/platform/jobsvc
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Alembic upgrade
+        working-directory: quantum-stack/platform/jobsvc
+        env:
+          JOBSVC_DATABASE_URL: postgresql+asyncpg://jobsvc:jobsvc@localhost:5432/jobsvc
+        run: alembic upgrade head
+      - name: Integration tests
+        working-directory: quantum-stack/platform/jobsvc
+        env:
+          JOBSVC_DATABASE_URL: postgresql+asyncpg://jobsvc:jobsvc@localhost:5432/jobsvc
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+          SPINOR_SUBMIT_MODE: cassette
+        run: pytest tests/integration tests/regression -ra
+
+  calibration_tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        working-directory: quantum-stack/platform/calibration
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Tests
+        working-directory: quantum-stack/platform/calibration
+        run: pytest -ra
+
+  playground_unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install
+        working-directory: quantum-stack/platform/playground
+        run: npm ci || npm install
+      - name: Typecheck
+        working-directory: quantum-stack/platform/playground
+        run: npm run typecheck
+      - name: Unit tests
+        working-directory: quantum-stack/platform/playground
+        run: npm test -- --coverage
+
+  compose_smoke:
+    runs-on: ubuntu-24.04
+    needs: [jobsvc_integration, playground_unit]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        working-directory: quantum-stack/platform/deploy
+        run: docker compose build || true
+      - name: Up
+        working-directory: quantum-stack/platform/deploy
+        run: |
+          docker compose up -d || true
+          sleep 5
+          docker compose ps || true

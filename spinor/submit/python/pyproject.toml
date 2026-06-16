@@ -1,0 +1,24 @@
+[project]
+name = "spinor-submit"
+version = "0.0.1"
+description = "Provider submission adapters for the Spinor quantum compiler."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+ibm = ["qiskit>=2.2.0", "qiskit-ibm-runtime>=0.40"]
+aws = ["amazon-braket-sdk>=1.85"]
+azure = ["azure-quantum>=2.0"]
+test = ["pytest>=9.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["spinor_submit*"]
+
+[tool.setuptools.package-data]
+spinor_submit = ["cassettes/*/*.json"]

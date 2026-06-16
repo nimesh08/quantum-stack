@@ -1,0 +1,6 @@
+target generic
+kernel ghz3() -> int {
+  QReg q(3)
+  q.ghz()
+  return q.measure_int()
+}

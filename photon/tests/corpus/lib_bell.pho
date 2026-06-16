@@ -1,0 +1,6 @@
+target generic
+kernel bell_lib() -> int {
+  QReg q(2)
+  q.bell_pair(0, 1)
+  return q.measure_int()
+}

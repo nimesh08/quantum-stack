@@ -1,0 +1,9 @@
+# spinor/registry/topologies/all_to_all.yaml
+#
+# Marker topology used by chips with all-to-all connectivity
+# (trapped-ion machines such as IonQ, Quantinuum). The loader
+# also accepts the bare name 'all_to_all' without reading this
+# file — it's here so the file exists for tooling / docs.
+
+all_to_all: true
+qubits: 0   # set by the chip's `coupling_map.size`

@@ -1,0 +1,103 @@
+# Phase C CI: build + run all Phase C tests on every push.
+#
+# Pinned versions (re-verified 2026-06-16):
+#   - LLVM/Clang/MLIR  22.1.8 (engine; final 22.1.x)
+#   - nanobind          2.12.0 (BSD-3-Clause)
+#   - CPython           3.13 target / 3.12 floor
+#   - C++               20
+#
+# Phase C's nanobind extension (photon._engine) builds when nanobind
+# is installed via pip (find_package(nanobind) probes the pip dir).
+# When LLVM/MLIR is unavailable the in-tree path is exercised for
+# Spinor/Phonon (same as Phase A and Phase B's workflows).
+
+name: phase-c-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              cmake ninja-build g++-13 \
+              python3.12 python3-pip python3-dev \
+              gcovr
+
+      - name: Install Python deps (nanobind, pytest)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install 'nanobind>=2.4,<2.20' pytest
+
+      - name: Configure
+        run: |
+          cmake -S quantum-stack -B quantum-stack/build \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_COMPILER=g++-13
+
+      - name: Build
+        run: cmake --build quantum-stack/build -j
+
+      - name: Phase A + B regression
+        working-directory: quantum-stack/build
+        env:
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+          PHONON_CASSETTE_DIR:  ${{ github.workspace }}/quantum-stack/phonon/optimizer/cassettes
+        run: ctest -L "M[0-9]+|phonon_M[1-7]" --output-on-failure
+
+      - name: Phase C tests
+        working-directory: quantum-stack/build
+        env:
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+          PHONON_CASSETTE_DIR:  ${{ github.workspace }}/quantum-stack/phonon/optimizer/cassettes
+        run: ctest -L "photon_M[1-6]" --output-on-failure
+
+  coverage_gate:
+    runs-on: ubuntu-24.04
+    needs: [build_and_test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 \
+                                  python3.12 python3-pip python3-dev gcovr
+          python3 -m pip install --upgrade pip
+          python3 -m pip install 'nanobind>=2.4,<2.20' pytest
+
+      - name: Configure (coverage build)
+        run: |
+          cmake -S quantum-stack -B quantum-stack/build-cov \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_COMPILER=g++-13 \
+                -DCMAKE_CXX_FLAGS="--coverage -O0 -g" \
+                -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build quantum-stack/build-cov -j
+
+      - name: Test
+        working-directory: quantum-stack/build-cov
+        env:
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+          PHONON_CASSETTE_DIR:  ${{ github.workspace }}/quantum-stack/phonon/optimizer/cassettes
+        run: ctest --output-on-failure
+
+      - name: Coverage gate (>=85% line coverage on photon/)
+        run: |
+          cd quantum-stack
+          gcovr -r . \
+                --filter 'photon/(lang|frontends|bindings)/.*' \
+                --fail-under-line 85.0 \
+                --print-summary

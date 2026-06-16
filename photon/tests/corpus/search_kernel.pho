@@ -1,0 +1,11 @@
+target generic
+
+kernel search(oracle: Oracle) -> int {
+  QReg q(4)
+  // M1 leaves lib calls as-is; M2 expands them.
+  q.h(0)
+  q.h(1)
+  q.h(2)
+  q.h(3)
+  return q.measure_int()
+}

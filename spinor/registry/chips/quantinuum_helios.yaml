@@ -1,0 +1,37 @@
+# spinor/registry/chips/quantinuum_helios.yaml
+
+id: quantinuum_helios
+provider: azure
+qubits: 56
+native_gates: [u1q, rzz]
+
+coupling_map:
+  topology: all_to_all
+  size: 56
+
+supports:
+  mid_circuit_measure: true
+  feedforward: full
+  reset: true
+
+calibration:
+  source: azure_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/quantinuum_helios.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: u1q
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: rzz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.05
+
+notes: |
+  Quantinuum Helios: 56-qubit trapped-ion, full feedforward
+  capability. Adaptive-profile QIR target.

@@ -1,0 +1,21 @@
+# Dockerfile.calibration — APScheduler refresh service.
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY platform/calibration/pyproject.toml ./pyproject.toml
+COPY platform/calibration/src ./src
+RUN pip install .
+
+COPY spinor/registry /app/spinor/registry
+
+VOLUME ["/var/cache/spinor/calibration"]
+ENV HOME=/var/cache
+
+CMD ["calibration"]

@@ -1,0 +1,50 @@
+# spinor/registry/chips/ionq_aria_proto.yaml
+#
+# The 4th chip — proves the "no code change" property of the
+# registry. It is added by writing this file alone; no compiler
+# source change is required.
+#
+# Synthetic but plausible (an Aria-class IonQ device, prototype
+# class). Used to demonstrate that a new chip flows through the
+# entire stack: parse → verify → place → route (trivial because
+# all-to-all) → decompose (KAK over MS) → emit → submit, all
+# driven from this YAML.
+
+id: ionq_aria_proto
+provider: aws
+qubits: 25
+native_gates: [gpi, gpi2, ms]
+
+coupling_map:
+  topology: all_to_all
+  size: 25
+
+supports:
+  mid_circuit_measure: false
+  feedforward: none
+  reset: false
+
+calibration:
+  source: fixture
+  refresh: fixture
+  store: ~/.cache/spinor/calibration/ionq_aria_proto.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: gpi
+    pi_2_gate: gpi2
+  two_qubit:
+    recipe: kak
+    entangler: ms
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.01
+  per_minute_usd: 0.20
+
+notes: |
+  Synthetic IonQ Aria-class prototype. Lives in the registry
+  alongside the real chips and is exercised by the same
+  end-to-end test corpus to prove the "YAML-only new chip"
+  property required by Phase A's definition of done.

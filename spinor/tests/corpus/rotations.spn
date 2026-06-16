@@ -1,0 +1,9 @@
+; rotations.spn — exercises the angle grammar.
+
+target generic
+qubit q[1]
+rx(pi/2) q[0]
+ry(-pi) q[0]
+rz(0.5*pi) q[0]
+t q[0]
+s q[0]

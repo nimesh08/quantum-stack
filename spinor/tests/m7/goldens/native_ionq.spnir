@@ -1,0 +1,7 @@
+spinor.module @main attributes {target = "ionq_forte"} {
+  %q0 = spinor.alloc_qubit : !spinor.qubit
+  %q1 = spinor.alloc_qubit : !spinor.qubit
+  %q0_1, %q1_1 = spinor.ms %q0, %q1 : !spinor.qubit, !spinor.qubit
+  %q0_2 = spinor.gpi %q0_1 {angle = 0.5} : !spinor.qubit
+  %q1_2 = spinor.gpi2 %q1_1 {angle = -0.25} : !spinor.qubit
+}

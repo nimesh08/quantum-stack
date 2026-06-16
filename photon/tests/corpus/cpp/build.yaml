@@ -1,0 +1,5 @@
+build:
+  sources: [bell.cpp]
+  entry: bell_kernel
+  target: generic
+  shots: 1024

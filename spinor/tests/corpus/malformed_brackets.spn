@@ -1,0 +1,5 @@
+; malformed_brackets.spn — operand has unbalanced brackets.
+
+target generic
+qubit q[2]
+h q[0

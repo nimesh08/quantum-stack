@@ -1,0 +1,14 @@
+spinor.module @main attributes {target = "generic"} {
+  %q0 = spinor.alloc_qubit : !spinor.qubit
+  %q1 = spinor.alloc_qubit : !spinor.qubit
+  %q2 = spinor.alloc_qubit : !spinor.qubit
+  %c0 = spinor.alloc_bit : !spinor.bit
+  %c1 = spinor.alloc_bit : !spinor.bit
+  %c2 = spinor.alloc_bit : !spinor.bit
+  %q0_1 = spinor.h %q0 : !spinor.qubit
+  %q0_2, %q1_1 = spinor.cx %q0_1, %q1 : !spinor.qubit, !spinor.qubit
+  %q1_2, %q2_1 = spinor.cx %q1_1, %q2 : !spinor.qubit, !spinor.qubit
+  %c0_1 = spinor.measure %q0_2 : !spinor.bit
+  %c1_1 = spinor.measure %q1_2 : !spinor.bit
+  %c2_1 = spinor.measure %q2_1 : !spinor.bit
+}

@@ -1,0 +1,93 @@
+# Phase A CI: build + run all tests on every push.
+#
+# This workflow does NOT install LLVM 22.1.7 — that's a multi-hour
+# build. The Phase A engine compiles cleanly without LLVM (decision
+# D4); the MLIR-backed bridge is only built on a separate, weekly
+# job (TODO).
+
+name: phase-a-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              cmake ninja-build g++-13 python3.12 python3-pip \
+              gcovr
+
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest
+
+      - name: Configure
+        run: |
+          cmake -S quantum-stack -B quantum-stack/build \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_COMPILER=g++-13
+
+      - name: Build
+        run: cmake --build quantum-stack/build -j
+
+      - name: Test
+        working-directory: quantum-stack/build
+        env:
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+        run: ctest --output-on-failure
+
+      - name: Coverage (gcovr)
+        # Coverage is informational in this workflow; the
+        # 85% gate runs in the dedicated coverage job below.
+        run: |
+          cd quantum-stack
+          gcovr -r . --print-summary --txt-metric branch || true
+
+  coverage_gate:
+    runs-on: ubuntu-24.04
+    needs: [build_and_test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 python3.12 \
+                                    python3-pip gcovr
+          python3 -m pip install pytest
+
+      - name: Configure (coverage build)
+        run: |
+          cmake -S quantum-stack -B quantum-stack/build-cov \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_COMPILER=g++-13 \
+                -DCMAKE_CXX_FLAGS="--coverage -O0 -g" \
+                -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build quantum-stack/build-cov -j
+
+      - name: Test
+        working-directory: quantum-stack/build-cov
+        env:
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+        run: ctest --output-on-failure
+
+      - name: Coverage gate (≥85% line coverage on spinor/)
+        run: |
+          cd quantum-stack
+          gcovr -r . \
+                --filter 'spinor/(dialect|verify|registry|passes|sim|emit|submit|parser/cpp)/.*' \
+                --fail-under-line 85.0 \
+                --print-summary

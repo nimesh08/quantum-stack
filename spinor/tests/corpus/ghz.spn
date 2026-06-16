@@ -1,0 +1,9 @@
+; ghz.spn — three-qubit GHZ state.
+
+target generic
+qubit q[3]
+bit c[3]
+h q[0]
+cx q[0], q[1]
+cx q[1], q[2]
+c = measure q

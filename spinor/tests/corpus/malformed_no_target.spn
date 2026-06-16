@@ -1,0 +1,4 @@
+; malformed_no_target.spn
+
+qubit q[1]
+h q[0]

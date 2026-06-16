@@ -1,0 +1,7 @@
+spinor.module @main attributes {target = "ibm_heron_r2"} {
+  %q0 = spinor.alloc_qubit : !spinor.qubit
+  %q1 = spinor.alloc_qubit : !spinor.qubit
+  %q0_1, %q1_1 = spinor.ecr %q0, %q1 : !spinor.qubit, !spinor.qubit
+  %q0_2 = spinor.sx %q0_1 : !spinor.qubit
+  %q0_3 = spinor.rz %q0_2 {angle = 0.7853981633974483} : !spinor.qubit
+}

@@ -6,25 +6,41 @@
 # RULE 2: Spinor specializes a program to ONE chip. The heavy optimizer
 # lives in Phonon, never here.
 #
-# This file is the empty, compiling skeleton. Phase A adds real targets.
+# Layered build (Phase A decision D4):
+# - The in-tree dialect / parser / verifier / passes build everywhere.
+# - The MLIR-backed bridge builds only when QSTACK_HAVE_LLVM is ON.
 
-if(NOT QSTACK_HAVE_LLVM)
-  message(STATUS "spinor: LLVM/MLIR not available; skeleton only.")
-  return()
+# Always available (no LLVM dependency):
+add_subdirectory(dialect)
+add_subdirectory(verify)
+add_subdirectory(registry)
+add_subdirectory(passes)
+add_subdirectory(parser/cpp)
+add_subdirectory(parser/qasm)
+add_subdirectory(sim)
+add_subdirectory(emit)
+add_subdirectory(submit)
+add_subdirectory(cli)
+
+if(QSTACK_ENABLE_TESTS)
+  add_subdirectory(tests/m1)
+  add_subdirectory(tests/m3)
+  add_subdirectory(tests/m4)
+  add_subdirectory(tests/m5)
+  add_subdirectory(tests/m6)
+  add_subdirectory(tests/m7)
+  add_subdirectory(tests/m11)
+  add_subdirectory(tests/m8)
+  add_subdirectory(tests/m9)
+  add_subdirectory(tests/m10)
 endif()
 
-add_library(spinor INTERFACE)
-target_include_directories(spinor INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-
-# Phase A subdirectories will be wired here as their CMakeLists.txt are added.
-# add_subdirectory(dialect)
+# Subsequent milestone subdirectories are wired here as their
+# CMakeLists.txt are added:
 # add_subdirectory(parser)
-# add_subdirectory(passes)
+# add_subdirectory(verify)
 # add_subdirectory(registry)
+# add_subdirectory(passes)
 # add_subdirectory(sim)
 # add_subdirectory(emit)
 # add_subdirectory(submit)
-
-if(QSTACK_ENABLE_TESTS)
-  # add_subdirectory(tests)
-endif()
