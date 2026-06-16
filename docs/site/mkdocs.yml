@@ -135,7 +135,9 @@ markdown_extensions:
   - pymdownx.snippets:
       base_path:
         - "."
-        - "../build"
+        - ".."
+        - "../.."
+        - "../../docs/build"
       check_paths: true
   - pymdownx.superfences:
       custom_fences:
