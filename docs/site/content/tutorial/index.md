@@ -1,6 +1,8 @@
-# Tutorials
+# Tutorial
 
-Four guided walkthroughs. Pick the closest to what you want to do.
+Hands-on guides — pick the closest to what you want to do.
+
+## Platform tutorials (run programs end-to-end)
 
 <div class="grid cards" markdown>
 
@@ -32,5 +34,32 @@ Four guided walkthroughs. Pick the closest to what you want to do.
 
     Subclass `CalibrationProvider`, register it, watch the nightly
     refresh pick it up.
+
+</div>
+
+## Language walkthroughs (10 minutes each, top-to-bottom)
+
+<div class="grid cards" markdown>
+
+-   :material-code-tags:{ .lg .middle } **[Spinor in 10 minutes](spinor_walkthrough.md)**
+
+    ---
+
+    The assembly-level language. Two contracts, 22 grammar rules,
+    18 gates — and that's the whole language. End-to-end in 10 mins.
+
+-   :material-language-cpp:{ .lg .middle } **[Phonon in 10 minutes](phonon_walkthrough.md)**
+
+    ---
+
+    Spinor + control flow + linear types. The "physics as a
+    compile error" layer. Includes teleport.
+
+-   :material-language-python:{ .lg .middle } **[Photon in 10 minutes](photon_walkthrough.md)**
+
+    ---
+
+    OO façade with `QReg`, gate methods, and `photon.lib`. Three
+    doors (.pho, Python, C++) into the same engine.
 
 </div>

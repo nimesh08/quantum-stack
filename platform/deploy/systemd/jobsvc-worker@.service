@@ -1,0 +1,39 @@
+# jobsvc-worker@.service — template unit; %i is the worker index.
+#
+# Run two workers:
+#   sudo systemctl enable --now jobsvc-worker@1.service jobsvc-worker@2.service
+#
+# Scale up later by enabling more instances. The Postgres queue
+# (FOR UPDATE SKIP LOCKED) handles N concurrent claimers without
+# coordination.
+
+[Unit]
+Description=Heisenberg jobsvc worker %i
+Documentation=https://nimesh08.github.io/quantum-stack/install/server_systemd/
+After=network.target postgresql.service jobsvc.service
+Requires=postgresql.service
+PartOf=jobsvc.service
+
+[Service]
+Type=simple
+User=jobsvc
+Group=jobsvc
+WorkingDirectory=/opt/quantum-stack/platform/jobsvc
+EnvironmentFile=/etc/quantum-stack/jobsvc.env
+Environment=WORKER_INDEX=%i
+ExecStart=/opt/quantum-stack/.venv/bin/jobsvc-worker
+Restart=on-failure
+RestartSec=3
+
+# Hardening (same as jobsvc.service)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/jobsvc /var/cache/spinor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

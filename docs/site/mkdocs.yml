@@ -117,6 +117,8 @@ markdown_extensions:
   - toc:
       permalink: true
       title: On this page
+  - pymdownx.arithmatex:
+      generic: true
   - pymdownx.betterem
   - pymdownx.caret
   - pymdownx.details
@@ -151,12 +153,76 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
-  - Tutorials:
+  - Install:
+      - install/index.md
+      - "Server (systemd)": install/server_systemd.md
+      - "From source": install/from_source.md
+      - "spinorc CLI": install/spinorc_cli.md
+      - "photonc-cxx CLI": install/photonc_cxx.md
+      - "photon (Python)": install/photon_python.md
+      - "spinor_submit": install/spinor_submit.md
+      - "jobsvc": install/jobsvc.md
+      - "calibration": install/calibration.md
+      - "Playground": install/playground.md
+      - "Docker compose (laptop)": install/docker_compose.md
+      - "Troubleshooting": install/troubleshooting.md
+  - Tutorial:
       - tutorial/index.md
-      - "Bell state, end to end": tutorial/bell.md
+      - "Bell, end to end": tutorial/bell.md
       - "GHZ on a real chip": tutorial/ghz.md
       - "Add a chip in 30 minutes": tutorial/add_a_chip.md
       - "Add a calibration provider": tutorial/add_a_provider.md
+      - "Spinor in 10 minutes": tutorial/spinor_walkthrough.md
+      - "Phonon in 10 minutes": tutorial/phonon_walkthrough.md
+      - "Photon in 10 minutes": tutorial/photon_walkthrough.md
+  - Languages:
+      - languages/index.md
+      - Spinor:
+          - languages/spinor/index.md
+          - "Overview": languages/spinor/overview.md
+          - "Lexical": languages/spinor/lexical.md
+          - "Grammar": languages/spinor/grammar.md
+          - "Types": languages/spinor/types.md
+      - Phonon:
+          - languages/phonon/index.md
+          - "Overview": languages/phonon/overview.md
+          - "Lexical": languages/phonon/lexical.md
+          - "Grammar": languages/phonon/grammar.md
+          - "Types": languages/phonon/types.md
+          - "Linear types": languages/phonon/linear_types.md
+      - Photon:
+          - languages/photon/index.md
+          - "Overview": languages/photon/overview.md
+          - "Lexical": languages/photon/lexical.md
+          - "Grammar": languages/photon/grammar.md
+          - "Types": languages/photon/types.md
+  - Packages:
+      - packages/index.md
+      - "photon (Python)":
+          - packages/photon_python/install.md
+          - "Reference": packages/photon_python/reference.md
+          - "Decorator internals": packages/photon_python/kernel_decorator.md
+          - "Unsupported constructs": packages/photon_python/unsupported_constructs.md
+          - "Cookbook": packages/photon_python/cookbook.md
+      - "spinor_submit":
+          - packages/spinor_submit/install.md
+          - "Reference": packages/spinor_submit/reference.md
+          - "Modes": packages/spinor_submit/modes.md
+          - "Credentials": packages/spinor_submit/credentials.md
+          - "Recording cassettes": packages/spinor_submit/recording_cassettes.md
+          - "Cookbook": packages/spinor_submit/cookbook.md
+      - "jobsvc":
+          - packages/jobsvc/install.md
+          - "Cookbook": packages/jobsvc/cookbook.md
+          - "SDK examples": packages/jobsvc/sdk_examples.md
+      - "calibration":
+          - packages/calibration/install.md
+          - "Cookbook": packages/calibration/cookbook.md
+          - "Writing a provider": packages/calibration/providers.md
+      - "playground":
+          - packages/playground/install.md
+          - "Dev workflow": packages/playground/dev_workflow.md
+          - "Customising Monaco": packages/playground/customising.md
   - Guide:
       - guide/index.md
       - "Platform guide": guide/platform_guide.md
@@ -188,6 +254,7 @@ nav:
           - "calibration.diff": api/python/calibration/diff.md
           - "calibration.main": api/python/calibration/main.md
       - "TypeScript (playground)": api/typescript/index.md
+  - FAQ: faq.md
   - Glossary: glossary.md
   - Changelog: changelog.md
 

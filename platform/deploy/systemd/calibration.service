@@ -1,0 +1,32 @@
+# calibration.service — APScheduler nightly refresh.
+#
+# Single replica. Idempotent so a second one is harmless.
+# Default schedule: 02:00 UTC every day (overridable in the env file).
+
+[Unit]
+Description=Heisenberg calibration scheduler
+Documentation=https://nimesh08.github.io/quantum-stack/install/calibration/
+After=network.target
+
+[Service]
+Type=simple
+User=jobsvc
+Group=jobsvc
+WorkingDirectory=/opt/quantum-stack/platform/calibration
+EnvironmentFile=/etc/quantum-stack/jobsvc.env
+ExecStart=/opt/quantum-stack/.venv/bin/calibration
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/cache/spinor /var/log/jobsvc
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
