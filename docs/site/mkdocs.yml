@@ -133,7 +133,9 @@ markdown_extensions:
   - pymdownx.mark
   - pymdownx.smartsymbols
   - pymdownx.snippets:
-      base_path: [".", "../.."]
+      base_path:
+        - "."
+        - "../build"
       check_paths: true
   - pymdownx.superfences:
       custom_fences:
@@ -163,7 +165,7 @@ nav:
       - "Build journal": guide/progress.md
   - "API Reference":
       - api/index.md
-      - "REST API": api/rest/index.md
+      - "REST API": api/rest/index.html
       - "Python (jobsvc)":
           - api/python/jobsvc/index.md
           - "jobsvc.engine": api/python/jobsvc/engine.md
