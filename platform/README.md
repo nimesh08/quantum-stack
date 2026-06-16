@@ -5,6 +5,10 @@ into something a person can use: a FastAPI **job service**, a nightly
 **calibration refresh**, a React + Monaco **playground**, and a Docker
 **deployment**.
 
+> **Documentation:** <https://nimesh08.github.io/quantum-stack/> —
+> landing, quickstart, full REST + Python + TypeScript API reference,
+> operations runbook, decisions log.
+
 > **Status:** Phase D in progress. The C++ engine (Phases A–C) is
 > complete and tested; this folder calls into it via the `photon._engine`
 > nanobind binding. We do not rebuild compilation here.

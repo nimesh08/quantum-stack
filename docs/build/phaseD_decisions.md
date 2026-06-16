@@ -78,3 +78,41 @@ existing Phase C entry points; Phonon hits the binding directly;
 Spinor (.spn) is wrapped as a trivial Phonon program. This realises
 the deep-dive's promise that the API takes "Photon / Phonon / Spinor
 source, or an uploaded IR" without forcing a v1.5 follow-up.
+
+## D7 — Docs site: MkDocs Material 9.7.6
+
+The docs site at <https://nimesh08.github.io/quantum-stack/> uses
+MkDocs Material 9.7.6 with mkdocstrings 1.0.4 (Python autodoc),
+typedoc-plugin-markdown 4.12.0 (TS), and Redocly CLI 2.32.2 (REST).
+
+Material is in maintenance mode as of 2025-11-11 (security patches
+through Nov 2026). The team is pivoting to Zensical, a next-gen
+generator. We picked Material anyway because:
+
+- Zensical is not GA yet — unsuitable for production at v1.
+- Material's plugin and theme system give us the Python autodoc and
+  Mermaid we need today.
+- The migration path to Zensical (or to mkdocs forks like ProperDocs)
+  is documented and not urgent.
+
+Migration trigger: when Zensical is GA AND a security CVE in Material
+9.7.x is unpatched, OR if MkDocs 1.x stops being updated. Estimated
+work: rewrite `docs/site/mkdocs.yml`, swap the theme, regenerate the
+nav. The Markdown content + the mkdocstrings stubs are reusable.
+
+## D8 — Repo visibility: public
+
+Per the original plan we created the repo as **private**, but GitHub
+Pages on the free plan only works with **public** repos. We chose to
+flip the repo to public rather than self-host the docs site or pay for
+GitHub Pro.
+
+Tradeoff: the source is visible. This is acceptable because:
+
+- The compiler is positioned as open architecture (deep-dives are
+  shareable), not a proprietary moat.
+- API keys, JWT secrets, and provider credentials are env-driven and
+  never committed (see `.gitignore` and `platform/deploy/.env.example`).
+- The `nimesh08/quantum-stack` URL is the canonical reference for the
+  working names; trademark search (RULE 7) precedes any rebrand.
+
