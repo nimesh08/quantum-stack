@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "tii_falcon (synthetic Bell, cassette-only vendor)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 501,
+    "11": 499
+  }
+}

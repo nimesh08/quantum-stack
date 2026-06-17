@@ -1,13 +1,13 @@
-# spinor/registry/chips/ionq_forte.yaml
+# spinor/registry/chips/ionq_harmony.yaml
 
-id: ionq_forte
+id: ionq_harmony
 provider: aws
-qubits: 36
+qubits: 11
 native_gates: [gpi, gpi2, ms]
 
 coupling_map:
   topology: all_to_all
-  size: 36
+  size: 11
 
 supports:
   mid_circuit_measure: false
@@ -17,7 +17,7 @@ supports:
 calibration:
   source: braket_api
   refresh: nightly
-  store: ~/.cache/spinor/calibration/ionq_forte.json
+  store: ~/.cache/spinor/calibration/ionq_harmony.json
 
 decomposition:
   one_qubit:
@@ -30,11 +30,12 @@ decomposition:
     entangler_count_max: 3
 
 pricing:
-  per_shot_usd: 0.0125
-  per_minute_usd: 0.30
+  per_shot_usd: 0.01
+  per_minute_usd: 0.3
 
 notes: |
-  IonQ Forte: 36 qubits, all-to-all. Reachable via AWS Braket.
-  Mølmer-Sørensen (MS) is the native two-qubit interaction.
+  IonQ Harmony: 11-qubit trapped-ion. Decommissioning is underway on AWS Braket; mirror entry exists in chips_unsupported.md so the cassette path keeps working.
+  Trapped-ion all-to-all. Moelmer-Soerensen is the
+  native two-qubit interaction.
   source: https://aws.amazon.com/braket/quantum-computers/ionq/
   verified-upstream: 2026-06-16

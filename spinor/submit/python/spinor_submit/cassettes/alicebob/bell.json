@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "alicebob_boson_4 (synthetic Bell, cassette-only vendor)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 500,
+    "11": 500
+  }
+}

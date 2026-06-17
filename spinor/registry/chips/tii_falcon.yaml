@@ -1,0 +1,41 @@
+# spinor/registry/chips/tii_falcon.yaml
+
+id: tii_falcon
+provider: tii
+qubits: 5
+native_gates: [cz, rx, rz]
+
+coupling_map:
+  topology: linear_n
+  size: 5
+
+supports:
+  mid_circuit_measure: false
+  feedforward: none
+  reset: true
+
+calibration:
+  source: fixture
+  refresh: fixture
+  store: ~/.cache/spinor/calibration/tii_falcon.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0
+
+notes: |
+  TII (Technology Innovation Institute, UAE) Falcon
+  prototype: 5-qubit superconducting referenced in the
+  Qibolab open-source drivers. Cassette-only; the live
+  endpoint runs on the user's own Qibolab service.
+  source: https://github.com/qiboteam/qibolab
+  verified-upstream: 2026-06-16

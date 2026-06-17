@@ -1,0 +1,43 @@
+# spinor/registry/chips/qci_aqumen.yaml
+
+id: qci_aqumen
+provider: qci
+qubits: 8
+native_gates: [cz, rx, rz]
+
+coupling_map:
+  topology: linear_n
+  size: 8
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: fixture
+  refresh: fixture
+  store: ~/.cache/spinor/calibration/qci_aqumen.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0
+
+notes: |
+  Quantum Circuits Inc. (QCI) Aqumen-class dual-rail
+  superconducting (Schoelkopf group, Yale). 8-qubit
+  prototype. Production submission adapter is wired but
+  the live-mode body raises until the public REST URL
+  is published; see chips_unsupported.md for what is
+  missing.
+  source: https://quantumcircuits.com/products
+  verified-upstream: 2026-06-16

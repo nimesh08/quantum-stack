@@ -1,0 +1,40 @@
+# spinor/registry/chips/aqt_pine.yaml
+
+id: aqt_pine
+provider: local
+qubits: 8
+native_gates: [gpi, gpi2, ms]
+
+coupling_map:
+  topology: linear_n
+  size: 8
+
+supports:
+  mid_circuit_measure: false
+  feedforward: none
+  reset: false
+
+calibration:
+  source: fixture
+  refresh: fixture
+  store: ~/.cache/spinor/calibration/aqt_pine.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: gpi
+    pi_2_gate: gpi2
+  two_qubit:
+    recipe: kak
+    entangler: ms
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0
+
+notes: |
+  AQT Pine: 8-qubit trapped-ion linear chain (Innsbruck).
+  Provider 'local' until the AQT API submission adapter
+  ships; cassette mode covers the round-trip in tests.
+  source: https://www.aqt.eu/products/
+  verified-upstream: 2026-06-16

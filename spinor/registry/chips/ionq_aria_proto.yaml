@@ -48,3 +48,5 @@ notes: |
   alongside the real chips and is exercised by the same
   end-to-end test corpus to prove the "YAML-only new chip"
   property required by Phase A's definition of done.
+  source: synthetic
+  verified-upstream: 2026-06-16

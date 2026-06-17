@@ -1,0 +1,40 @@
+# spinor/registry/chips/ibm_brisbane.yaml
+
+id: ibm_brisbane
+provider: ibm
+qubits: 127
+native_gates: [ecr, rz, sx, x]
+
+coupling_map:
+  topology: heavy_hex_127
+  size: 127
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: ibm_runtime_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ibm_brisbane.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: sx
+  two_qubit:
+    recipe: kak
+    entangler: ecr
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00016
+
+notes: |
+  IBM Brisbane (Eagle r3): 127-qubit superconducting.
+  Eagle r3 architecture; ECR is the native two-qubit
+  gate, rz is virtual. Heavy-hex topology.
+  source: https://quantum.cloud.ibm.com/computers
+  verified-upstream: 2026-06-16

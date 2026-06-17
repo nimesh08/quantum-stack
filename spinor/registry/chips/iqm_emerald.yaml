@@ -1,0 +1,40 @@
+# spinor/registry/chips/iqm_emerald.yaml
+
+id: iqm_emerald
+provider: aws
+qubits: 54
+native_gates: [cz, rx, ry, rz]
+
+coupling_map:
+  topology: square_grid_54
+  size: 54
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: braket_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/iqm_emerald.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00145
+
+notes: |
+  IQM Emerald: 54-qubit square-grid superconducting.
+  IQM superconducting square-grid. Native PRX(theta,phi)
+  expressed here via {rx, ry, rz}; CZ is the entangler.
+  source: https://www.meetiqm.com/products/iqm-emerald
+  verified-upstream: 2026-06-16

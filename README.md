@@ -47,6 +47,24 @@ Tests at end of each phase:
 
 ---
 
+## What's next
+
+The roadmap for chip coverage and new modalities lives in
+[`FUTUREPLAN.md`](FUTUREPLAN.md) (also rendered on the docs site at
+<https://nimesh08.github.io/quantum-stack/futureplan/>). **Steps 1
+and 2 are landed in this commit:** the registry now ships **26
+chips** (up from 4) covering IBM Heron r2/r3, Eagle (Brisbane,
+Sherbrooke), Osprey, Nighthawk r1, Torrino, Quantinuum H1-1 / H2-1
+/ Helios, IonQ Tempo / Forte / Forte Enterprise / Aria-1 / Harmony /
+Aria-proto, Rigetti Ankaa-2 / Ankaa-3 / Ankaa-9Q-3, IQM Garnet /
+Emerald, OQC Toshiko, AQT Pine, plus four new submit adapters for
+QCI Aqumen, Anyon Yukon, TII Falcon, and Alice & Bob Boson 4. Chips
+we **cannot** yet support (and the exact piece of data we are
+missing for each) are in
+[`docs/site/content/chips_unsupported.md`](docs/site/content/chips_unsupported.md).
+
+---
+
 ## Try it in 30 seconds
 
 ```bash

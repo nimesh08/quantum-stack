@@ -58,6 +58,41 @@ def test_cassette_returns_bell_histogram(provider, chip):
     assert bias < 0.10  # within 10 percentage points
 
 
+@pytest.mark.parametrize("provider, chip", [
+    ("qci", "qci_aqumen"),
+    ("anyon", "anyon_yukon"),
+    ("tii", "tii_falcon"),
+    ("alicebob", "alicebob_boson_4"),
+])
+def test_step2_cassette_returns_bell_histogram(provider, chip):
+    """Step-2 vendors ship cassette-only; verify the cassette path."""
+    hist = submit(BELL_QASM, chip=chip, provider=provider,
+                  shots=1000, program_name="bell")
+    assert isinstance(hist, Histogram)
+    assert hist.shots == 1000
+    assert "00" in hist.counts
+    assert "11" in hist.counts
+    total = sum(hist.counts.values())
+    assert total == 1000
+
+
+@pytest.mark.parametrize("provider, chip", [
+    ("qci", "qci_aqumen"),
+    ("anyon", "anyon_yukon"),
+    ("tii", "tii_falcon"),
+    ("alicebob", "alicebob_boson_4"),
+])
+def test_step2_live_mode_raises(provider, chip, monkeypatch):
+    """Live mode for Step-2 vendors must raise a clear RuntimeError
+    pointing the user at chips_unsupported.md, never silently fall
+    through to a fabricated endpoint.
+    """
+    monkeypatch.setenv("SPINOR_SUBMIT_MODE", "live")
+    with pytest.raises(RuntimeError, match="not wired"):
+        submit(BELL_QASM, chip=chip, provider=provider,
+               shots=10, program_name="bell")
+
+
 def test_unknown_provider_raises():
     with pytest.raises(ValueError):
         submit(BELL_QASM, chip="ibm_heron_r2",
@@ -69,6 +104,11 @@ def test_supported_providers_list():
     assert "aws" in SUPPORTED_PROVIDERS
     assert "azure" in SUPPORTED_PROVIDERS
     assert "local" in SUPPORTED_PROVIDERS
+    # Step-2 vendors.
+    assert "qci" in SUPPORTED_PROVIDERS
+    assert "anyon" in SUPPORTED_PROVIDERS
+    assert "tii" in SUPPORTED_PROVIDERS
+    assert "alicebob" in SUPPORTED_PROVIDERS
 
 
 def test_cassette_missing_raises(monkeypatch, tmp_path):

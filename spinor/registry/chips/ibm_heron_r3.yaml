@@ -1,9 +1,9 @@
-# spinor/registry/chips/ibm_heron_r2.yaml
+# spinor/registry/chips/ibm_heron_r3.yaml
 
-id: ibm_heron_r2
+id: ibm_heron_r3
 provider: ibm
 qubits: 156
-native_gates: [ecr, rz, sx, x]
+native_gates: [cz, rz, sx, x]
 
 coupling_map:
   topology: heavy_hex_156
@@ -17,7 +17,7 @@ supports:
 calibration:
   source: ibm_runtime_api
   refresh: nightly
-  store: ~/.cache/spinor/calibration/ibm_heron_r2.json
+  store: ~/.cache/spinor/calibration/ibm_heron_r3.json
 
 decomposition:
   one_qubit:
@@ -26,17 +26,15 @@ decomposition:
     pi_2_gate: sx
   two_qubit:
     recipe: kak
-    entangler: ecr
+    entangler: cz
     entangler_count_max: 3
 
 pricing:
   per_shot_usd: 0.00033
 
 notes: |
-  Heron r2: 156 qubits, heavy-hex lattice. ECR is the native
-  two-qubit gate; rz is virtual. The exact heavy-hex edge list
-  shipped with Phase A is a procedural approximation (see
-  topologies/heavy_hex_156.yaml notes). Replaced with
-  IBM-verified data when calibration ingestion lands.
+  IBM Heron r3: 156-qubit superconducting (Marrakesh, Fez).
+  Heron-class tunable-coupler architecture; CZ is the
+  native two-qubit gate. rz is virtual.
   source: https://quantum.cloud.ibm.com/computers
   verified-upstream: 2026-06-16

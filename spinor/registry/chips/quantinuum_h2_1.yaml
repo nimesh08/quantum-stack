@@ -1,6 +1,6 @@
-# spinor/registry/chips/quantinuum_helios.yaml
+# spinor/registry/chips/quantinuum_h2_1.yaml
 
-id: quantinuum_helios
+id: quantinuum_h2_1
 provider: azure
 qubits: 56
 native_gates: [u1q, rzz]
@@ -17,7 +17,7 @@ supports:
 calibration:
   source: azure_api
   refresh: nightly
-  store: ~/.cache/spinor/calibration/quantinuum_helios.json
+  store: ~/.cache/spinor/calibration/quantinuum_h2_1.json
 
 decomposition:
   one_qubit:
@@ -33,7 +33,8 @@ pricing:
   per_shot_usd: 0.05
 
 notes: |
-  Quantinuum Helios: 56-qubit trapped-ion, full feedforward
-  capability. Adaptive-profile QIR target.
-  source: https://www.quantinuum.com/products-solutions/quantinuum-systems/helios
+  Quantinuum H2-1: 56-qubit trapped-ion QCCD.
+  Trapped-ion QCCD; full feedforward classical
+  control. Adaptive-profile QIR target.
+  source: https://learn.microsoft.com/azure/quantum/provider-quantinuum
   verified-upstream: 2026-06-16

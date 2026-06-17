@@ -1,0 +1,39 @@
+# spinor/registry/chips/ibm_nighthawk_r1.yaml
+
+id: ibm_nighthawk_r1
+provider: ibm
+qubits: 120
+native_gates: [cz, rz, sx, x]
+
+coupling_map:
+  topology: square_grid_120
+  size: 120
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: ibm_runtime_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ibm_nighthawk_r1.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: sx
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00033
+
+notes: |
+  IBM Nighthawk r1: 120-qubit square-grid (12x10).
+  IBM moved off heavy-hex for Nighthawk; CZ entangler.
+  source: https://www.ibm.com/quantum/blog/nighthawk
+  verified-upstream: 2026-06-16

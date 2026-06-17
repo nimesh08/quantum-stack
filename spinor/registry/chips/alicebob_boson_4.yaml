@@ -1,0 +1,41 @@
+# spinor/registry/chips/alicebob_boson_4.yaml
+
+id: alicebob_boson_4
+provider: alicebob
+qubits: 4
+native_gates: [x, z, cx]
+
+coupling_map:
+  topology: linear_n
+  size: 4
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: fixture
+  refresh: fixture
+  store: ~/.cache/spinor/calibration/alicebob_boson_4.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cx
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0
+
+notes: |
+  Alice & Bob Boson 4: 4 logical cat-qubits with
+  bias-preserving X/Z/CX. Shipped via the Alice & Bob
+  cloud (preview) and a public emulator. Cassette-only
+  until the production submission URL is published.
+  source: https://alice-bob.com/products/cloud/
+  verified-upstream: 2026-06-16

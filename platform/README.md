@@ -43,3 +43,5 @@ into something a person can use: a FastAPI **job service**, a nightly
 - [Decisions](../docs/build/phaseD_decisions.md)
 - [Build journal](../docs/build/phaseD_progress.md)
 - [Per-milestone specs](../docs/build/phaseD/README.md)
+- [Future plan + chip-coverage roadmap](../FUTUREPLAN.md)
+- [Unsupported chips ledger](../docs/site/content/chips_unsupported.md)

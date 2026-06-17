@@ -1,0 +1,39 @@
+# spinor/registry/chips/oqc_toshiko.yaml
+
+id: oqc_toshiko
+provider: aws
+qubits: 32
+native_gates: [cz, rx, rz]
+
+coupling_map:
+  topology: kagome_32
+  size: 32
+
+supports:
+  mid_circuit_measure: false
+  feedforward: none
+  reset: true
+
+calibration:
+  source: braket_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/oqc_toshiko.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00145
+
+notes: |
+  OQC Toshiko: 32-qubit Kagome-lattice superconducting.
+  CZ entangler; coaxmon design.
+  source: https://aws.amazon.com/braket/quantum-computers/oqc/
+  verified-upstream: 2026-06-16

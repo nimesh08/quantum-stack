@@ -1,0 +1,40 @@
+# spinor/registry/chips/ibm_torrino.yaml
+
+id: ibm_torrino
+provider: ibm
+qubits: 133
+native_gates: [ecr, rz, sx, x]
+
+coupling_map:
+  topology: heavy_hex_133
+  size: 133
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: ibm_runtime_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ibm_torrino.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: sx
+  two_qubit:
+    recipe: kak
+    entangler: ecr
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00016
+
+notes: |
+  IBM Torrino: 133-qubit Eagle-class.
+  Eagle r3 architecture; ECR is the native two-qubit
+  gate, rz is virtual. Heavy-hex topology.
+  source: https://quantum.cloud.ibm.com/computers
+  verified-upstream: 2026-06-16

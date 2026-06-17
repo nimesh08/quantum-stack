@@ -1,0 +1,9 @@
+{
+  "_recorded_against": "anyon_yukon (synthetic Bell, cassette-only vendor)",
+  "_program": "bell.spn",
+  "_shots": 1000,
+  "counts": {
+    "00": 497,
+    "11": 503
+  }
+}

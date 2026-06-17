@@ -9,6 +9,77 @@ guide is [`phaseD_platform_guide.md`](phaseD_platform_guide.md).
 
 ---
 
+## 2026-06-17 — Steps 1+2: chip-coverage roadmap + FUTUREPLAN
+
+What landed:
+
+- **Step 1 (Bucket A — YAML only).** 18 new chip YAMLs under
+  `spinor/registry/chips/` plus 9 new procedural topologies under
+  `spinor/registry/topologies/`. Total chips in registry: 27 (up
+  from 4). Coverage: IBM Heron r2/r3, Eagle (Brisbane, Sherbrooke),
+  Osprey, Nighthawk r1, Torrino; Quantinuum H2-1, H1-1, Helios;
+  IonQ Tempo, Forte, Forte Enterprise, Aria-1, Harmony, Aria-proto;
+  Rigetti Ankaa-2, Ankaa-3, Ankaa-9Q-3; IQM Garnet, Emerald; OQC
+  Toshiko; AQT Pine.
+- **Step 2 (Bucket B — adapters).** Four new submission adapters in
+  `spinor/submit/python/spinor_submit/__init__.py` (`_live_qci`,
+  `_live_anyon`, `_live_tii`, `_live_alicebob`); 4 cassettes; 8 new
+  unit tests; 4 new sections in the credentials guide. Live mode
+  raises `RuntimeError` pointing at `chips_unsupported.md` because
+  vendor production endpoints are not yet public.
+- **Verification.** New `scripts/verify_chip_yamls.py` cross-checks
+  every chip YAML against the C++ Lexer's gate set (read directly
+  from `Lexer.cpp`), the topology directory, and runs a per-chip
+  smoke compile against `spinorc compile`. Result: 27/27 pass
+  schema + topology; 12 chips report a `[known-gap]` because the
+  C++ KAK decomposer does not yet ship CZ/CX recipes (one PR will
+  unblock all twelve). Also new
+  `scripts/generate_topology_yamls.py` and
+  `scripts/generate_chip_yamls.py` so the registry stays
+  reproducible.
+- **FUTUREPLAN.md** at the repo root (552 lines, 13 sections,
+  clickable ToC). Mirrored on the docs site at
+  `docs/site/content/futureplan.md` via a one-line snippet include.
+  Sections: whole landscape, why we ship 26 today, competitor table,
+  five-bucket support taxonomy, deep-dives for analog Rydberg /
+  photonic / annealing DSLs (grammar, lowering, type checker,
+  effort estimates), Phase E notes, why no new family fits Photon /
+  Phonon / Spinor (concrete grammar / type / lowering arguments),
+  decision matrix, glossary, references with verified-upstream
+  dates.
+- **Unsupported chips ledger** at
+  `docs/site/content/chips_unsupported.md` enumerating every chip
+  we do **not** ship and the *exact* piece of data we are missing
+  (compiler-recipe gap, vendor blocker, decommission, or
+  not-yet-written YAML), so a future contributor can fix one row in
+  one PR.
+- **`spinor_submit` test suite:** 14 passed, 1 skipped (live IBM
+  needs a token).
+- **`mkdocs build` (non-strict):** green; both new pages render.
+
+Decisions taken:
+
+- For chips whose data could not be fully verified upstream, the
+  rule is: do NOT invent values; either ship a YAML with the
+  `notes:` block carrying source URL + `verified-upstream` date, or
+  put the chip on `chips_unsupported.md` with the missing-data
+  column populated. No silent partials.
+- The `verify_chip_yamls.py` script treats the C++ decomposer's
+  missing CZ/CX recipe as a `[known-gap]` rather than a hard
+  failure - it's a Phase A code change, not a YAML problem.
+
+Open follow-ups (tracked in `chips_unsupported.md`):
+
+- Add KAK-CZ / KAK-CX recipes to
+  `spinor/passes/Decomposition.cpp` (~1 day) - unblocks twelve
+  chips at once.
+- Replace the procedural topology approximations with vendor-supplied
+  edge lists when calibration ingestion lands.
+- Add live-mode bodies to the 4 Step-2 adapters once each vendor
+  publishes their production REST URL.
+
+---
+
 ## 2026-06-16 — M0: bootstrap
 
 What landed:

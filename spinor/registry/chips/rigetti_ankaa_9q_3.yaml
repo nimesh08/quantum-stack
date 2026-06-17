@@ -1,0 +1,40 @@
+# spinor/registry/chips/rigetti_ankaa_9q_3.yaml
+
+id: rigetti_ankaa_9q_3
+provider: aws
+qubits: 9
+native_gates: [cz, rx, rz]
+
+coupling_map:
+  topology: square_grid_9
+  size: 9
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: braket_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/rigetti_ankaa_9q_3.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00145
+
+notes: |
+  Rigetti Ankaa-9Q-3: 9-qubit dev device.
+  Square-grid superconducting; CZ via tunable couplers.
+  RX(theta) parametric and RZ virtual.
+  source: https://aws.amazon.com/braket/quantum-computers/rigetti/
+  verified-upstream: 2026-06-16

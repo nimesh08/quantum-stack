@@ -44,7 +44,14 @@ class Job:
     provider: str
 
 
-SUPPORTED_PROVIDERS = ("ibm", "aws", "azure", "local")
+SUPPORTED_PROVIDERS = (
+    "ibm", "aws", "azure", "local",
+    # Step 2 vendors. Production submission URLs are not yet
+    # published, so these adapters ship in cassette mode only;
+    # the live-mode code raises until those URLs are released.
+    # See docs/site/content/chips_unsupported.md.
+    "qci", "anyon", "tii", "alicebob",
+)
 
 
 CASSETTE_DIR = pathlib.Path(__file__).parent / "cassettes"
@@ -143,6 +150,14 @@ def _live_submit(
         return _live_aws(qasm_text, chip, shots)
     if provider == "azure":
         return _live_azure(qasm_text, chip, shots)
+    if provider == "qci":
+        return _live_qci(qasm_text, chip, shots)
+    if provider == "anyon":
+        return _live_anyon(qasm_text, chip, shots)
+    if provider == "tii":
+        return _live_tii(qasm_text, chip, shots)
+    if provider == "alicebob":
+        return _live_alicebob(qasm_text, chip, shots)
     raise ValueError(provider)
 
 
@@ -207,6 +222,67 @@ def _live_azure(qasm_text: str, chip: str, shots: int) -> Histogram:
     histogram = job.get_results()
     return Histogram(counts={k: int(v) for k, v in histogram.items()},
                      shots=shots)
+
+
+def _vendor_unsupported(provider: str) -> RuntimeError:
+    """Common error for the four Step-2 vendors whose production
+    submission endpoints are not yet publicly documented.
+
+    The cassette path through ``submit(...)`` continues to work for
+    these providers - this only fires when somebody sets
+    ``SPINOR_SUBMIT_MODE=live``. The full reason and the exact piece
+    of data we are missing is recorded in
+    ``docs/site/content/chips_unsupported.md``.
+    """
+    return RuntimeError(
+        f"live submission to {provider!r} is not wired yet - the "
+        "production REST URL / auth scheme is not publicly published. "
+        "Use SPINOR_SUBMIT_MODE=cassette for tests, or see "
+        "docs/site/content/chips_unsupported.md for what would unblock "
+        "this."
+    )
+
+
+def _live_qci(qasm_text: str, chip: str, shots: int) -> Histogram:
+    """Quantum Circuits Inc. (QCI) Aqumen.
+
+    Cassette-only. QCI's production REST endpoint and auth scheme
+    are not publicly documented; only their CUDA-Q backend hint is
+    available at <https://nvidia.github.io/cuda-quantum/>. When the
+    user provides QCI credentials, replace this body with their
+    documented submit + poll pattern.
+    """
+    raise _vendor_unsupported("qci")
+
+
+def _live_anyon(qasm_text: str, chip: str, shots: int) -> Histogram:
+    """Anyon Technologies Yukon.
+
+    Cassette-only. Anyon's cloud submission API is in private beta
+    and the production REST URL / auth scheme is not published.
+    """
+    raise _vendor_unsupported("anyon")
+
+
+def _live_tii(qasm_text: str, chip: str, shots: int) -> Histogram:
+    """Technology Innovation Institute (TII), Abu Dhabi.
+
+    Cassette-only. TII publishes the open-source Qibolab driver
+    stack at <https://github.com/qiboteam/qibolab> but the
+    institute does not run a public hosted submission service; the
+    live path would have to bind to a user-hosted Qibolab instance.
+    """
+    raise _vendor_unsupported("tii")
+
+
+def _live_alicebob(qasm_text: str, chip: str, shots: int) -> Histogram:
+    """Alice & Bob Boson 4 (cat-qubit).
+
+    Cassette-only. Alice & Bob ship a public emulator (Felis) but
+    production hardware access is via paid contract; the production
+    REST URL is not publicly published.
+    """
+    raise _vendor_unsupported("alicebob")
 
 
 __all__ = ["Histogram", "Job", "submit", "SUPPORTED_PROVIDERS"]

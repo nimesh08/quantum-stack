@@ -1,0 +1,40 @@
+# spinor/registry/chips/iqm_garnet.yaml
+
+id: iqm_garnet
+provider: aws
+qubits: 20
+native_gates: [cz, rx, ry, rz]
+
+coupling_map:
+  topology: square_grid_20
+  size: 20
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: braket_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/iqm_garnet.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: ""
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.00145
+
+notes: |
+  IQM Garnet: 20-qubit square-grid superconducting.
+  IQM superconducting square-grid. Native PRX(theta,phi)
+  expressed here via {rx, ry, rz}; CZ is the entangler.
+  source: https://aws.amazon.com/braket/quantum-computers/iqm/
+  verified-upstream: 2026-06-16

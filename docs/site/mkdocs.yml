@@ -138,6 +138,7 @@ markdown_extensions:
       base_path:
         - "."
         - "content/_includes"
+        - "../.."
       check_paths: true
   - pymdownx.superfences:
       custom_fences:
@@ -153,6 +154,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - "Future plan": futureplan.md
+  - "Unsupported chips": chips_unsupported.md
   - Install:
       - install/index.md
       - "Server (systemd)": install/server_systemd.md
