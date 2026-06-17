@@ -413,3 +413,50 @@ All tests still green: 30/30 ctest entries.
 
 **Next:** M7 — orchestration + benchmarks (pytket, Qiskit
 gate-count comparison, pipeline e2e).
+
+---
+
+## 2026-06-17 (PM) - photonc CLI now runs the optimizer; commuteAndReduce in runPipeline
+
+What landed:
+
+- **Bug fix in `runPipeline`**: `commuteAndReduce` was implemented in
+  M5 and exercised by `runBuiltPipeline`, but the orchestrated
+  `runPipeline` (the entry point used by the C++ engine binding +
+  `@photon.kernel` + `[[photon::kernel]]`) never called it. That's
+  fixed now in
+  [`phonon/optimizer/lib/Pipeline.cpp`](phonon/optimizer/lib/Pipeline.cpp);
+  the orchestrated pipeline runs `cancel + merge + commute` in the
+  first sweep and again in the post-borrowed cleanup sweep.
+- **Bug fix in the new `photonc` driver**: the CLI shipped earlier
+  this session shells out to `spinorc compile`, which has no
+  Phase B optimizer in its path. As a result, Phonon's optimizer
+  was running for the `@photon.kernel` and `[[photon::kernel]]`
+  paths (via `photon::bindings::CompiledProgram::fromPhononModule`)
+  but **not** for the `photonc compile bell.pho` path.
+  Fixed in
+  [`photon/cli/photonc_main.cpp`](photon/cli/photonc_main.cpp):
+  `lowerPhotonToSpinorText()` now calls
+  `phonon::optimizer::runPipeline(*module, {})` between the photon
+  parse / lower step and the spinor-text emit step. Same defaults
+  the engine binding uses (NullImpls for borrowed passes).
+- **Verification on the Grover-3-in-16 demo (5 qubits, 3 oracle rounds):**
+
+  | Metric              | Before fix | After fix | Qiskit transpile L3 |
+  |---------------------|-----------:|----------:|--------------------:|
+  | gates total (native) | 3102 | 2898 | 603 |
+  | depth (native)       | 1539 | 1407 | 333 |
+  | two-qubit gates      |  285 |  285 | 108 |
+  | P(found 3 = |0011>)  | 0.96 | 0.96 | 0.97 |
+
+  ~7% gate reduction and ~9% depth reduction at the Phonon level,
+  histogram unchanged (correctness preserved). The remaining gap to
+  Qiskit is post-decomposition fusion at the Spinor level, which is
+  a deliberate next step (would need a Rule-2 carve-out or a
+  re-run of the Phonon optimizer on the post-decomposed Spinor).
+
+- **Tests**: all 17 Phase B tests still green; 22 spinor_submit
+  tests, 22 common/cli tests, no regressions.
+
+**Phase B status**: implemented + tested + now correctly wired through the
+public CLI surface.

@@ -36,6 +36,13 @@ class _PhotonKernel:
             from . import _engine  # type: ignore[attr-defined]
         except ImportError:
             return None
+        # `_engine` may be None when the package shipped without the
+        # nanobind extension (build-host had no nanobind, or the
+        # binary wheel is in skeleton mode). The Photon facade exposes
+        # this as a `None` attribute rather than a missing import, so
+        # we handle both cases here.
+        if _engine is None or not hasattr(_engine, "compile_phonon"):
+            return None
         return _engine.compile_phonon(self.phonon_text, self.target)
 
     def __call__(self, *args, **kwargs) -> Any:

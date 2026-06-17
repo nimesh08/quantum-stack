@@ -1,0 +1,24 @@
+{
+  "_recorded_against": "ibm_heron_r2 (synthetic, deterministic)",
+  "_program": "grover_3_in_16",
+  "_shots": 1024,
+  "_note": "Synthetic Grover-search-3-in-{0..15} with 4 search qubits + 1 ancilla. 3 oracle iterations. The marked answer 3 = |0011> dominates with ~96% probability on a noiseless simulator (verified offline; see grover_3_in_16.pho header). On real hardware the depth-1539 ECR-decomposed circuit accumulates ~99.7% gate error so the actual histogram will be much flatter; this cassette gives the noiseless-shape demo. Bit ordering: the leftmost bit in each 5-bit string is the ancilla (q[4], expected 0); the next four are q[3], q[2], q[1], q[0] (Qiskit-style big-endian print of little-endian register, with q[0] = LSB).",
+  "counts": {
+    "00011": 984,
+    "00111": 6,
+    "01011": 6,
+    "00001": 5,
+    "00101": 5,
+    "01001": 5,
+    "01101": 4,
+    "00000": 1,
+    "00010": 1,
+    "00100": 1,
+    "00110": 1,
+    "01000": 1,
+    "01010": 1,
+    "01100": 1,
+    "01110": 1,
+    "01111": 1
+  }
+}

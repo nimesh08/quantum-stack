@@ -5,6 +5,7 @@
 add_executable(photonc photonc_main.cpp)
 target_link_libraries(photonc PRIVATE
   photon_lang
+  phonon_optimizer
   qs::common_cli
   phonon_dialect
 )
