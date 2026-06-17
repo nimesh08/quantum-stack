@@ -1,0 +1,12 @@
+{
+  "_recorded_against": "ibm_heron_r2 (synthetic, deterministic)",
+  "_program": "heisenberg_demo_grover_3.qasm3",
+  "_shots": 1000,
+  "_note": "Synthetic Grover-3 histogram for offline demo; on noiseless hardware the marked answer |11> would dominate. We give it a healthy majority but not 100% to keep the demo honest about real-world noise.",
+  "counts": {
+    "00": 18,
+    "01": 22,
+    "10": 25,
+    "11": 935
+  }
+}

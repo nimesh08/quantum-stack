@@ -10,5 +10,6 @@ target_link_libraries(spinorc PRIVATE
   spinor::sim
   spinor::emit
   spinor::submit
+  qs::common_cli
 )
 target_compile_features(spinorc PRIVATE cxx_std_20)

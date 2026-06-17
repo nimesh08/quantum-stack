@@ -22,6 +22,9 @@
 #include "spinor/submit/Provider.h"
 #include "spinor/verify/Verifier.h"
 
+#include "qs/common/cli/Providers.h"
+#include "qs/common/cli/Submit.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -271,6 +274,60 @@ int main(int argc, char** argv) {
     if (est.shotCostUsd)
       std::cout << "cost @1k shots ($): " << *est.shotCostUsd << "\n";
     return (canSim && !eq.equivalent) ? 1 : 0;
+  }
+
+  if (cmd == "submit") {
+    // spinorc submit -t <chip> [--provider P] [--mode m] [--shots N]
+    //                [--api-key-file path] FILE.qasm3
+    auto target = argValue(argc, argv, "-t");
+    if (!target) target = argValue(argc, argv, "--target");
+    if (!target || argc < 5) {
+      std::cerr << "usage: spinorc submit -t <chip> [--provider P] "
+                   "[--mode cassette|live|local] [--shots N] "
+                   "[--api-key-file PATH] <FILE.qasm3>\n";
+      return 2;
+    }
+    std::string file = argv[argc - 1];
+    qs::common::cli::SubmitRequest r;
+    r.qasm_path = file;
+    r.chip      = *target;
+    auto prov = argValue(argc, argv, "--provider");
+    if (prov) {
+      r.provider = *prov;
+    } else {
+      // Auto-derive from the chip YAML.
+      std::string root = defaultRegistryRoot().string();
+      auto p = qs::common::cli::providerForChip(root, r.chip);
+      r.provider = p.value_or("ibm");
+    }
+    if (auto s = argValue(argc, argv, "--shots")) {
+      try { r.shots = std::stoi(*s); } catch (...) {}
+    }
+    if (auto m = argValue(argc, argv, "--mode")) {
+      auto pm = qs::common::cli::parseMode(*m);
+      if (pm) r.mode = *pm;
+    }
+    if (auto kf = argValue(argc, argv, "--api-key-file")) {
+      r.api_key_file = *kf;
+    }
+    if (auto u = argValue(argc, argv, "--url"))      r.url      = *u;
+    if (auto reg = argValue(argc, argv, "--region")) r.region   = *reg;
+    if (auto inst = argValue(argc, argv, "--instance"))
+      r.instance = *inst;
+    if (auto pn = argValue(argc, argv, "--program-name")) {
+      r.program_name = *pn;
+    } else {
+      std::filesystem::path p(file);
+      r.program_name = p.stem().string();
+      if (r.program_name.empty()) r.program_name = "bell";
+    }
+    auto result = qs::common::cli::runPython(r);
+    std::cout << result.stdout_text;
+    if (!result.ok) {
+      std::cerr << result.stderr_text;
+      return result.exit_code == 0 ? 1 : result.exit_code;
+    }
+    return 0;
   }
 
   std::cerr << "unknown subcommand: " << cmd << "\n";

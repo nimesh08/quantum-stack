@@ -158,6 +158,7 @@ nav:
   - "Unsupported chips": chips_unsupported.md
   - Install:
       - install/index.md
+      - "CLI binaries (one-line install)": install/cli.md
       - "Server (systemd)": install/server_systemd.md
       - "From source": install/from_source.md
       - "spinorc CLI": install/spinorc_cli.md

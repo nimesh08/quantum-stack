@@ -9,6 +9,93 @@ guide is [`phaseD_platform_guide.md`](phaseD_platform_guide.md).
 
 ---
 
+## 2026-06-17 - photonc + phononc CLIs and signed binary distribution
+
+What landed:
+
+- **Three driver binaries**, one per language layer, mirroring
+  `gcc cpp -> cc1 -> as -> ld`:
+  - [`photonc`](photon/cli/photonc_main.cpp) - top driver. Reads
+    `.pho` (in-process via `photon_lang`), `.phonon`, or `.spinor`.
+    Subcommands: `compile`, `estimate`, `submit`, `run`, `targets`,
+    `providers`, `version`. ~430 LOC.
+  - [`phononc`](phonon/cli/phononc_main.cpp) - middle driver. Same
+    subcommand set, smaller scope (no `.pho`). ~250 LOC.
+  - Existing `spinorc` extended with a `submit` subcommand that
+    matches the universal flag schema; legacy
+    parse/verify/compile/emit/check/registry stay backward
+    compatible.
+- **Shared `common/cli` library** at
+  [`common/cli/`](common/cli/), single source of truth for:
+  - `Flags.{h,cpp}` - declarative flag table, `--help` renderer, no
+    secrets in argv (matches the open-cli-collective working-with-
+    secrets standard).
+  - `Providers.{h,cpp}` - chip-id -> provider lookup that reads the
+    chip YAML directly.
+  - `Submit.{h,cpp}` - subprocess to `python -m spinor_submit`; the
+    vendor SDKs handle their own auth chains.
+  - `Manifest.{h,cpp}` - JSON sidecar with `source_sha256` so a
+    recipient can audit a portable artifact before submitting.
+  - 22 unit tests, all green.
+- **Python entry point** at
+  [`spinor_submit/__main__.py`](spinor/submit/python/spinor_submit/__main__.py)
+  - argparse front (`submit`, `targets`, `providers`, `version`).
+  Honours `--api-key-file` and `--api-key-stdin`; populates the
+  canonical `IBM_QUANTUM_TOKEN` / `AWS_*` / `AZURE_*` env vars from
+  the resolved secret. 8 new pytest tests, all green.
+- **Release CI** at [`.github/workflows/release-cli.yml`](.github/workflows/release-cli.yml)
+  - matrix build for `linux-x86_64`, `linux-aarch64`,
+  `windows-x86_64`. Each artifact signed via
+  `actions/attest-build-provenance` (Sigstore-backed). Tarballs
+  publish as GitHub Release assets and mirror to
+  `docs/site/content/downloads/`.
+- **One-line install** scripts:
+  - [`scripts/install.sh`](scripts/install.sh) - POSIX shell, detects
+    `uname -sm`, downloads the right tarball, verifies provenance via
+    `gh attestation verify` (with a SHA256 fallback), installs into
+    `~/.local/heisenberg/`, symlinks `~/.local/bin/{spinorc,photonc,
+    phononc,spinor-submit}`.
+  - [`scripts/install.ps1`](scripts/install.ps1) - PowerShell sibling
+    for Windows.
+- **Docs site page** at
+  [`docs/site/content/install/cli.md`](docs/site/content/install/cli.md)
+  with install instructions, provenance verification, troubleshooting,
+  and a Bell smoke test.
+- **Demo simplification**: `~/heisenberg-demo/run_bell.sh` and
+  `run_grover.sh` collapse to one-line `photonc run` invocations.
+  New `run_artifact.sh` demonstrates the compile-here, submit-
+  elsewhere flow via the QASM3 + manifest sidecar.
+
+End-to-end smoke (cassette mode, no IBM token):
+
+```
+photonc run bell.pho --target ibm_heron_r2 --mode cassette
+shots=1000 total counts=1000
+histogram:
+  |00>:   498  ###################
+  |11>:   502  ####################
+```
+
+Decisions taken:
+
+- **Subprocess to Python for the network hop**, not in-process
+  libcurl. Vendor SDKs handle non-trivial auth (IBM Cloud IAM, AWS
+  SigV4, Azure DefaultCredential); re-implementing in C++ is
+  weeks per provider plus a permanent maintenance tail. The ~100 ms
+  subprocess hop is invisible against any cloud round-trip.
+- **No secrets in flags**. `--api-key-file` / `--api-key-stdin` /
+  env only. `--help` documents this; the parser explicitly rejects
+  `--api-key=<literal>` with a precise diagnostic.
+- **`gh attestation verify`** for provenance instead of `cosign`.
+  Smaller dependency footprint (already installed on most dev
+  machines), and the attestation chain ends at GitHub's OIDC issuer
+  with no human key material.
+- **Auto-derived provider** from the chip YAML (`--target
+  ibm_heron_r2` implies `--provider ibm`); explicit `--provider`
+  overrides.
+
+---
+
 ## 2026-06-17 — Steps 1+2: chip-coverage roadmap + FUTUREPLAN
 
 What landed:

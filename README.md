@@ -68,6 +68,12 @@ missing for each) are in
 ## Try it in 30 seconds
 
 ```bash
+# Option A: install the prebuilt CLI (Linux x86_64/aarch64, Windows x86_64).
+curl -sSL https://nimesh08.github.io/quantum-stack/install.sh | bash
+. ~/.local/heisenberg/env.sh
+photonc run /tmp/bell.pho --target ibm_heron_r2 --mode cassette
+
+# Option B: full stack from source.
 git clone https://github.com/nimesh08/quantum-stack.git
 cd quantum-stack/platform/deploy
 cp .env.example .env

@@ -30,6 +30,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+__version__ = "0.1.0"
+
 
 @dataclass
 class Histogram:

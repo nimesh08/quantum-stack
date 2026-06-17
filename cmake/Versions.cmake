@@ -43,6 +43,12 @@ set(QSTACK_PYTHON_MIN      "3.12"  CACHE STRING "Minimum supported CPython versi
 # Lark (Phase A throwaway parser prototype, Python-only).
 set(QSTACK_LARK_VERSION   "1.3.1"  CACHE STRING "Pinned Lark version (set in Phase A M2; throwaway, deleted at M7)")
 
+# --- Heisenberg CLI distribution ---------------------------------------------
+# Version of the photonc/phononc/spinorc CLI binaries. Bumped per
+# release tag; the release-cli.yml workflow uses GITHUB_REF_NAME so
+# this is a documentation pin only.
+set(QSTACK_CLI_VERSION  "0.1.0"  CACHE STRING "Pinned CLI version")
+
 # --- Provenance --------------------------------------------------------------
 set(QSTACK_VERSIONS_VERIFIED_DATE "2026-06-16" CACHE STRING
     "Date the pinned versions in this file were last verified upstream.")

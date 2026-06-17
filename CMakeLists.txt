@@ -79,6 +79,12 @@ if(QSTACK_BUILD_PHOTON)
   add_subdirectory(photon)
 endif()
 
+# Shared CLI library (used by spinorc, phononc, photonc). Depends on
+# spinor::registry only, so it's safe to add after Spinor.
+if(QSTACK_BUILD_SPINOR)
+  add_subdirectory(common/cli)
+endif()
+
 # platform/ is intentionally NOT a CMake subdirectory:
 # it hosts FastAPI (Python) and the React playground, built by their own
 # tooling. See platform/README.md.

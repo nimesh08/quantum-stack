@@ -22,6 +22,7 @@ target_link_libraries(photon INTERFACE phonon_dialect)
 add_subdirectory(lang)
 add_subdirectory(bindings)
 add_subdirectory(frontends/cpp)
+add_subdirectory(cli)
 
 if(QSTACK_ENABLE_TESTS)
   add_subdirectory(tests/m1)

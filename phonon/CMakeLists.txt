@@ -16,6 +16,7 @@ add_subdirectory(parser)
 add_subdirectory(types)
 add_subdirectory(lower)
 add_subdirectory(optimizer)
+add_subdirectory(cli)
 
 if(QSTACK_ENABLE_TESTS)
   add_subdirectory(tests/m1)
