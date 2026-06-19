@@ -70,7 +70,7 @@ are env-driven and never committed.
 
 **Q: What does "verbatim" mean?**
 
-The Phase A adapters submit the OpenQASM 3 we produce **without**
+The submission adapters send the OpenQASM 3 we produce **without**
 letting the provider's transpiler rewrite it. `skip_transpilation=True`
 for IBM, `Program(source=qasm)` for Braket, raw `openqasm-v3` for
 Azure. This is Rule 5 — the only way our result quality is provably
@@ -134,4 +134,4 @@ chip (e.g. `generic` for free local sim), or raise the budget via
 
 - File a GitHub issue: <https://github.com/nimesh08/quantum-stack/issues>
 - Read the [Glossary](internals/glossary.md) for terms
-- Browse the [build journal](internals/progress.md) to see what changed when
+- Browse the [build journal](internals/build_journal.md) to see what changed when

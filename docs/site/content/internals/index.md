@@ -19,7 +19,7 @@ ledger.
   invariants. Every PR is reviewed against them.
 - [Decisions log](decisions.md) — every deviation from the original
   engineering deep-dives, with the reasoning.
-- [Build journal](progress.md) — append-only log of how the project
+- [Build journal](build_journal.md) — append-only log of how the project
   was built, milestone by milestone. Linked to the
   [archive](https://github.com/nimesh08/quantum-stack/tree/main/docs/archive)
   for the per-phase progress files.

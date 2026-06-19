@@ -8,9 +8,9 @@ rejected.
 
 The order is **Spinor → Phonon → Photon → Platform**. A finished
 lower layer is a real, testable artefact the next layer depends on.
-This is what makes it possible to fix a Phase B bug without breaking
-Phase D, and what makes it possible to add a chip at the YAML level
-without touching the compiler at all.
+This is what makes it possible to fix a Phonon bug without breaking
+the platform, and what makes it possible to add a chip at the YAML
+level without touching the compiler at all.
 
 In practice: do not start a feature in Photon that requires a
 Phonon change without landing the Phonon change first.
@@ -61,7 +61,7 @@ QIR-Adaptive-pragma / equivalent flag to the vendor SDK. If a
 vendor cannot honour verbatim mode, the chip lands on the
 [unsupported-chips ledger](chips_unsupported.md) until they can.
 
-## RULE 6 — Phase E (auto-synthesis) is out of scope
+## RULE 6 — Auto-synthesis is out of scope
 
 Auto-synthesis — the dream of *user describes a problem, system
 invents the circuit* — sits **above** Photon, not inside any of the

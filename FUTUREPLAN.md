@@ -1,15 +1,40 @@
-# FUTUREPLAN.md — Quantum hardware landscape and the roadmap beyond Step 2
+# Future plan — quantum hardware landscape and roadmap
 
-> **Status: in progress.** Steps 1 and 2 are landed (this commit takes
-> us from 4 to 26 verified chips with zero compiler change). This
-> document captures the full landscape, why we shipped what we
-> shipped, and what comes next, in priority order.
+## Vision
 
-> **How to navigate:** every section heading is anchor-linked from the
-> table of contents below. The deep-dives (Sections 5, 7, 8) carry
-> grammar sketches, lowering examples, type-checker constraints, and
-> effort estimates so a future contributor can pick one up and run
-> with it.
+Heisenberg is on a path to be the **first quantum compiler stack
+that treats every chip as a first-class target** — and to do it in
+a way that does not lock you into one vendor's runtime, one
+language, or one cloud. The shape we are building toward, over the
+next twelve months: write a quantum program once, run it on any
+chip; honest cost control before the cloud bill; three SDKs, one
+engine; open by default.
+
+Today we ship 27 verified gate-model chips across 8 vendors plus 4
+cassette-only adapters waiting for vendor REST URLs. The next major
+expansion is a sibling language for analog Rydberg hardware (QuEra
+Aquila, Pasqal Fresnel) — same compiler engine, same launcher, same
+docs site, different language because the computational model is
+fundamentally different. Two further sibling languages (photonic
+continuous-variable, annealing) come later when there is real
+customer pull.
+
+This document is the long-form version of that vision. It is the
+landscape (what hardware exists), the support classes (how each
+chip class fits into our architecture), the per-track deep-dives
+(grammar, lowering, type-checker constraints, effort estimates),
+and the decision matrix (when to build each track).
+
+> **Status: in progress.** The first two tracks (chip YAMLs +
+> vendor adapters) are landed and take us from 4 to 27 verified
+> chips with zero compiler change. The remaining tracks are
+> designed but not started.
+
+> **How to navigate:** every section heading is anchor-linked from
+> the table of contents below. The deep-dives (Sections 5, 7, 8)
+> carry grammar sketches, lowering examples, type-checker
+> constraints, and effort estimates so a future contributor can
+> pick one up and run with it.
 
 ---
 
@@ -18,14 +43,14 @@
 | #  | Section                                                                            | What it answers |
 |----|------------------------------------------------------------------------------------|-----------------|
 | 1  | [The whole landscape](#1-the-whole-landscape)                                      | Every modality, every vendor, every chip we know about (table). |
-| 2  | [Why we ship 26 chips today](#2-why-we-ship-26-chips-today)                        | What "Bucket A" and "Bucket B" mean, mapped to M1 and M2. |
+| 2  | [Why we ship 27 chips today](#2-why-we-ship-27-chips-today)                        | What the YAML-only and adapter-only support classes mean in practice. |
 | 3  | [What competitors ship](#3-what-competitors-ship)                                  | Horizon Triple Alpha, NVIDIA CUDA-Q, IBM Qiskit, Google Cirq — verified upstream. |
-| 4  | [Architectural support taxonomy](#4-architectural-support-taxonomy)                | Bucket A / B / C / D / E with concrete examples. |
-| 5  | [Step 3 — analog Rydberg DSL deep-dive](#5-step-3-analog-rydberg-dsl-deep-dive)   | Grammar, AHS lowering, type checker, 2–3 week estimate. |
-| 6  | [Step 4 — opportunistic unlocks](#6-step-4-opportunistic-unlocks)                 | D-Wave gate-mode, Microsoft Majorana, Diraq, Origin Wukong. |
-| 7  | [Step 5 — photonic DSL deep-dive](#7-step-5-photonic-dsl-deep-dive)               | Modes / beam-splitters / detect grammar, Blackbird lowering, ORCA + Xanadu, 3–4 weeks. |
-| 8  | [Step 6 — annealing DSL deep-dive](#8-step-6-annealing-dsl-deep-dive)             | problem / var / minimize grammar, BQM lowering, D-Wave, 2–3 weeks. |
-| 9  | [Step 7 — Phase E auto-synthesis](#9-step-7-phase-e-auto-synthesis)               | Why this sits above Photon; decade-scale. |
+| 4  | [Architectural support classes](#4-architectural-support-classes)                  | yaml-only / adapter / vendor-blocked / new-language / auto-synthesis. |
+| 5  | [Analog Rydberg DSL deep-dive](#5-analog-rydberg-dsl-deep-dive)                    | Grammar, AHS lowering, type checker, 2-3 week estimate. |
+| 6  | [Opportunistic gate-model unlocks](#6-opportunistic-gate-model-unlocks)            | D-Wave gate-mode, Microsoft Majorana, Diraq, Origin Wukong. |
+| 7  | [Photonic DSL deep-dive](#7-photonic-dsl-deep-dive)                                | Modes / beam-splitters / detect grammar, Blackbird lowering, ORCA + Xanadu, 3-4 weeks. |
+| 8  | [Annealing DSL deep-dive](#8-annealing-dsl-deep-dive)                              | problem / var / minimize grammar, BQM lowering, D-Wave, 2-3 weeks. |
+| 9  | [Auto-synthesis (out of scope)](#9-auto-synthesis-out-of-scope)                    | Why this sits above Photon; decade-scale. |
 | 10 | [Why none of these fit into Photon/Phonon/Spinor](#10-why-none-of-these-fit-into-photonphononspinor) | Concrete grammar / type / lowering arguments. |
 | 11 | [Decision matrix](#11-decision-matrix)                                             | When to build each; demand triggers; cost-of-delay. |
 | 12 | [Glossary](#12-glossary)                                                           | All the acronyms in one place. |
@@ -45,10 +70,10 @@ that a user can address), the rough population looks like this
 | Gate-model SC     | Superconducting transmon / fluxonium | IBM, Rigetti, IQM, OQC, Google, QCI, Anyon, TII, Origin                            | ~25                           | **Yes** (this is Spinor's home turf) |
 | Gate-model TI     | Trapped ion              | IonQ, Quantinuum, AQT, Universal Quantum                                                       | ~8                            | **Yes** |
 | Gate-model neutral | Rydberg gate-mode        | Atom Computing, Pasqal (gate-mode roadmap), QuEra (small)                                      | ~3                            | Partial (gate set differs; needs YAML + maybe a Phonon lowering for global pulses) |
-| Analog neutral    | Rydberg analog           | QuEra, Pasqal, Infleqtion (preview)                                                            | ~3                            | **No** — not gate-model. Needs a sibling DSL (Step 3). |
-| Photonic CV       | Continuous-variable / squeezed light                | Xanadu, ORCA, PsiQuantum (roadmap)                                                             | ~3                            | **No** — modes, not qubits. Needs photonic DSL (Step 5). |
-| Annealing         | Ising / QUBO             | D-Wave (Advantage 6.4, Advantage2)                                                             | ~2                            | **No** — solves an objective, not a circuit. Needs annealing DSL (Step 6). |
-| Topological       | Majorana zero modes      | Microsoft (Majorana 1)                                                                         | 0 publicly reachable          | TBD (Microsoft's gate set is gate-model; once a real device ships, Bucket B). |
+| Analog neutral    | Rydberg analog           | QuEra, Pasqal, Infleqtion (preview)                                                            | ~3                            | **No** — not gate-model. Needs a sibling DSL (analog Rydberg). |
+| Photonic CV       | Continuous-variable / squeezed light                | Xanadu, ORCA, PsiQuantum (roadmap)                                                             | ~3                            | **No** — modes, not qubits. Needs photonic DSL. |
+| Annealing         | Ising / QUBO             | D-Wave (Advantage 6.4, Advantage2)                                                             | ~2                            | **No** — solves an objective, not a circuit. Needs annealing DSL. |
+| Topological       | Majorana zero modes      | Microsoft (Majorana 1)                                                                         | 0 publicly reachable          | TBD (Microsoft's gate set is gate-model; once a real device ships, adapter-only). |
 | Other             | Spin (Diraq), cat-qubit (Alice & Bob) | Diraq, Alice & Bob, SiQure                                                                     | ~2                            | Mostly **Yes** with a custom gate set. |
 
 The gap between "we ship 26" and "we could ship ~40" is mostly
@@ -60,35 +85,36 @@ section 10 for *why*.
 
 ---
 
-## 2. Why we ship 26 chips today
+## 2. Why we ship 27 chips today
 
-Two buckets of work:
+Two classes of work:
 
-- **Bucket A — YAML only.** Add a chip to the registry by writing one
-  YAML file. The compiler reads it. No code change. This is what
-  Phase A's whole architecture was built to enable. The 18 chips in
-  M1 (IBM Heron r3 / Brisbane / Sherbrooke / Osprey / Nighthawk r1 /
-  Torrino, Quantinuum H2-1 / H1-1, IonQ Tempo / Forte Enterprise /
-  Aria-1 / Harmony, Rigetti Ankaa-3 / Ankaa-2 / Ankaa-9Q-3, IQM
-  Garnet / Emerald, OQC Toshiko, AQT Pine) are Bucket A.
+- **YAML-only.** Add a chip to the registry by writing one YAML
+  file. The compiler reads it. No code change. This is what
+  Spinor's whole architecture was built to enable. 18 IBM Heron r3 /
+  Brisbane / Sherbrooke / Osprey / Nighthawk r1 / Torrino,
+  Quantinuum H2-1 / H1-1, IonQ Tempo / Forte Enterprise / Aria-1 /
+  Harmony, Rigetti Ankaa-3 / Ankaa-2 / Ankaa-9Q-3, IQM Garnet /
+  Emerald, OQC Toshiko, AQT Pine — all yaml-only.
 
-- **Bucket B — adapter.** Add a `_live_<vendor>` dispatch entry in
+- **Adapter-only.** Add a `_live_<vendor>` dispatch entry in
   [`spinor_submit/__init__.py`](spinor/submit/python/spinor_submit/__init__.py) so jobs route to the right
-  cloud. The 4 vendors in M2 (QCI Aqumen, Anyon Yukon, TII Falcon,
-  Alice & Bob Boson 4) are Bucket B.
+  cloud. Four vendors (QCI Aqumen, Anyon Yukon, TII Falcon, Alice
+  & Bob Boson 4) are adapter-only today.
 
 This is the point of Spinor. The compiler does *not* need to know
 about a new chip's name, only its native gate set, topology, and
 decomposition recipes. The chips that we still cannot ship (despite
 having the YAML written) are blocked on either:
 
-1. **A compiler recipe gap.** The current KAK two-qubit decomposer
-   ships recipes for `ecr`, `ms`, and `rzz` entanglers. CZ-native and
-   CX-native chips (most of Rigetti, all of IQM and OQC, the four
-   Step-2 vendors, IBM Heron r3 and IBM Nighthawk r1) error out at
-   decomposition time with `emitCX: no recipe for entangler 'cz'`.
-   Adding the recipes is a Phase A code change (~1 week). Tracked
-   in [`chips_unsupported.md`](docs/site/content/chips_unsupported.md).
+1. **A compiler-recipe gap.** The current KAK two-qubit decomposer
+   ships recipes for `ecr`, `ms`, and `rzz` entanglers. CZ-native
+   and CX-native chips (most of Rigetti, all of IQM and OQC, the
+   four cassette-only vendors, IBM Heron r3 and IBM Nighthawk r1)
+   error out at decomposition time with `emitCX: no recipe for
+   entangler 'cz'`. Adding the recipes is a Spinor code change
+   (~1 week). Tracked in
+   [`chips_unsupported.md`](docs/site/content/internals/chips_unsupported.md).
 
 2. **A vendor with no public production endpoint.** QCI, Anyon, TII,
    and Alice & Bob all have public datasheets but no published REST
@@ -103,7 +129,7 @@ having the YAML written) are blocked on either:
 
 | Stack | Chips supported | Modalities | Source | Verified |
 |-------|----------------|-----------|--------|----------|
-| **Heisenberg** (this repo) | 26 (after M1 + M2) | Gate-model SC + TI + 4 cassette-only | this commit | 2026-06-16 |
+| **Heisenberg** (this repo) | 27 (yaml-only + adapter) | Gate-model SC + TI + 4 cassette-only | 0.5.0 | 2026-06-16 |
 | Horizon Quantum **Triple Alpha** | ~12, IBM-only focus | Gate-model SC | <https://horizonquantum.com/triple-alpha> | 2026-06-16 |
 | NVIDIA **CUDA-Q** | ~25, multi-vendor; deep IBM + IonQ + Quantinuum + ORCA + Anyon support | Gate-model SC + TI + photonic | <https://nvidia.github.io/cuda-quantum/latest/using/backends/backends.html> | 2026-06-16 |
 | **Qiskit** | IBM-only (~10 backends) | Gate-model SC | <https://docs.quantum.ibm.com/run/get-backend-information> | 2026-06-16 |
@@ -118,24 +144,24 @@ competitor; we differ on the verbatim guarantee.
 
 ---
 
-## 4. Architectural support taxonomy
+## 4. Architectural support classes
 
-Five buckets, in order of incremental cost:
+Five classes, in order of incremental cost:
 
-| Bucket | What it is                                            | Cost (1 chip) | Examples (this repo) |
+| Class | What it is                                            | Cost (1 chip) | Examples (this repo) |
 |--------|-------------------------------------------------------|---------------|----------------------|
-| **A**  | Add a YAML in `spinor/registry/chips/`; compiler reads it. No code. | ~30 min       | M1's 18 chips. |
-| **B**  | A new submission adapter (`_live_<vendor>`)           | ~1 day        | M2's 4 vendors. |
-| **C**  | Vendor-blocked: chip exists publicly but the cloud submission URL is not yet public. | indefinite    | QCI, Anyon, TII, Alice & Bob's *live* mode. |
-| **D**  | Modality does not fit gate-model semantics; needs a sibling DSL with its own grammar / types / lowering. | weeks         | Rydberg analog (Step 3); photonic CV (Step 5); annealing (Step 6). |
-| **E**  | Auto-synthesis: the user describes a problem, the system *invents* the circuit. Sits **above** Photon. | months / years | Phase E (Step 7). |
+| **yaml-only**       | Add a YAML in `spinor/registry/chips/`; compiler reads it. No code. | ~30 min       | The 18 yaml-only chips above. |
+| **adapter**         | A new submission adapter (`_live_<vendor>`)           | ~1 day        | The 4 cassette-only vendors. |
+| **vendor-blocked**  | Vendor-blocked: chip exists publicly but the cloud submission URL is not yet public. | indefinite    | QCI, Anyon, TII, Alice & Bob's *live* mode. |
+| **new-language**    | Modality does not fit gate-model semantics; needs a sibling DSL with its own grammar / types / lowering. | weeks         | Rydberg analog; photonic CV; annealing. |
+| **auto-synthesis**  | Auto-synthesis: the user describes a problem, the system *invents* the circuit. Sits **above** Photon. | months / years | Out of scope (RULE 6). |
 
-The buckets are mutually exclusive. A new chip only ever sits in one.
+The classes are mutually exclusive. A new chip only ever sits in one.
 
 
 ---
 
-## 5. Step 3 — analog Rydberg DSL deep-dive
+## 5. Analog Rydberg DSL deep-dive
 
 **Vendors targeted:** QuEra Aquila, Pasqal Fresnel, Infleqtion (preview).
 **Effort estimate:** 2–3 weeks.
@@ -216,25 +242,26 @@ Pasqal accepts a similar `Pulser` JSON. The mapping is direct:
 
 ---
 
-## 6. Step 4 — opportunistic unlocks
+## 6. Opportunistic gate-model unlocks
 
-These are gate-model targets we *could* slot into Bucket A or B once
-upstream publishes the missing piece. None requires a new DSL.
+These are gate-model targets we *could* slot into yaml-only or
+adapter-only once upstream publishes the missing piece. None
+requires a new DSL.
 
-| Vendor | Device | Bucket | Blocker | What unlocks it |
-|--------|--------|--------|---------|-----------------|
-| D-Wave | "Advantage 2" gate-mode preview | A | Gate-model preview is in private trial; the YAML is a 1-day write. | D-Wave publishes the native gate set + native two-qubit gate. |
-| Microsoft | Majorana 1 | A | Device not user-reachable; gate set is published in research. | Microsoft opens the Azure target. |
-| Diraq | 8-spin prototype | A | Vendor only ships an emulator today. | Diraq publishes the production endpoint. |
-| Origin Quantum | Wukong (72-qubit SC) | B | Public REST exists but auth is China-only. | Vendor-side international access. |
-| Universal Quantum | Bath-cooled trap (preview) | A | No production endpoint yet. | Submission URL public. |
+| Vendor | Device | Class | Blocker | What unlocks it |
+|--------|--------|-------|---------|-----------------|
+| D-Wave | "Advantage 2" gate-mode preview | yaml-only | Gate-model preview is in private trial; the YAML is a 1-day write. | D-Wave publishes the native gate set + native two-qubit gate. |
+| Microsoft | Majorana 1 | yaml-only | Device not user-reachable; gate set is published in research. | Microsoft opens the Azure target. |
+| Diraq | 8-spin prototype | yaml-only | Vendor only ships an emulator today. | Diraq publishes the production endpoint. |
+| Origin Quantum | Wukong (72-qubit SC) | adapter | Public REST exists but auth is China-only. | Vendor-side international access. |
+| Universal Quantum | Bath-cooled trap (preview) | yaml-only | No production endpoint yet. | Submission URL public. |
 
 Cost: ~1 day each, total ≤ 1 week to absorb everything in this row.
 Triggered opportunistically — wait for upstream and ship.
 
 ---
 
-## 7. Step 5 — photonic DSL deep-dive
+## 7. Photonic DSL deep-dive
 
 **Vendors targeted:** Xanadu Borealis / X-series, ORCA PT-1 series,
 PsiQuantum (roadmap).
@@ -307,7 +334,7 @@ rule that rejects an attempt to lift `Sgate(r)` into Spinor.
 
 ---
 
-## 8. Step 6 — annealing DSL deep-dive
+## 8. Annealing DSL deep-dive
 
 **Vendors targeted:** D-Wave Advantage 6.4, Advantage2.
 **Effort estimate:** 2–3 weeks.
@@ -378,7 +405,7 @@ sense. It's a different IR entirely.
 
 ---
 
-## 9. Step 7 — Phase E auto-synthesis
+## 9. Auto-synthesis (out of scope)
 
 **Status:** out of scope per Rule 6. Decade-scale.
 
@@ -390,19 +417,19 @@ a planner / search problem that *uses* a compiler. The right
 architectural picture is:
 
 ```
-problem spec   --->   AUTO-SYNTHESISER (Phase E)   --->   Photon source
-                            |                                  |
-                       chooses target                       calls Phonon → Spinor
+problem spec   --->   AUTO-SYNTHESISER (separate product)   --->   Photon source
+                            |                                          |
+                       chooses target                               calls Phonon -> Spinor
                        chooses ansatz
                        chooses optimiser
 ```
 
 Auto-synthesis sits **above** Photon, not inside it. Photon is the
-spec-language for circuits; Phase E is the spec-language for
-*problems*. They share no grammar.
+spec-language for circuits; an auto-synthesiser is the spec-language
+for *problems*. They share no grammar.
 
-Concrete things Phase E would have to do that no current system does
-end-to-end:
+Concrete things an auto-synthesiser would have to do that no current
+system does end-to-end:
 
 - Map a SAT / TSP / MaxCut / chemistry Hamiltonian to a parametrised
   ansatz (QAOA, VQE, Trotterised UCC).
@@ -411,8 +438,8 @@ end-to-end:
 - Aggregate noisy shots into a confidence-bounded answer.
 
 Each of those is a research summit on its own. The right move is to
-treat Phase E as a **standalone product** built on top of the
-finished compiler stack, not as a Phase D extension.
+treat auto-synthesis as a **standalone product** built on top of the
+finished compiler stack, not as a platform extension.
 
 ---
 
@@ -465,24 +492,24 @@ exact part of the existing stack the family would break.
 ### Topological (Microsoft Majorana)
 
 - This one *is* gate-model. Once Microsoft opens a public target,
-  it slots straight into Bucket A. Listed for completeness.
+  it slots straight into yaml-only. Listed for completeness.
 
 ---
 
 ## 11. Decision matrix
 
-| Step | Action                          | Trigger to start                                                | Effort     | Risk  | Cost-of-delay |
-|------|---------------------------------|-----------------------------------------------------------------|------------|-------|---------------|
-| 1    | 18 gate-model YAMLs             | **DONE** in this commit                                         | ~1 day     | low   | — |
-| 2    | 4 Step-2 vendor adapters        | **DONE** in this commit                                         | ~1 day     | low   | — |
-| 3    | Analog Rydberg DSL              | First customer who asks for Aquila / Fresnel                    | 2–3 weeks  | med   | High — Pasqal + QuEra are closing the gap fast in 2026 |
-| 4    | Opportunistic gate-model unlocks | Vendor publishes endpoint                                       | 1 day each | low   | Medium — Origin / D-Wave gate-mode demand growing |
-| 5    | Photonic CV DSL                 | First customer who asks for Borealis / X-series                 | 3–4 weeks  | high  | Low — small market |
-| 6    | Annealing DSL                   | First operations-research customer with a QUBO workload         | 2–3 weeks  | low   | Medium — D-Wave is mature |
-| 7    | Phase E auto-synthesis          | After Steps 3–6 stabilise and we have one bona-fide ML customer | months     | very high | — |
+| Track | Action                          | Trigger to start                                                | Effort     | Risk  | Cost-of-delay |
+|-------|---------------------------------|-----------------------------------------------------------------|------------|-------|---------------|
+| 1     | 18 gate-model YAMLs             | **DONE**                                                        | ~1 day     | low   | — |
+| 2     | 4 cassette-only vendor adapters | **DONE**                                                        | ~1 day     | low   | — |
+| 3     | Analog Rydberg DSL              | First customer who asks for Aquila / Fresnel                    | 2-3 weeks  | med   | High — Pasqal + QuEra are closing the gap fast in 2026 |
+| 4     | Opportunistic gate-model unlocks | Vendor publishes endpoint                                       | 1 day each | low   | Medium — Origin / D-Wave gate-mode demand growing |
+| 5     | Photonic CV DSL                 | First customer who asks for Borealis / X-series                 | 3-4 weeks  | high  | Low — small market |
+| 6     | Annealing DSL                   | First operations-research customer with a QUBO workload         | 2-3 weeks  | low   | Medium — D-Wave is mature |
+| 7     | Auto-synthesis                  | After tracks 3-6 stabilise and we have one bona-fide ML customer | months    | very high | — |
 
-The honest priorities are: Step 3 (Rydberg) > Step 4 (opportunistic)
-> Step 6 (annealing) > Step 5 (photonic) > Step 7 (Phase E).
+The honest priorities are: analog Rydberg > opportunistic >
+annealing > photonic > auto-synthesis.
 
 ---
 
@@ -492,7 +519,7 @@ The honest priorities are: Step 3 (Rydberg) > Step 4 (opportunistic)
   for analog Rydberg jobs.
 - **BQM** — Binary Quadratic Model. D-Wave's standard problem
   representation.
-- **Bucket A / B / C / D / E** — see Section 4.
+- **Support classes (yaml-only / adapter / vendor-blocked / new-language / auto-synthesis)** — see Section 4.
 - **Cassette** — a recorded provider response, used by tests so
   CI doesn't need real cloud tokens.
 - **CV photonic** — Continuous-variable photonic computing. Modes,

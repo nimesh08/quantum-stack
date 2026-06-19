@@ -14,6 +14,17 @@ by **Nimesh Cheedella**.
 
 ---
 
+## Where to look
+
+| Want to know ... | Read |
+|------------------|------|
+| Where Heisenberg is going | [Vision](https://nimesh08.github.io/quantum-stack/vision/) |
+| What we are building right now | [Current plan](https://nimesh08.github.io/quantum-stack/plan/) |
+| What has shipped so far | [Progress](https://nimesh08.github.io/quantum-stack/progress/) |
+| The source code | [github.com/nimesh08/quantum-stack](https://github.com/nimesh08/quantum-stack) |
+
+---
+
 ## What you get
 
 | Layer | What it is |

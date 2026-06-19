@@ -9,7 +9,32 @@ Author: Nimesh Cheedella.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- New top-level docs pages
+  ([Vision](https://nimesh08.github.io/quantum-stack/vision/),
+  [Plan](https://nimesh08.github.io/quantum-stack/plan/),
+  [Progress](https://nimesh08.github.io/quantum-stack/progress/))
+  and a "Where to look" table near the top of the README so a user
+  immediately sees where Heisenberg is going, what we are building
+  right now, what has shipped, and where the source lives.
+
+### Changed
+
+- User-facing docs no longer use the historical phase-letter or
+  numeric milestone vocabulary. Pages including the FAQ, the seven
+  critical rules, the glossary, the unsupported-chips ledger, and
+  `FUTUREPLAN.md` were rewritten to use the layered names
+  (Spinor / Phonon / Photon / Platform) and named support classes
+  (yaml-only / adapter / vendor-blocked / new-language /
+  auto-synthesis).
+- `FUTUREPLAN.md` gained a plain-English "Vision" section at the
+  top.
+- `internals/progress.md` renamed to `internals/build_journal.md`
+  (with an mkdocs redirect from the old slug).
+- `scripts/check_docs.py` now bans historical milestone vocabulary
+  everywhere except `internals/build_journal.md`,
+  `internals/futureplan.md`, and `changelog.md`.
 
 ## [0.5.0] — 2026-06-19
 

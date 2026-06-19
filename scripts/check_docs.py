@@ -40,12 +40,16 @@ PHASE_TALK = re.compile(
     r"\b(Phase\s+[A-D]\b|M(?:1[0-1]|[1-9])\b)"
 )
 
-# Allow-listed: pages that legitimately discuss phases / milestones
-# (decisions, history, internals, the changelog, faqs).
+# Allow-listed: pages that legitimately discuss phases / milestones.
+# After the phase-talk scrub the live site is clean; the only places
+# the historical "Phase A/B/C/D" / "M1..M11" vocabulary may appear
+# are the contributor-facing build journal, the changelog audit
+# trail, and the FUTUREPLAN-mirror snippet at internals/futureplan.md
+# (which includes FUTUREPLAN.md verbatim from the repo root).
 ALLOWED_PHASE_TALK_PATHS = (
-    "internals/",
+    "internals/build_journal.md",
+    "internals/futureplan.md",
     "changelog.md",
-    "faq.md",
 )
 
 LINK = re.compile(r"\]\((?!https?://|mailto:|#)([^)]+?)\)")

@@ -24,7 +24,7 @@ table.
 > exact missing data column populated, so anyone who *does* have the
 > data can fix it in one PR.
 
-## Compiler-recipe gaps (Bucket A blocked on Phase A code change)
+## Compiler-recipe gaps (blocked on a Spinor decomposer change)
 
 These chips have valid, verified YAMLs in the registry — they pass
 the schema + topology + native-gate-vocabulary checks — but the
@@ -51,7 +51,7 @@ at decomposition time with `emitCX: no recipe for entangler 'cz'`.
 `spinor/passes/Decomposition.cpp` + ~6 unit tests against the
 existing equivalence checker.
 
-## Vendor-blocked (Bucket C)
+## Vendor-blocked (no public submission endpoint)
 
 These chips have YAMLs and adapters, but the production submission
 endpoint is not publicly documented. The adapter ships in cassette
@@ -64,7 +64,7 @@ mode only; live mode raises a clear `RuntimeError`.
 | `tii_falcon` | TII | gate-model SC | no hosted production service | a Qibolab host the user controls | user deploys Qibolab; `QIBOLAB_HOST` gets set |
 | `alicebob_boson_4` | Alice & Bob | cat-qubit | live REST endpoint not public | submission URL + token env var name | Alice & Bob opens their cloud beyond emulator |
 
-## Decommissioned / preview-only (Bucket C variant)
+## Decommissioned / preview-only
 
 | Chip | Vendor | Reason | What this means today |
 |---|---|---|---|

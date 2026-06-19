@@ -122,12 +122,14 @@ plugins:
         futureplan.md: internals/futureplan.md
         chips_unsupported.md: internals/chips_unsupported.md
         glossary.md: internals/glossary.md
+        # Build-journal rename (was internals/progress.md).
+        internals/progress.md: internals/build_journal.md
         # Old top-level pages that moved.
         guide/index.md: operations/index.md
         guide/operations.md: operations/index.md
         guide/platform_guide.md: operations/index.md
         guide/decisions.md: internals/decisions.md
-        guide/progress.md: internals/progress.md
+        guide/progress.md: internals/build_journal.md
         # Old packages tree -> new SDK tree.
         packages/index.md: sdks/index.md
         packages/jobsvc/install.md: operations/install.md
@@ -207,6 +209,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Vision: vision.md
+  - Plan: plan.md
+  - Progress: progress.md
   - Quickstart: quickstart.md
   - Languages:
       - languages/index.md
@@ -274,7 +279,7 @@ nav:
       - "Architecture": internals/architecture.md
       - "Seven critical rules": internals/seven_rules.md
       - "Decisions log": internals/decisions.md
-      - "Build journal": internals/progress.md
+      - "Build journal": internals/build_journal.md
       - "Future plan": internals/futureplan.md
       - "Unsupported chips": internals/chips_unsupported.md
       - "Glossary": internals/glossary.md
