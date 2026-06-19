@@ -20,7 +20,7 @@ for the generator config.
 | `playground/src/languages/{spinor,phonon,photon}.ts` | Monaco language definitions. |
 
 The narrative SDK pages
-([SDKs / TypeScript](../../sdks/typescript/index.md)) are the right
+([SDKs / TypeScript](https://nimesh08.github.io/heisenberg-platform/sdks/typescript/)) are the right
 place to learn what each export does; this section is the
 dictionary.
 

@@ -26,7 +26,7 @@ What you can do today:
 - Read the documentation as a unified site:
   [Languages](languages/index.md),
   [SDKs](sdks/index.md),
-  [Operations](operations/index.md),
+  [Operations](https://nimesh08.github.io/heisenberg-platform/operations/),
   [Internals](internals/index.md), and full
   [auto-generated reference](reference/index.md) per language.
 - Deploy to a real server with three systemd units

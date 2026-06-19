@@ -7,13 +7,20 @@ hide:
 
 <div class="hero" markdown>
 
-# Heisenberg Quantum Stack
+# Heisenberg Quantum Stack — compiler
 
 <p class="lead">
-A four-layer quantum compiler — <strong>Photon · Phonon · Spinor</strong> —
-plus a single-command launcher and a browser playground. Write a quantum
-program once; run it on any of <strong>27 chips</strong>.
+The four-layer quantum compiler engine — <strong>Photon · Phonon ·
+Spinor</strong>. Three input languages, one C++ engine, one
+chip-locked artefact. Packaged for Python and shipped as signed
+binaries.
 </p>
+
+> [!IMPORTANT]
+> **The product layer (FastAPI service, launcher, playground)
+> lives at
+> [github.com/nimesh08/heisenberg-platform](https://github.com/nimesh08/heisenberg-platform).**
+> Platform docs: <https://nimesh08.github.io/heisenberg-platform/>.
 
 [Quickstart :material-arrow-right:](quickstart.md){ .md-button .md-button--primary }
 [Languages :material-arrow-right:](languages/index.md){ .md-button }
@@ -90,7 +97,7 @@ The full quickstart is on the next page.
 
     ---
 
-    Read [Operations](operations/index.md). Single-command laptop
+    Read [Operations](https://nimesh08.github.io/heisenberg-platform/operations/). Single-command laptop
     install, native systemd services for production, optional
     Postgres, calibration scheduling, observability.
 

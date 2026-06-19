@@ -1,25 +1,23 @@
-# mkdocs.yml — Heisenberg Quantum Stack documentation site
+# mkdocs.yml — Heisenberg Quantum Stack documentation site (compiler-only)
 #
 # Pinned versions (re-verified upstream 2026-06-16):
 #   - mkdocs                <2.0
-#   - mkdocs-material       9.7.6 (in maintenance through Nov 2026)
+#   - mkdocs-material       9.7.6
 #   - mkdocstrings[python]  1.0.4
 #   - mkdocstrings-python   2.0.4
 #   - mkdocs-redirects      >=1.2,<2.0
 #   - pymdown-extensions    >=10.7
-#   - typedoc-plugin-markdown 4.12.0 (run separately, output rendered as MD)
-#   - @redocly/cli          2.32.2  (run separately, output is HTML embed)
 #   - doxygen               1.9.x (run separately, output is HTML embed)
 #
-# Built and deployed by .github/workflows/docs.yml on every push to main.
+# This is the COMPILER repo's docs site. The PRODUCT-LAYER docs site
+# lives at https://nimesh08.github.io/heisenberg-platform/.
 #
 # Author: Nimesh Cheedella.
 
-site_name: Heisenberg Quantum Stack
+site_name: Heisenberg Quantum Stack — compiler
 site_description: >
-  Photon · Phonon · Spinor — a four-layer quantum compiler with
-  cost-controlled job execution, three SDKs (Python · C++ · TypeScript)
-  and a single-command launcher.
+  Photon · Phonon · Spinor — the four-layer quantum compiler engine.
+  Three input languages, one C++ engine, one chip-locked artefact.
 site_author: Nimesh Cheedella
 site_url: https://nimesh08.github.io/quantum-stack/
 repo_url: https://github.com/nimesh08/quantum-stack
@@ -82,6 +80,9 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/nimesh08/quantum-stack
+    - icon: fontawesome/solid/server
+      link: https://github.com/nimesh08/heisenberg-platform
+      name: heisenberg-platform (the product layer)
   generator: false
 
 plugins:
@@ -93,10 +94,8 @@ plugins:
       handlers:
         python:
           paths:
-            - ../../platform/jobsvc/src
-            - ../../platform/calibration/src
-            - ../../platform/launcher/src
             - ../../spinor/submit/python
+            - ../../photon/frontends/python
           options:
             docstring_style: google
             show_source: true
@@ -118,49 +117,16 @@ plugins:
             inherited_members: false
   - redirects:
       redirect_maps:
-        # Pages that moved into the new internals/ section.
+        # Pages that moved into internals/.
         futureplan.md: internals/futureplan.md
         chips_unsupported.md: internals/chips_unsupported.md
         glossary.md: internals/glossary.md
-        # Build-journal rename (was internals/progress.md).
+        # Build-journal rename.
         internals/progress.md: internals/build_journal.md
-        # Old top-level pages that moved.
-        guide/index.md: operations/index.md
-        guide/operations.md: operations/index.md
-        guide/platform_guide.md: operations/index.md
-        guide/decisions.md: internals/decisions.md
-        guide/progress.md: internals/build_journal.md
-        # Old packages tree -> new SDK tree.
-        packages/index.md: sdks/index.md
-        packages/jobsvc/install.md: operations/install.md
-        packages/jobsvc/cookbook.md: sdks/python/cookbook.md
-        packages/jobsvc/sdk_examples.md: sdks/python/cookbook.md
-        packages/spinor_submit/install.md: sdks/python/install.md
-        packages/spinor_submit/reference.md: reference/python/spinor_submit.md
-        packages/spinor_submit/credentials.md: operations/credentials.md
-        packages/photon_python/install.md: sdks/python/install.md
-        packages/photon_python/reference.md: reference/python/photon.md
-        packages/playground/install.md: sdks/typescript/install.md
-        # Old install tree.
-        install/cli.md: languages/spinor/install.md
-        install/from_source.md: operations/install.md
-        install/spinorc_cli.md: languages/spinor/install.md
-        install/photonc_cxx.md: languages/photon/install.md
-        install/photon_python.md: sdks/python/install.md
-        install/spinor_submit.md: sdks/python/install.md
-        install/jobsvc.md: operations/install.md
-        install/calibration.md: operations/install.md
-        install/playground.md: sdks/typescript/install.md
-        install/server_systemd.md: operations/native_systemd.md
-        install/docker_compose.md: operations/install.md
-        install/troubleshooting.md: operations/troubleshooting.md
-        # Tutorial -> language tutorials.
-        tutorial/spinor_walkthrough.md: languages/spinor/tutorial.md
-        tutorial/phonon_walkthrough.md: languages/phonon/tutorial.md
-        tutorial/photon_walkthrough.md: languages/photon/tutorial.md
-        tutorial/index.md: languages/index.md
-        tutorial/bell.md: languages/spinor/tutorial.md
-        tutorial/ghz.md: languages/spinor/cookbook/ghz.md
+        # Pages that moved to the platform repo's docs.
+        # mkdocs-redirects only handles internal targets, so we
+        # leave external moves (operations/, sdks/python|ts|rest/) to
+        # 404 -> let the user click the banner to the platform repo.
 
 markdown_extensions:
   - abbr
@@ -242,38 +208,12 @@ nav:
           - "Cookbook": languages/photon/cookbook/index.md
   - SDKs:
       - sdks/index.md
-      - "Python":
-          - sdks/python/index.md
-          - "Install": sdks/python/install.md
-          - "Quickstart": sdks/python/quickstart.md
-          - "Tutorial": sdks/python/tutorial.md
-          - "Cookbook": sdks/python/cookbook.md
       - "C++":
           - sdks/cpp/index.md
           - "Install": sdks/cpp/install.md
           - "Quickstart": sdks/cpp/quickstart.md
           - "Tutorial": sdks/cpp/tutorial.md
           - "Cookbook": sdks/cpp/cookbook.md
-      - "TypeScript":
-          - sdks/typescript/index.md
-          - "Install": sdks/typescript/install.md
-          - "Quickstart": sdks/typescript/quickstart.md
-          - "Tutorial": sdks/typescript/tutorial.md
-          - "Cookbook": sdks/typescript/cookbook.md
-      - "REST":
-          - sdks/rest/index.md
-          - "Authentication": sdks/rest/authentication.md
-          - "Errors": sdks/rest/errors.md
-          - "Pagination": sdks/rest/pagination.md
-  - Operations:
-      - operations/index.md
-      - "Install": operations/install.md
-      - "Native systemd": operations/native_systemd.md
-      - "Postgres": operations/postgres.md
-      - "Calibration refresh": operations/calibration.md
-      - "Provider credentials": operations/credentials.md
-      - "Observability": operations/observability.md
-      - "Troubleshooting": operations/troubleshooting.md
   - Internals:
       - internals/index.md
       - "Architecture": internals/architecture.md
@@ -285,16 +225,12 @@ nav:
       - "Glossary": internals/glossary.md
   - Reference:
       - reference/index.md
-      - "Python": reference/python/index.md
-      - "C++": reference/cpp/index.md
-      - "TypeScript": reference/typescript/index.md
-      - "REST": reference/rest/index.html
+      - "Python (photon + spinor_submit)": reference/python/index.md
+      - "C++ (Doxygen)": reference/cpp/index.md
   - FAQ: faq.md
   - Changelog: changelog.md
   - Authors: authors.md
 
 watch:
-  - ../../platform/jobsvc/src
-  - ../../platform/calibration/src
-  - ../../platform/launcher/src
   - ../../spinor/submit/python/spinor_submit
+  - ../../photon/frontends/python/photon

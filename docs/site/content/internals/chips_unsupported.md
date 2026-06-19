@@ -103,7 +103,7 @@ will tell you if the schema / native gates / topology check pass.
 
 - [FUTUREPLAN.md][future] — for *why* certain modalities cannot fit
   into Photon / Phonon / Spinor and need a sibling DSL.
-- [Credentials guide](../operations/credentials.md) — how to
+- [Credentials guide](https://nimesh08.github.io/heisenberg-platform/operations/credentials/) — how to
   set up live mode for the four Step-2 vendors once their endpoints
   open.
 - [Chip registry source][chips] — every YAML the compiler reads.

@@ -47,4 +47,4 @@ inspect the routed output), use the chip's native gates and check
 ## See also
 
 [W5 portable contract](W5_portable_contract.md), [`target`](../reference/target.md),
-[`ecr`](../reference/ecr.md), [Add a chip](../../../sdks/python/cookbook.md)
+[`ecr`](../reference/ecr.md), [Add a chip](https://nimesh08.github.io/heisenberg-platform/sdks/python/cookbook/)

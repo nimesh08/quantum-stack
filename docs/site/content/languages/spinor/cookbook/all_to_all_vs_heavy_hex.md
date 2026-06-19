@@ -78,5 +78,5 @@ the same statistical confidence.
 ## Where to look
 
 - Reference: [`swap`](../reference/swap.md)
-- Tutorial: [Add a chip](../../../sdks/python/cookbook.md)
+- Tutorial: [Add a chip](https://nimesh08.github.io/heisenberg-platform/sdks/python/cookbook/)
 - Cookbook: [routing_via_swap](routing_via_swap.md)

@@ -1,13 +1,14 @@
 # Build the documentation site and publish to GitHub Pages.
 #
+# This is the COMPILER repo's docs site. The PRODUCT-LAYER docs site
+# lives at github.com/nimesh08/heisenberg-platform.
+#
 # Pinned versions (re-verified upstream 2026-06-16):
 #   - mkdocs                  <2.0
 #   - mkdocs-material         9.7.6
 #   - mkdocstrings[python]    1.0.4
 #   - mkdocstrings-python     2.0.4
 #   - mkdocs-redirects        >=1.2,<2.0
-#   - @redocly/cli            2.32.2
-#   - typedoc-plugin-markdown 4.12.0
 #   - doxygen                 1.9.x  (apt-installed)
 #   - actions/deploy-pages    @v4
 #
@@ -41,27 +42,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
+        with: { python-version: "3.13" }
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install Doxygen + Graphviz (for the C++ reference)
+      - name: Install Doxygen + Graphviz
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends doxygen graphviz
 
       - name: Install Python packages (for mkdocstrings autodoc)
-        working-directory: quantum-stack
         run: |
           python -m pip install --upgrade pip
-          pip install -e ./platform/jobsvc
-          pip install -e ./platform/calibration
           pip install -e ./spinor/submit/python
-          pip install -e ./platform/launcher
-          pip install 'bcrypt>=3.2,<4.1'
+          # photon facade is in photon/frontends/python; install as
+          # editable so mkdocstrings can see it. The C++ engine extension
+          # is not built here (docs do not import _engine).
+          pip install -e ./photon/frontends/python || true
 
       - name: Install docs build deps (pinned)
         run: |
@@ -76,7 +71,6 @@ jobs:
             'mkdocs-redirects>=1.2,<2.0'
 
       - name: Build C++ reference (Doxygen)
-        working-directory: quantum-stack
         run: |
           mkdir -p docs/site/content/assets/cpp
           if [ -f docs/cpp/Doxyfile ]; then
@@ -87,63 +81,15 @@ jobs:
               > docs/site/content/assets/cpp/index.html
           fi
 
-      - name: Generate OpenAPI snapshot from the FastAPI app
-        working-directory: quantum-stack
-        run: |
-          mkdir -p docs/site/content/reference/rest
-          python - <<'PY' > docs/site/content/openapi.json
-          from jobsvc.main import app
-          import json, sys
-          json.dump(app.openapi(), sys.stdout, indent=2)
-          PY
-          echo "openapi.json size: $(wc -c < docs/site/content/openapi.json) bytes"
-
-      - name: Render REST reference (Redocly)
-        working-directory: quantum-stack
-        run: |
-          npx -y @redocly/cli@2.32.2 build-docs \
-            docs/site/content/openapi.json \
-            -o docs/site/content/reference/rest/index.html \
-            || (echo "redoc build failed; emitting fallback" && \
-                cp docs/site/content/openapi.json \
-                   docs/site/content/reference/rest/openapi.json && \
-                cat > docs/site/content/reference/rest/index.html <<'HTML'
-          <!doctype html><html><body>
-          <p>Redoc render failed; <a href="openapi.json">openapi.json</a> is available.</p>
-          </body></html>
-          HTML
-                )
-
-      - name: Render TypeScript reference (TypeDoc)
-        working-directory: quantum-stack/platform/playground
-        run: |
-          npm ci || npm install
-          npx -y typedoc \
-            --plugin typedoc-plugin-markdown@4.12.0 \
-            --out ../../docs/site/content/reference/typescript \
-            --readme none \
-            --hideBreadcrumbs true \
-            --hidePageHeader true \
-            src/api/jobs.ts \
-            src/hooks/useJob.ts \
-            src/hooks/useAuth.ts \
-            src/components/Editor.tsx \
-            src/components/Histogram.tsx \
-            src/components/TargetPicker.tsx \
-            src/languages/spinor.ts \
-            src/languages/phonon.ts \
-            src/languages/photon.ts \
-            || echo "typedoc render failed; reference/typescript/index.md remains the fallback"
-
       - name: Build site
-        working-directory: quantum-stack/docs/site
+        working-directory: docs/site
         run: mkdocs build
 
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: quantum-stack/docs/site/build/site
+          path: docs/site/build/site
 
   deploy:
     if: github.ref == 'refs/heads/main'

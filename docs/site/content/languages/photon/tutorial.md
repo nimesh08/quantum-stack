@@ -116,7 +116,7 @@ single Spinor pipeline to the chip.
 ## Where to next
 
 - The [Cookbook](cookbook/index.md) — Grover, QFT, teleport, VQE.
-- The [Python SDK](../../sdks/python/index.md) — how `compile()`
+- The [Python SDK](https://nimesh08.github.io/heisenberg-platform/sdks/python/) — how `compile()`
   and `run()` are wired.
 - Move down: [Phonon](../phonon/index.md) is what `@photon.kernel`
   produces, and what the optimizer rewrites.

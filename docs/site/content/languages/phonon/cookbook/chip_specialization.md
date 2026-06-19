@@ -69,4 +69,4 @@ why the cost-control seam exists.
 
 - Reference: [`def`](../reference/def.md)
 - Cookbook: [all_to_all_vs_heavy_hex](../../spinor/cookbook/all_to_all_vs_heavy_hex.md)
-- Tutorial: [Add a chip](../../../sdks/python/cookbook.md)
+- Tutorial: [Add a chip](https://nimesh08.github.io/heisenberg-platform/sdks/python/cookbook/)

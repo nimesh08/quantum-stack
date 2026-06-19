@@ -68,4 +68,4 @@ target generic  ; <- too late
 - [Grammar](../grammar.md) — `target_decl` rule
 - [W5 portable contract](../rules/W5_portable_contract.md)
 - [W6 hardware contract](../rules/W6_hardware_contract.md)
-- [Add a chip](../../../sdks/python/cookbook.md)
+- [Add a chip](https://nimesh08.github.io/heisenberg-platform/sdks/python/cookbook/)

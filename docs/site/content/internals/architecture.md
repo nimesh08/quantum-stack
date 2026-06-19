@@ -62,7 +62,7 @@ to the `spinorc` binary for things the binding does not yet expose.
 In `heisenberg run` (the default `--dev` mode), steps 5-8 happen on
 asyncio tasks **inside the FastAPI process**. In `--production`, the
 worker and the calibration scheduler are separate child processes
-(see [Operations / Native systemd](../operations/native_systemd.md)).
+(see [Operations / Native systemd](https://nimesh08.github.io/heisenberg-platform/operations/native_systemd/)).
 
 ## The compiler engine in detail
 
@@ -108,7 +108,7 @@ quantum-specific seams:
    possible without a round-trip to the provider.
 2. **Nightly calibration refresh** — APScheduler hits each provider,
    atomically replaces the per-chip JSON the compiler reads. See
-   [Operations / Calibration refresh](../operations/calibration.md).
+   [Operations / Calibration refresh](https://nimesh08.github.io/heisenberg-platform/operations/calibration/).
 
 Everything else (auth, audit log, rate limits, queue, observability)
 is conventional FastAPI + SQLAlchemy + Prometheus.

@@ -119,7 +119,7 @@ AWS / Azure backends once you have credentials.
 - Build something on top of the API: read the
   [SDKs](sdks/index.md) — Python, C++, TypeScript, REST.
 - Move to a real server:
-  [Operations / Native systemd](operations/native_systemd.md).
+  [Operations / Native systemd](https://nimesh08.github.io/heisenberg-platform/operations/native_systemd/).
 - Stop and clean up: `heisenberg stop`. Your data directory at
   `~/.local/share/heisenberg/` survives across runs; delete it to
   reset everything.

@@ -56,9 +56,9 @@ or the `photon` Python package directly. See
 **Q: Native systemd or `heisenberg run`?**
 
 For production: native **systemd** units, see
-[Operations / Native systemd](operations/native_systemd.md).
+[Operations / Native systemd](https://nimesh08.github.io/heisenberg-platform/operations/native_systemd/).
 For laptops: **`heisenberg run`** is the single command. Docker is gone.
-See [Operations / Install](operations/install.md).
+See [Operations / Install](https://nimesh08.github.io/heisenberg-platform/operations/install/).
 
 **Q: Why public repo?**
 

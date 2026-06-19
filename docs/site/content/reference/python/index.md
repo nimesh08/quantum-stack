@@ -7,7 +7,7 @@ Auto-generated from Google-style docstrings via
 
 The `mkdocstrings` plugin renders one page per top-level package.
 The narrative SDK pages
-([SDKs / Python](../../sdks/python/index.md)) are the right place
+([SDKs / Python](https://nimesh08.github.io/heisenberg-platform/sdks/python/)) are the right place
 to learn what each package does; this section is the dictionary you
 look things up in.
 

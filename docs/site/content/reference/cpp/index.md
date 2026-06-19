@@ -13,7 +13,7 @@ for the generator config.
   loading="lazy"></iframe>
 
 If the iframe is empty, the Doxygen build has not run yet for this
-revision; see [Operations / Troubleshooting](../../operations/troubleshooting.md).
+revision; see [Operations / Troubleshooting](https://nimesh08.github.io/heisenberg-platform/operations/troubleshooting/).
 
 ## Where the headers live
 
