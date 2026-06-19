@@ -175,7 +175,7 @@ jobs:
           mkdir -p release
           find artifacts -type f -print0 | xargs -0 -I{} cp {} release/
           ls release | head
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release/*
           generate_release_notes: true
