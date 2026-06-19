@@ -1,5 +1,0 @@
-# Built SPA artefacts (populated by `heisenberg playground build`).
-# Keep README.md and .gitignore in source control; ignore everything else.
-*
-!.gitignore
-!README.md

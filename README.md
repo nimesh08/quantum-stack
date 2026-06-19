@@ -1,13 +1,20 @@
-# Heisenberg Quantum Stack
+# Heisenberg Quantum Stack — compiler
 
 > A four-layer quantum compiler — **Photon · Phonon · Spinor** —
-> plus a single-command launcher and a browser playground. Write a
-> quantum program once; run it on any of **27 chips**.
+> packaged for Python and shipped as signed binaries. Write a
+> quantum program once; compile it for any of 27 chips.
 
 [![docs](https://img.shields.io/badge/docs-nimesh08.github.io%2Fquantum--stack-4f46e5?style=flat-square)](https://nimesh08.github.io/quantum-stack/)
-[![ci](https://github.com/nimesh08/quantum-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/ci.yml)
+[![release](https://github.com/nimesh08/quantum-stack/actions/workflows/release.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/release.yml)
 [![docs-ci](https://github.com/nimesh08/quantum-stack/actions/workflows/docs.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/docs.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+
+> [!IMPORTANT]
+> **This repo is the compiler.** The product layer (a FastAPI
+> service, the calibration scheduler, the React + Monaco playground,
+> the `heisenberg run` launcher) lives at
+> [github.com/nimesh08/heisenberg-platform](https://github.com/nimesh08/heisenberg-platform)
+> and consumes this repo's PyPI wheels.
 
 Heisenberg, Spinor, Phonon and Photon were designed and implemented
 by **Nimesh Cheedella**.
@@ -17,79 +24,102 @@ by **Nimesh Cheedella**.
 ## Where to look
 
 | Want to know ... | Read |
-|------------------|------|
+|---|---|
 | Where Heisenberg is going | [Vision](https://nimesh08.github.io/quantum-stack/vision/) |
 | What we are building right now | [Current plan](https://nimesh08.github.io/quantum-stack/plan/) |
 | What has shipped so far | [Progress](https://nimesh08.github.io/quantum-stack/progress/) |
-| The source code | [github.com/nimesh08/quantum-stack](https://github.com/nimesh08/quantum-stack) |
+| The product layer (FastAPI / launcher / playground) | [github.com/nimesh08/heisenberg-platform](https://github.com/nimesh08/heisenberg-platform) |
 
 ---
 
-## What you get
+## What this repo ships
 
-| Layer | What it is |
-|-------|------------|
-| **Photon** | Object-oriented user-facing language. Three frontends: `.pho` source, `@photon.kernel` Python decorator, `[[photon::kernel]]` C++ attribute. All three converge on the same C++ engine. |
-| **Phonon** | Structured IR with linear types (no-cloning enforced at compile time) and the optimizer pipeline (cancellation, rotation merging, ZX, scheduling). |
-| **Spinor** | Chip-locked assembly. Placement, SABRE routing, KAK + Euler-ZYZ decomposition, OpenQASM 3 / QIR / Quil emit. |
-| **Provider** | Verbatim submission to IBM, AWS Braket, Azure Quantum, plus four cassette-only adapters for QCI, Anyon, TII, and Alice and Bob. |
-| **Platform** | `heisenberg run` launcher, FastAPI jobsvc, queue worker, calibration scheduler, React 19.2 + Monaco playground. |
+| Artefact | What it is |
+|---|---|
+| **`heisenberg-photon`** (PyPI wheel) | The compiler engine + Python facade. Bundles `photon._engine`, the chip registry, and the `spinorc` + `photonc` CLI binaries (which land on `$PATH` after `pip install`). |
+| **`heisenberg-spinor-submit`** (PyPI wheel) | Provider adapters: IBM, AWS Braket, Azure Quantum, plus four cassette-only adapters. Verbatim submission only (RULE 5). |
+| Signed CLI binaries on GitHub Releases | `spinorc`, `phononc`, `photonc`, `photonc-cxx` for linux-x86_64, linux-arm64, darwin-arm64. Cosign keyless + syft SBOM. |
+| C++ libraries (`cmake --install`) | `libspinor`, `libphonon`, `libphoton` + headers. Use when embedding the engine in your own C++ app. |
 
-```mermaid
-flowchart TB
-  Photon --> Phonon --> Spinor --> Provider
-  Platform -.- Photon
-  Platform -.- Phonon
-  Platform -.- Spinor
-```
+The full contract — pin policy, ABI promise, distribution channels —
+is in [INTEGRATION.md](INTEGRATION.md).
 
 ## Try it in 30 seconds
 
 ```bash
-pip install heisenberg
-heisenberg init      # creates ~/.local/share/heisenberg/, runs migrations
-heisenberg seed      # creates admin@local with default API key
-heisenberg run       # starts everything; opens http://127.0.0.1:8080/
+pip install heisenberg-photon
 ```
 
-Click **Run** in the playground. Within a second you see a
-`00 / 11` histogram — the Bell pair, compiled through every layer,
-submitted in cassette mode, returned to the editor.
+Write a Bell pair in Spinor:
+
+```spinor
+target generic
+qubit q[2]
+bit c[2]
+h q[0]
+cx q[0], q[1]
+c = measure q
+```
+
+Compile it for IBM Heron r2:
+
+```bash
+spinorc compile -t ibm_heron_r2 bell.spn
+```
+
+Or write the same program in Photon (the OO language) from a Python
+script:
+
+```python
+from photon import kernel, compile_phonon
+
+@kernel
+def bell() -> bit[2]:
+    q = QReg(2)
+    q.h(0)
+    q.cx(0, 1)
+    return q.measure()
+```
 
 The full quickstart:
 <https://nimesh08.github.io/quantum-stack/quickstart/>.
 
-## Three SDKs, one engine
+## Architecture
 
-| Pick ... | When ... | Quickstart |
-|----------|----------|------------|
-| **Python** | data-science / ML code, fastest path to histogram | [`sdks/python/quickstart`](https://nimesh08.github.io/quantum-stack/sdks/python/quickstart/) |
-| **C++** | embed Heisenberg inside a high-performance app | [`sdks/cpp/quickstart`](https://nimesh08.github.io/quantum-stack/sdks/cpp/quickstart/) |
-| **TypeScript** | build your own UI on top of `jobsvc` | [`sdks/typescript/quickstart`](https://nimesh08.github.io/quantum-stack/sdks/typescript/quickstart/) |
-| **REST** | drive Heisenberg from anything that speaks HTTP | [`sdks/rest`](https://nimesh08.github.io/quantum-stack/sdks/rest/) |
-
-## Production install (systemd)
-
-```bash
-# Create the service user, install heisenberg into a dedicated venv,
-# drop the chip registry, configure /etc/heisenberg/heisenberg.env,
-# and enable the three units.
-sudo useradd --system --home /var/lib/heisenberg \
-             --shell /usr/sbin/nologin heisenberg
-sudo install -d -o heisenberg -g heisenberg /opt/heisenberg /var/lib/heisenberg /etc/heisenberg
-sudo -u heisenberg python3 -m venv /opt/heisenberg/venv
-sudo -u heisenberg /opt/heisenberg/venv/bin/pip install heisenberg
-
-# Copy the systemd units and config example.
-sudo install -m 644 platform/systemd/*.service /etc/systemd/system/
-sudo install -m 640 platform/systemd/heisenberg.env.example /etc/heisenberg/heisenberg.env
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now heisenberg-jobsvc heisenberg-worker heisenberg-calibration
+```mermaid
+flowchart TB
+  inputs[".spn / .pho / @photon.kernel / [[photon::kernel]] C++"]
+  inputs --> photon["Photon front-end\n  parses + lowers to Phonon"]
+  photon --> phonon["Phonon\n  - linear types (no-cloning)\n  - optimizer (cancel / merge / ZX / schedule)"]
+  phonon --> spinor["Spinor\n  - placement\n  - SABRE routing\n  - KAK + Euler-ZYZ decomposition\n  - cleanup\n  - emit QASM3 / QIR / Quil"]
+  spinor --> qasm["chip-locked OpenQASM 3 / QIR / Quil text"]
+  qasm --> submit["spinor_submit\n  IBM / AWS Braket / Azure / 4 cassette-only"]
+  submit --> hardware["Real chip silicon"]
 ```
 
-Full server runbook:
-<https://nimesh08.github.io/quantum-stack/operations/native_systemd/>.
+Three input languages, one C++ engine, one chip-locked artefact, one
+verbatim-mode adapter layer. Every reader who lands on this repo
+should be able to follow that arrow.
+
+For deeper explanation:
+[Architecture](https://nimesh08.github.io/quantum-stack/internals/architecture/),
+the [seven critical rules](https://nimesh08.github.io/quantum-stack/internals/seven_rules/),
+the [decisions log](https://nimesh08.github.io/quantum-stack/internals/decisions/).
+
+## Build from source
+
+```bash
+git clone https://github.com/nimesh08/quantum-stack.git
+cd quantum-stack
+cmake -B build -GNinja \
+  -DLLVM_DIR=$(llvm-config-22 --cmakedir) \
+  -DMLIR_DIR=$(llvm-config-22 --cmakedir)/../mlir
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Pinned versions live in [`cmake/Versions.cmake`](cmake/Versions.cmake)
+(LLVM/MLIR 22.1.8, Eigen 5.0.1, nanobind 2.12.0, C++20).
 
 ## Repository layout
 
@@ -100,12 +130,7 @@ quantum-stack/
 ├── spinor/                 # chip-locking compiler (C++)
 ├── phonon/                 # IR + optimizer (C++)
 ├── photon/                 # OO front-end + nanobind (C++/Python)
-├── platform/               # jobsvc · worker · calibration · playground · launcher
-│   ├── jobsvc/
-│   ├── calibration/
-│   ├── playground/
-│   ├── launcher/
-│   └── systemd/
+│   └── bindings/python/    # heisenberg-photon wheel build (scikit-build-core)
 ├── docs/
 │   ├── site/               # MkDocs Material — published to GitHub Pages
 │   └── archive/            # historical build journals (verbatim)
@@ -115,44 +140,23 @@ quantum-stack/
 
 ## The seven critical rules
 
-> 1. **Build bottom-up.** Spinor → Phonon → Photon → Platform.
+> 1. **Build bottom-up.** Spinor → Phonon → Photon.
 > 2. **Optimization lives in Phonon, never in Spinor.**
 > 3. **One C++ engine, one source of truth.**
 > 4. **Re-verify and pin every version before coding.**
 > 5. **Submit to providers in verbatim / pass-through mode only.**
-> 6. **Phase E (auto-synthesis) is out of scope.**
+> 6. **Auto-synthesis is out of scope.**
 > 7. **Photon, Phonon, Spinor are working names; trademark search before public use.**
 
-The full rationale lives at
+Full rationale at
 <https://nimesh08.github.io/quantum-stack/internals/seven_rules/>.
-
-## Pinned versions (re-verified 2026-06-16)
-
-| Component | Pin |
-|---|---|
-| LLVM / MLIR | 22.1.8 |
-| C++ | C++20 |
-| Eigen | 5.0.1 |
-| nanobind | 2.12.0 |
-| FastAPI | 0.137.1 |
-| PostgreSQL (optional) | 17.10 |
-| React | 19.2.7 |
-| `@monaco-editor/react` | ^4.7.0 |
-| MkDocs Material | 9.7.6 |
-
-Authoritative pins live in
-[`cmake/Versions.cmake`](cmake/Versions.cmake),
-[`platform/jobsvc/pyproject.toml`](platform/jobsvc/pyproject.toml),
-and
-[`platform/playground/package.json`](platform/playground/package.json).
 
 ## Documentation
 
 <https://nimesh08.github.io/quantum-stack/> — landing page,
-quickstart, three-language SDKs, three-language tutorials, full
-REST reference (Redoc), full Python reference (mkdocstrings), full
-C++ reference (Doxygen), full TypeScript reference (TypeDoc),
-operations runbook, internals.
+quickstart, three Languages refs, three SDKs (Python via
+mkdocstrings, C++ via Doxygen, REST is in the platform repo's docs),
+internals, future plan, vision/plan/progress.
 
 ## Contributing
 
