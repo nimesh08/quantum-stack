@@ -32,6 +32,7 @@ ALLOW_PATHS=(
   "docs/site/content/sdks/python/cookbook.md"
   "docs/site/content/sdks/python/tutorial.md"
   "docs/site/content/internals/architecture.md"
+  "docs/site/content/plan.md"
   "scripts/check_no_cursor.sh"
   ".github/workflows/no-cursor.yml"
   ".github/workflows/docs-lint.yml"
