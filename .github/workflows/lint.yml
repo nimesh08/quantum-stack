@@ -29,7 +29,7 @@ jobs:
     name: python (ruff + mypy)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.13" }
       - name: Install ruff + mypy
@@ -58,7 +58,7 @@ jobs:
     name: typescript (eslint + tsc)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - name: Install
@@ -75,7 +75,7 @@ jobs:
     name: c++ (clang-format)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install clang-format
         run: |
           sudo apt-get update -y

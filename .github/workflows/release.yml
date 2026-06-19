@@ -41,7 +41,7 @@ jobs:
     name: build python wheels
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.13" }
       - name: Install build deps
@@ -78,7 +78,7 @@ jobs:
     name: build @heisenberg/sdk
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
       - name: Install + build
@@ -108,7 +108,7 @@ jobs:
           - os: macos-14
             target: darwin-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install LLVM 22.1.x and toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -232,7 +232,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
