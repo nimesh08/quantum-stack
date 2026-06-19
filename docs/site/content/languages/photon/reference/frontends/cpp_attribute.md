@@ -62,4 +62,4 @@ configure time. Both produce the same `photon::lang::Module`.
 ## See also
 
 [`pho_file`](pho_file.md), [`@photon.kernel`](photon_kernel.md),
-[Install: photonc-cxx](../../../../install/photonc_cxx.md)
+[Install: photonc-cxx](../../../../languages/photon/install.md)

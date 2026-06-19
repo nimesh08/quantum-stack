@@ -32,12 +32,15 @@ class Base(DeclarativeBase):
 @lru_cache(maxsize=8)
 def get_engine(url: str | None = None, *, echo: bool = False) -> AsyncEngine:
     settings = get_settings()
-    return create_async_engine(
-        url or settings.database_url,
-        echo=echo or settings.sql_echo,
-        pool_pre_ping=True,
-        future=True,
-    )
+    target_url = url or settings.database_url
+    is_sqlite = target_url.startswith("sqlite")
+    kwargs: dict[str, Any] = {
+        "echo": echo or settings.sql_echo,
+        "future": True,
+    }
+    if not is_sqlite:
+        kwargs["pool_pre_ping"] = True
+    return create_async_engine(target_url, **kwargs)
 
 
 def get_sessionmaker(

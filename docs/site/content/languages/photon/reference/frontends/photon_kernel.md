@@ -45,7 +45,7 @@ bell.compiled.estimate()             # ResourceEstimate
 bell.compiled.dump_spinor()          # Spinor IR text
 bell.compiled.error                  # diagnostic if ok=False
 bell.run(shots=1000, target="ibm_heron_r2")
-                                     # submit through the Phase A adapters
+                                     # submit through the spinor_submit adapters
 ```
 
 ## Source
@@ -56,4 +56,4 @@ bell.run(shots=1000, target="ibm_heron_r2")
 ## See also
 
 [`pho_file`](pho_file.md), [`cpp_attribute`](cpp_attribute.md),
-[Install: photon Python](../../../../install/photon_python.md)
+[Install: photon Python](../../../../languages/photon/install.md)

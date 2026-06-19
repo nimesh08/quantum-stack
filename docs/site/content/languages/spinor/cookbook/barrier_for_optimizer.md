@@ -49,4 +49,4 @@ Zero — `barrier` is not a gate.
 ## Where to look
 
 - Reference: [`barrier`](../reference/barrier.md)
-- Phonon optimizer overview: [Operations guide](../../../guide/operations.md)
+- Phonon optimizer overview: [Operations guide](../../../operations/index.md)

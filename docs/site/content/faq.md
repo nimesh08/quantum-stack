@@ -40,7 +40,9 @@ so optimizations benefit every target automatically.
 **Q: Can I add a new chip?**
 
 Yes — by writing a single YAML under `spinor/registry/chips/<id>.yaml`.
-No compiler change. See [Add a chip in 30 minutes](tutorial/add_a_chip.md).
+No compiler change. See
+[`spinor/registry/chips/`](https://github.com/nimesh08/quantum-stack/tree/main/spinor/registry/chips)
+for examples.
 
 ## Platform
 
@@ -51,11 +53,12 @@ browser playground. For "compile and look at output" use `spinorc`
 or the `photon` Python package directly. See
 [the three scenarios](#).
 
-**Q: Docker or systemd?**
+**Q: Native systemd or `heisenberg run`?**
 
-For production: **systemd**, see [Server runbook](install/server_systemd.md).
-For laptop dev: **Docker compose**, see [Docker compose](install/docker_compose.md).
-Both ship in the repo; Docker is demoted to "developer convenience".
+For production: native **systemd** units, see
+[Operations / Native systemd](operations/native_systemd.md).
+For laptops: **`heisenberg run`** is the single command. Docker is gone.
+See [Operations / Install](operations/install.md).
 
 **Q: Why public repo?**
 
@@ -85,7 +88,7 @@ under `platform/calibration/src/calibration/providers/psicorp.py`.
 **Q: How is dollar cost computed?**
 
 `shots × chip.pricing.per_shot_usd`, computed by
-[`jobsvc.cost.dollar_cost`](api/python/jobsvc/cost.md#jobsvc.cost.dollar_cost).
+[`jobsvc.cost.dollar_cost`](reference/python/index.md#jobsvccost).
 Compared against `Budget.daily_usd - recent_spend_today` and the
 monthly window before any job is queued.
 
@@ -98,8 +101,9 @@ jobs do not count — they never spent anything.
 
 **Q: When does calibration refresh?**
 
-02:00 UTC every night, by default. Override the cron in
-`/etc/quantum-stack/jobsvc.env` or via `calibration --cron-hour H --cron-minute M`.
+02:00 UTC every night, by default. Override via
+`/etc/heisenberg/heisenberg.env` or
+`calibration --cron-hour H --cron-minute M`.
 
 **Q: What if a provider call fails?**
 
@@ -129,5 +133,5 @@ chip (e.g. `generic` for free local sim), or raise the budget via
 ## Where to ask
 
 - File a GitHub issue: <https://github.com/nimesh08/quantum-stack/issues>
-- Read the [Glossary](glossary.md) for terms
-- Browse the [build journal](guide/progress.md) to see what changed when
+- Read the [Glossary](internals/glossary.md) for terms
+- Browse the [build journal](internals/progress.md) to see what changed when

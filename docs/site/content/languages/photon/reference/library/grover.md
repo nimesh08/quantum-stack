@@ -54,4 +54,4 @@ For a single needle in N=2^n basis states, the optimal round count is
 
 ## See also
 
-[`Oracle` type](../types.md#oracle), [Cookbook: grover_with_oracle](../../cookbook/grover_with_oracle.md)
+[`Oracle` type](../../types.md#oracle), [Cookbook: grover_with_oracle](../../cookbook/grover_with_oracle.md)

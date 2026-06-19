@@ -1,19 +1,30 @@
 # quantum-stack — top-level build
 #
-# One CMake project. Compiles the C++ engine (Spinor + Phonon + Photon core)
-# against one pinned LLVM/MLIR. Platform services (FastAPI, React) live in
-# platform/ but are not built by this CMake project.
+# Heisenberg Quantum Stack: Photon · Phonon · Spinor — a four-layer
+# quantum compiler. One CMake project. Compiles the C++ engine
+# (Spinor + Phonon + Photon core) against one pinned LLVM/MLIR.
+# Platform services (FastAPI, React) live in platform/ but are not
+# built by this CMake project.
 #
-# RULE 4 (re-verify and pin): all third-party versions are pinned in
-# cmake/Versions.cmake. Update there only after re-verifying upstream.
+# RULE 4 (re-verify and pin): all third-party versions are pinned
+# in cmake/Versions.cmake. Update there only after re-verifying
+# upstream.
+#
+# Author: Nimesh Cheedella <chnimesh0808@gmail.com>
 
 cmake_minimum_required(VERSION 3.28)
 
 project(quantum_stack
-  VERSION       0.0.0
-  DESCRIPTION   "Photon · Phonon · Spinor quantum compiler stack"
+  VERSION       0.5.0
+  DESCRIPTION   "Heisenberg Quantum Stack — Photon · Phonon · Spinor compiler"
+  HOMEPAGE_URL  "https://nimesh08.github.io/quantum-stack/"
   LANGUAGES     C CXX
 )
+
+# Author + license metadata (read by `spinorc --version` and the
+# Doxygen build).
+set(QSTACK_AUTHOR  "Nimesh Cheedella")
+set(QSTACK_LICENSE "Apache-2.0")
 
 # ----- pinned versions (single source of truth) ------------------------------
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Versions.cmake)

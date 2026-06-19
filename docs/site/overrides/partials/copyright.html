@@ -1,0 +1,18 @@
+{#-
+  Override Material's default copyright partial. Sets the byline that
+  appears at the bottom of every page; defined in mkdocs.yml as
+  `copyright:` but Material renders it via this partial.
+
+  Author: Nimesh Cheedella.
+-#}
+<div class="md-copyright">
+  {% if config.copyright %}
+    <div class="md-copyright__highlight">
+      {{ config.copyright }}
+    </div>
+  {% endif %}
+  <div>
+    Heisenberg, Spinor, Phonon and Photon were designed and
+    implemented by <strong>Nimesh Cheedella</strong>.
+  </div>
+</div>

@@ -1,10 +1,25 @@
 [project]
 name = "spinor-submit"
-version = "0.0.1"
-description = "Provider submission adapters for the Spinor quantum compiler."
+description = "Heisenberg Quantum Stack — provider submission adapters (verbatim mode)"
 readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "MIT" }
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Nimesh Cheedella", email = "chnimesh0808@gmail.com" }]
+keywords = ["quantum", "spinor", "ibm", "braket", "azure", "ionq", "quantinuum", "heisenberg"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dynamic = ["version"]
+
 dependencies = []
 
 [project.optional-dependencies]
@@ -13,12 +28,21 @@ aws = ["amazon-braket-sdk>=1.85"]
 azure = ["azure-quantum>=2.0"]
 test = ["pytest>=9.0"]
 
+[project.urls]
+Homepage = "https://nimesh08.github.io/quantum-stack/"
+Repository = "https://github.com/nimesh08/quantum-stack"
+Documentation = "https://nimesh08.github.io/quantum-stack/"
+Issues = "https://github.com/nimesh08/quantum-stack/issues"
+
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["spinor_submit*"]
+
+[tool.setuptools.dynamic]
+version = { file = ["../../../VERSION"] }
 
 [tool.setuptools.package-data]
 spinor_submit = ["cassettes/*/*.json"]

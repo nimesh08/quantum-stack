@@ -1,12 +1,13 @@
 [project]
 name = "heisenberg-docs"
-version = "0.1.0"
+version = "0.5.0"
 description = "Build dependencies for the Heisenberg quantum-stack docs site"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
+authors = [{ name = "Nimesh Cheedella", email = "chnimesh0808@gmail.com" }]
 
-# Pinned upstream 2026-06-16. See ../../docs/build/phaseD_decisions.md D7
-# for the maintenance-mode notice on mkdocs-material 9.7.x.
+# Pinned upstream 2026-06-16. mkdocs-material 9.7.x is in maintenance
+# through Nov 2026 (Material upstream's published timeline).
 dependencies = [
   "mkdocs>=1.6,<2.0",
   "mkdocs-material==9.7.6",
@@ -15,6 +16,7 @@ dependencies = [
   "pymdown-extensions>=10.7,<11",
   "mkdocs-section-index>=0.3.9",
   "mkdocs-glightbox>=0.4.0",
+  "mkdocs-redirects>=1.2,<2.0",
 ]
 
 [build-system]

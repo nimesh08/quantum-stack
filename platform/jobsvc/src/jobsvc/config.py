@@ -26,10 +26,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Database. asyncpg URL.
+    # Database. asyncpg or aiosqlite URL. Default is SQLite in the
+    # heisenberg launcher's data directory; production deployments
+    # override with `JOBSVC_DATABASE_URL=postgresql+asyncpg://...`.
     database_url: str = Field(
-        default="postgresql+asyncpg://jobsvc:jobsvc@localhost:5432/jobsvc",
-        description="Async SQLAlchemy URL for Postgres.",
+        default="sqlite+aiosqlite:///jobsvc.db",
+        description="Async SQLAlchemy URL (Postgres or SQLite).",
     )
 
     # SQL echo (debug only).

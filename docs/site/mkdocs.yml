@@ -2,24 +2,32 @@
 #
 # Pinned versions (re-verified upstream 2026-06-16):
 #   - mkdocs                <2.0
-#   - mkdocs-material       9.7.6 (in maintenance mode through Nov 2026; D7)
+#   - mkdocs-material       9.7.6 (in maintenance through Nov 2026)
 #   - mkdocstrings[python]  1.0.4
 #   - mkdocstrings-python   2.0.4
+#   - mkdocs-redirects      >=1.2,<2.0
 #   - pymdown-extensions    >=10.7
 #   - typedoc-plugin-markdown 4.12.0 (run separately, output rendered as MD)
 #   - @redocly/cli          2.32.2  (run separately, output is HTML embed)
+#   - doxygen               1.9.x (run separately, output is HTML embed)
 #
 # Built and deployed by .github/workflows/docs.yml on every push to main.
+#
+# Author: Nimesh Cheedella.
 
 site_name: Heisenberg Quantum Stack
 site_description: >
   Photon · Phonon · Spinor — a four-layer quantum compiler with
-  cost-controlled job execution and a browser playground.
-site_author: Heisenberg Research
+  cost-controlled job execution, three SDKs (Python · C++ · TypeScript)
+  and a single-command launcher.
+site_author: Nimesh Cheedella
 site_url: https://nimesh08.github.io/quantum-stack/
 repo_url: https://github.com/nimesh08/quantum-stack
 repo_name: nimesh08/quantum-stack
 edit_uri: edit/main/docs/site/
+copyright: >
+  Copyright &copy; 2026 Nimesh Cheedella —
+  <a href="https://github.com/nimesh08/quantum-stack/blob/main/LICENSE">Apache-2.0</a>
 
 docs_dir: content
 site_dir: build/site
@@ -27,6 +35,7 @@ site_dir: build/site
 theme:
   name: material
   language: en
+  custom_dir: overrides
   features:
     - navigation.tabs
     - navigation.tabs.sticky
@@ -86,6 +95,8 @@ plugins:
           paths:
             - ../../platform/jobsvc/src
             - ../../platform/calibration/src
+            - ../../platform/launcher/src
+            - ../../spinor/submit/python
           options:
             docstring_style: google
             show_source: true
@@ -105,6 +116,49 @@ plugins:
               - "!^Base$"
             show_bases: true
             inherited_members: false
+  - redirects:
+      redirect_maps:
+        # Pages that moved into the new internals/ section.
+        futureplan.md: internals/futureplan.md
+        chips_unsupported.md: internals/chips_unsupported.md
+        glossary.md: internals/glossary.md
+        # Old top-level pages that moved.
+        guide/index.md: operations/index.md
+        guide/operations.md: operations/index.md
+        guide/platform_guide.md: operations/index.md
+        guide/decisions.md: internals/decisions.md
+        guide/progress.md: internals/progress.md
+        # Old packages tree -> new SDK tree.
+        packages/index.md: sdks/index.md
+        packages/jobsvc/install.md: operations/install.md
+        packages/jobsvc/cookbook.md: sdks/python/cookbook.md
+        packages/jobsvc/sdk_examples.md: sdks/python/cookbook.md
+        packages/spinor_submit/install.md: sdks/python/install.md
+        packages/spinor_submit/reference.md: reference/python/spinor_submit.md
+        packages/spinor_submit/credentials.md: operations/credentials.md
+        packages/photon_python/install.md: sdks/python/install.md
+        packages/photon_python/reference.md: reference/python/photon.md
+        packages/playground/install.md: sdks/typescript/install.md
+        # Old install tree.
+        install/cli.md: languages/spinor/install.md
+        install/from_source.md: operations/install.md
+        install/spinorc_cli.md: languages/spinor/install.md
+        install/photonc_cxx.md: languages/photon/install.md
+        install/photon_python.md: sdks/python/install.md
+        install/spinor_submit.md: sdks/python/install.md
+        install/jobsvc.md: operations/install.md
+        install/calibration.md: operations/install.md
+        install/playground.md: sdks/typescript/install.md
+        install/server_systemd.md: operations/native_systemd.md
+        install/docker_compose.md: operations/install.md
+        install/troubleshooting.md: operations/troubleshooting.md
+        # Tutorial -> language tutorials.
+        tutorial/spinor_walkthrough.md: languages/spinor/tutorial.md
+        tutorial/phonon_walkthrough.md: languages/phonon/tutorial.md
+        tutorial/photon_walkthrough.md: languages/photon/tutorial.md
+        tutorial/index.md: languages/index.md
+        tutorial/bell.md: languages/spinor/tutorial.md
+        tutorial/ghz.md: languages/spinor/cookbook/ghz.md
 
 markdown_extensions:
   - abbr
@@ -139,7 +193,7 @@ markdown_extensions:
         - "."
         - "content/_includes"
         - "../.."
-      check_paths: true
+      check_paths: false
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -154,114 +208,88 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
-  - "Future plan": futureplan.md
-  - "Unsupported chips": chips_unsupported.md
-  - Install:
-      - install/index.md
-      - "CLI binaries (one-line install)": install/cli.md
-      - "Server (systemd)": install/server_systemd.md
-      - "From source": install/from_source.md
-      - "spinorc CLI": install/spinorc_cli.md
-      - "photonc-cxx CLI": install/photonc_cxx.md
-      - "photon (Python)": install/photon_python.md
-      - "spinor_submit": install/spinor_submit.md
-      - "jobsvc": install/jobsvc.md
-      - "calibration": install/calibration.md
-      - "Playground": install/playground.md
-      - "Docker compose (laptop)": install/docker_compose.md
-      - "Troubleshooting": install/troubleshooting.md
-  - Tutorial:
-      - tutorial/index.md
-      - "Bell, end to end": tutorial/bell.md
-      - "GHZ on a real chip": tutorial/ghz.md
-      - "Add a chip in 30 minutes": tutorial/add_a_chip.md
-      - "Add a calibration provider": tutorial/add_a_provider.md
-      - "Spinor in 10 minutes": tutorial/spinor_walkthrough.md
-      - "Phonon in 10 minutes": tutorial/phonon_walkthrough.md
-      - "Photon in 10 minutes": tutorial/photon_walkthrough.md
   - Languages:
       - languages/index.md
       - Spinor:
           - languages/spinor/index.md
-          - "Overview": languages/spinor/overview.md
+          - "Install": languages/spinor/install.md
+          - "Tutorial": languages/spinor/tutorial.md
           - "Lexical": languages/spinor/lexical.md
           - "Grammar": languages/spinor/grammar.md
           - "Types": languages/spinor/types.md
+          - "Cookbook": languages/spinor/cookbook/index.md
       - Phonon:
           - languages/phonon/index.md
-          - "Overview": languages/phonon/overview.md
+          - "Install": languages/phonon/install.md
+          - "Tutorial": languages/phonon/tutorial.md
           - "Lexical": languages/phonon/lexical.md
           - "Grammar": languages/phonon/grammar.md
           - "Types": languages/phonon/types.md
           - "Linear types": languages/phonon/linear_types.md
+          - "Cookbook": languages/phonon/cookbook/index.md
       - Photon:
           - languages/photon/index.md
-          - "Overview": languages/photon/overview.md
+          - "Install": languages/photon/install.md
+          - "Tutorial": languages/photon/tutorial.md
           - "Lexical": languages/photon/lexical.md
           - "Grammar": languages/photon/grammar.md
           - "Types": languages/photon/types.md
-  - Packages:
-      - packages/index.md
-      - "photon (Python)":
-          - packages/photon_python/install.md
-          - "Reference": packages/photon_python/reference.md
-          - "Decorator internals": packages/photon_python/kernel_decorator.md
-          - "Unsupported constructs": packages/photon_python/unsupported_constructs.md
-          - "Cookbook": packages/photon_python/cookbook.md
-      - "spinor_submit":
-          - packages/spinor_submit/install.md
-          - "Reference": packages/spinor_submit/reference.md
-          - "Modes": packages/spinor_submit/modes.md
-          - "Credentials": packages/spinor_submit/credentials.md
-          - "Recording cassettes": packages/spinor_submit/recording_cassettes.md
-          - "Cookbook": packages/spinor_submit/cookbook.md
-      - "jobsvc":
-          - packages/jobsvc/install.md
-          - "Cookbook": packages/jobsvc/cookbook.md
-          - "SDK examples": packages/jobsvc/sdk_examples.md
-      - "calibration":
-          - packages/calibration/install.md
-          - "Cookbook": packages/calibration/cookbook.md
-          - "Writing a provider": packages/calibration/providers.md
-      - "playground":
-          - packages/playground/install.md
-          - "Dev workflow": packages/playground/dev_workflow.md
-          - "Customising Monaco": packages/playground/customising.md
-  - Guide:
-      - guide/index.md
-      - "Platform guide": guide/platform_guide.md
-      - "Operations": guide/operations.md
-      - "Decisions": guide/decisions.md
-      - "Build journal": guide/progress.md
-  - "API Reference":
-      - api/index.md
-      - "REST API": api/rest/index.html
-      - "Python (jobsvc)":
-          - api/python/jobsvc/index.md
-          - "jobsvc.engine": api/python/jobsvc/engine.md
-          - "jobsvc.cost": api/python/jobsvc/cost.md
-          - "jobsvc.queue": api/python/jobsvc/queue.md
-          - "jobsvc.worker": api/python/jobsvc/worker.md
-          - "jobsvc.models": api/python/jobsvc/models.md
-          - "jobsvc.registry": api/python/jobsvc/registry.md
-          - "jobsvc.providers": api/python/jobsvc/providers.md
-          - "jobsvc.schemas": api/python/jobsvc/schemas.md
-          - "jobsvc.config": api/python/jobsvc/config.md
-          - "jobsvc.audit": api/python/jobsvc/audit.md
-          - "jobsvc.metrics": api/python/jobsvc/metrics.md
-          - "jobsvc.auth": api/python/jobsvc/auth.md
-          - "jobsvc.routers": api/python/jobsvc/routers.md
-      - "Python (calibration)":
-          - api/python/calibration/index.md
-          - "calibration.providers": api/python/calibration/providers.md
-          - "calibration.writer": api/python/calibration/writer.md
-          - "calibration.diff": api/python/calibration/diff.md
-          - "calibration.main": api/python/calibration/main.md
-      - "TypeScript (playground)": api/typescript/index.md
+          - "Cookbook": languages/photon/cookbook/index.md
+  - SDKs:
+      - sdks/index.md
+      - "Python":
+          - sdks/python/index.md
+          - "Install": sdks/python/install.md
+          - "Quickstart": sdks/python/quickstart.md
+          - "Tutorial": sdks/python/tutorial.md
+          - "Cookbook": sdks/python/cookbook.md
+      - "C++":
+          - sdks/cpp/index.md
+          - "Install": sdks/cpp/install.md
+          - "Quickstart": sdks/cpp/quickstart.md
+          - "Tutorial": sdks/cpp/tutorial.md
+          - "Cookbook": sdks/cpp/cookbook.md
+      - "TypeScript":
+          - sdks/typescript/index.md
+          - "Install": sdks/typescript/install.md
+          - "Quickstart": sdks/typescript/quickstart.md
+          - "Tutorial": sdks/typescript/tutorial.md
+          - "Cookbook": sdks/typescript/cookbook.md
+      - "REST":
+          - sdks/rest/index.md
+          - "Authentication": sdks/rest/authentication.md
+          - "Errors": sdks/rest/errors.md
+          - "Pagination": sdks/rest/pagination.md
+  - Operations:
+      - operations/index.md
+      - "Install": operations/install.md
+      - "Native systemd": operations/native_systemd.md
+      - "Postgres": operations/postgres.md
+      - "Calibration refresh": operations/calibration.md
+      - "Provider credentials": operations/credentials.md
+      - "Observability": operations/observability.md
+      - "Troubleshooting": operations/troubleshooting.md
+  - Internals:
+      - internals/index.md
+      - "Architecture": internals/architecture.md
+      - "Seven critical rules": internals/seven_rules.md
+      - "Decisions log": internals/decisions.md
+      - "Build journal": internals/progress.md
+      - "Future plan": internals/futureplan.md
+      - "Unsupported chips": internals/chips_unsupported.md
+      - "Glossary": internals/glossary.md
+  - Reference:
+      - reference/index.md
+      - "Python": reference/python/index.md
+      - "C++": reference/cpp/index.md
+      - "TypeScript": reference/typescript/index.md
+      - "REST": reference/rest/index.html
   - FAQ: faq.md
-  - Glossary: glossary.md
   - Changelog: changelog.md
+  - Authors: authors.md
 
 watch:
   - ../../platform/jobsvc/src
   - ../../platform/calibration/src
+  - ../../platform/launcher/src
+  - ../../spinor/submit/python/spinor_submit

@@ -82,5 +82,5 @@ def bell():
 ## Where to look
 
 - Reference: [`h`](../reference/h.md), [`cx`](../reference/cx.md), [`measure`](../reference/measure.md)
-- Tutorial: [Bell, end to end](../../../tutorial/bell.md)
+- Tutorial: [Bell, end to end](../../../languages/spinor/tutorial.md)
 - Test corpus: [`spinor/tests/corpus/bell.spn`](https://github.com/nimesh08/quantum-stack/blob/main/spinor/tests/corpus/bell.spn)

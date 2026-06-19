@@ -28,7 +28,7 @@ for d in 0..depth {
 }
 ```
 
-The angles are **fixed** in this M2-era implementation — variational
+The angles are **fixed** in the current implementation — variational
 loops run an outer Python driver that recompiles per parameter set.
 A future version will accept an `angle[]` parameter. Source:
 [`photon/lang/cpp/lib/Library.cpp` `expandVqeAnsatz`](https://github.com/nimesh08/quantum-stack/blob/main/photon/lang/cpp/lib/Library.cpp#L242-L265).

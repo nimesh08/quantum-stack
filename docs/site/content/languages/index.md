@@ -1,97 +1,56 @@
 # Languages
 
-The stack ships **three** quantum languages, each at a different level
-of abstraction:
+Heisenberg ships **three** quantum programming languages, layered on
+top of each other. You almost always write one and never see the
+others — but knowing what each one is for helps you pick the right
+abstraction.
 
 ```mermaid
 flowchart TB
-    photon["**Photon** (.pho)<br/>OO surface, photon.lib<br/>kernel + QReg + library calls"]
-    phonon["**Phonon** (.phn)<br/>structured IR<br/>+ control flow + linear types"]
-    spinor["**Spinor** (.spn)<br/>portable assembly<br/>per-chip locked"]
-    photon -->|lower| phonon
-    phonon -->|lower| spinor
+  photon["Photon\nObject-oriented language: classes, methods, photon.lib"]
+  phonon["Phonon\nStructured IR: loops, conditionals, linear types"]
+  spinor["Spinor\nFlat assembly: one machine op per line"]
+  photon -->|lowered to| phonon
+  phonon -->|lowered to| spinor
+  spinor -->|chip-locked| chip[(real QPU)]
 ```
 
-| Language | What it is | When to write it |
-|---|---|---|
-| [**Spinor**](spinor/index.md) | quantum assembly — one line per gate, no loops, no functions | when you want exact gate placement; the lowest layer a human writes |
-| [**Phonon**](phonon/index.md) | Spinor + control flow + linear types (no-cloning enforced as a compile error) | when you need `if`, `for`, `def`, or feedforward |
-| [**Photon**](photon/index.md) | object-oriented language: `QReg q(N); q.h(0); q.cx(0,1); q.bell_pair(0,1)` | when you want algorithms (Grover, QFT, teleport) as one-liners |
+## Pick a language
 
-## Three on-ramps
+| You want to ... | Use | Why |
+|-----------------|-----|-----|
+| Express a circuit at the shortest possible level — one gate per line. | [Spinor](spinor/index.md) | The chip-locked, deterministic assembly. Twenty-two grammar rules. No loops, no functions. |
+| Write a circuit *with structure* — `for`, `if`, parameterised sub-routines, but still in a quantum-native syntax. | [Phonon](phonon/index.md) | The structured IR. Linear types stop you from cloning a qubit by accident. Where the optimizer lives. |
+| Write quantum kernels inside an OO program in your normal language. | [Photon](photon/index.md) | The user-facing language. Three frontends — `.pho` source, `@photon.kernel` Python decorator, Clang LibTooling C++ ingester — all converging on the same engine. |
 
-- **From quantum** (you've used Qiskit / Braket / Cirq):
-  start with [Spinor](spinor/index.md). The gate set will look familiar; the
-  two-contracts model (`target generic` vs `target <chip>`) is the only
-  genuinely new idea.
-- **From compilers** (you've written a parser / used LLVM):
-  start with [Phonon](phonon/index.md). The grammar is a small delta over
-  Spinor; the linear type checker is what's interesting.
-- **From application development**:
-  start with [Photon](photon/index.md). Write Bell in eight lines of plain Python:
+When in doubt: **start in Photon**. It is what the playground gives
+you by default and what every cookbook recipe uses. Drop down to
+Phonon if you need explicit control over scheduling or the linear
+type system. Drop all the way to Spinor only when you want to see or
+hand-edit the chip-locked assembly that goes to the cloud.
 
-  ```python
-  import photon
+## What every language has
 
-  @photon.kernel
-  def bell():
-      q = photon.QReg(2)
-      q.h(0)
-      q.cx(0, 1)
-      return q.measure_int()
-  ```
+Every language in this section ships with the same shape of
+documentation. If you know one, you know where to look in the others:
 
-## The same program in all three
+- **Index** — what the language is for and a one-screen example.
+- **Install** — how to get the toolchain on your machine.
+- **Tutorial** — one runnable program, walked through line by line.
+- **Lexical / Grammar / Types** — the formal reference.
+- **Cookbook** — bite-sized recipes for real tasks.
 
-```spinor
-target generic
-qubit q[2]
-bit c[2]
-h q[0]
-cx q[0], q[1]
-c = measure q
-```
+## What every language is **not**
 
-```phonon
-target generic
-qubit q[2]
-bit c[2]
-h q[0]
-cx q[0], q[1]
-c = measure q
-```
+- Not a substitute for the others. Photon is not a "syntax wrapper"
+  on Spinor; it adds OO structure and a different type discipline.
+  Phonon is not just an optimisation pass; it has its own grammar
+  and IR.
+- Not a substitute for a vendor SDK. We do not reimplement Qiskit.
+  Heisenberg compiles to whatever the vendor SDK accepts (OpenQASM
+  3, QIR, Quil) and submits in pass-through mode.
 
-```photon
-target generic
-kernel bell() -> int {
-    QReg q(2)
-    q.h(0)
-    q.cx(0, 1)
-    return q.measure_int()
-}
-```
+---
 
-Same program, three levels. The compiler proves they produce identical
-Spinor (the [convergence test](photon/rules/three_door_convergence.md)).
-
-## Three doors, one engine
-
-```mermaid
-flowchart LR
-    pho[".pho file"]
-    py["@photon.kernel"]
-    cpp["[[photon::kernel]] in .cpp"]
-    photon_ast["photon::lang::Module"]
-    phonon["phonon::dialect::Module"]
-    spinor["spinor::dialect::Module"]
-    out["Provider (verbatim)"]
-    pho --> photon_ast
-    py --> photon_ast
-    cpp --> photon_ast
-    photon_ast --> phonon --> spinor --> out
-```
-
-Whichever door you walk through, the engine compiles to the same
-Spinor IR and submits the same QASM3 verbatim. The tutorials at
-[Photon cookbook → bell_three_doors](photon/cookbook/bell_three_doors.md)
-walks you through writing Bell in all three forms.
+Heisenberg, Spinor, Phonon and Photon were designed and implemented
+by **Nimesh Cheedella**.

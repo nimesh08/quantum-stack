@@ -1,0 +1,85 @@
+# Doxygen config for the Heisenberg C++ engine.
+#
+# Output is rendered as HTML and embedded into the docs site under
+# `docs/site/content/assets/cpp/`. The TypeDoc + Redoc + mkdocstrings
+# CI builds the rest of the reference; see `.github/workflows/docs.yml`.
+#
+# Author: Nimesh Cheedella.
+
+PROJECT_NAME           = "Heisenberg Quantum Stack — C++ engine"
+PROJECT_BRIEF          = "Photon · Phonon · Spinor public C++ headers."
+PROJECT_NUMBER         = 0.5.0
+PROJECT_LOGO           =
+OUTPUT_DIRECTORY       = build
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = English
+
+# Inputs: only the public headers of the three C++ libraries.
+INPUT                  = ../../spinor/dialect/include       \
+                         ../../spinor/parser/cpp/include    \
+                         ../../spinor/parser/qasm/include   \
+                         ../../spinor/passes/include        \
+                         ../../spinor/registry/include      \
+                         ../../spinor/emit/include          \
+                         ../../spinor/sim/include           \
+                         ../../spinor/submit/include        \
+                         ../../spinor/verify/include        \
+                         ../../phonon/dialect/include       \
+                         ../../phonon/lower/include         \
+                         ../../phonon/types/include         \
+                         ../../phonon/optimizer/include     \
+                         ../../photon/lang/include          \
+                         ../../photon/bindings/include
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.hh
+EXCLUDE_PATTERNS       = */test/* */tests/* */build/*
+EXCLUDE_SYMBOLS        = *::detail::* *::internal::*
+
+# Documentation behaviour.
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+INLINE_INHERITED_MEMB  = NO
+ALPHABETICAL_INDEX     = YES
+SHOW_INCLUDE_FILES     = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_AS_ERROR          = NO
+
+# Output.
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+HTML_DYNAMIC_MENUS     = YES
+HTML_DYNAMIC_SECTIONS  = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+GENERATE_LATEX         = NO
+
+# Diagrams (Graphviz).
+HAVE_DOT               = YES
+DOT_NUM_THREADS        = 0
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+GROUP_GRAPHS           = YES
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+DIRECTORY_GRAPH        = YES
+
+# Markdown support.
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 3
+USE_MDFILE_AS_MAINPAGE = ../../README.md
+
+# Source browser.
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = NO
+
+# Warnings.
+WARN_LOGFILE           = build/doxygen-warnings.log

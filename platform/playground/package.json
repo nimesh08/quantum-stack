@@ -1,9 +1,21 @@
 {
   "name": "playground",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
-  "description": "Phase D Playground: React 19.2 + Monaco SPA",
+  "description": "Heisenberg Quantum Stack — React 19.2 + Monaco SPA (reference playground)",
   "type": "module",
+  "author": "Nimesh Cheedella <chnimesh0808@gmail.com>",
+  "license": "Apache-2.0",
+  "homepage": "https://nimesh08.github.io/quantum-stack/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nimesh08/quantum-stack.git",
+    "directory": "platform/playground"
+  },
+  "bugs": {
+    "url": "https://github.com/nimesh08/quantum-stack/issues"
+  },
+  "keywords": ["quantum", "monaco", "react", "vite", "heisenberg"],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

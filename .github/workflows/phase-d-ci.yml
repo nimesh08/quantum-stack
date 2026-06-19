@@ -102,17 +102,40 @@ jobs:
         working-directory: quantum-stack/platform/playground
         run: npm test -- --coverage
 
-  compose_smoke:
+  native_smoke:
     runs-on: ubuntu-24.04
     needs: [jobsvc_integration, playground_unit]
     steps:
       - uses: actions/checkout@v4
-      - name: Build images
-        working-directory: quantum-stack/platform/deploy
-        run: docker compose build || true
-      - name: Up
-        working-directory: quantum-stack/platform/deploy
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Build playground SPA
+        working-directory: quantum-stack/platform/playground
         run: |
-          docker compose up -d || true
-          sleep 5
-          docker compose ps || true
+          npm ci || npm install
+          npm run build
+      - name: Install heisenberg launcher + jobsvc
+        working-directory: quantum-stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./platform/jobsvc -e ./platform/calibration -e ./platform/launcher
+      - name: heisenberg init + seed
+        env:
+          HEISENBERG_DATA_DIR: ${{ runner.temp }}/heisenberg
+        run: |
+          heisenberg init
+          heisenberg seed
+      - name: Start heisenberg run in background and probe API
+        env:
+          HEISENBERG_DATA_DIR: ${{ runner.temp }}/heisenberg
+          SPINOR_REGISTRY_ROOT: ${{ github.workspace }}/quantum-stack/spinor/registry
+          SPINOR_SUBMIT_MODE: cassette
+        run: |
+          heisenberg run --no-browser --background
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/healthz && break || sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/api/v1/targets | head -c 200
+          heisenberg stop || true

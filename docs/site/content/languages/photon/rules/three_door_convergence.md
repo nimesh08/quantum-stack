@@ -25,7 +25,7 @@ EXPECT_EQ(estimate_pho, estimate_cpp);
 
 A "profile" is a deterministic summary of the compiled Spinor IR
 (gate counts, structure, ordering). The estimate is the same
-[`ResourceEstimate`](../../../api/python/jobsvc/engine.md) the API
+[`ResourceEstimate`](../../../reference/python/index.md) the API
 returns.
 
 ## What can break it

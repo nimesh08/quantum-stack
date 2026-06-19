@@ -43,4 +43,4 @@ results classically.
 
 ## See also
 
-[`QReg`](../reference/QReg.md), [Add a chip](../../../tutorial/add_a_chip.md)
+[`QReg`](../reference/QReg.md), [Add a chip](../../../sdks/python/cookbook.md)

@@ -21,7 +21,7 @@ This is what humans write.
 
 ### Hardware contract — `target <chip>`
 
-- Only the chip's [`native_gates`](../../../tutorial/add_a_chip.md) are legal.
+- Only the chip's [`native_gates`](https://github.com/nimesh08/quantum-stack/tree/main/spinor/registry/chips) are legal.
 - Qubit numbers are **physical** positions on the silicon.
 - Every two-qubit instruction must sit on a wired pair of `chip.coupling_map`.
 
@@ -57,7 +57,7 @@ qubit q[2]
 
 ## File extension
 
-By convention `.spn`. The Phase A compiler doesn't care about the
+By convention `.spn`. The Spinor compiler doesn't care about the
 extension; it sniffs the first non-comment line for `target`.
 
 ## What Spinor does **not** have

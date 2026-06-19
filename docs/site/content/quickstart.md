@@ -1,138 +1,125 @@
 # Quickstart
 
-Five minutes from `git clone` to a histogram in your browser.
+This page takes you from a clean machine to your first compiled
+quantum job in five minutes. There are no Docker containers, no
+external services, and no manual database setup. Everything runs as
+a normal Python application.
 
-## 1. Prerequisites
+## Prerequisites
 
-- Docker + Docker Compose v2
-- About 2 GB of free disk for images
+- Python **3.12** or later (`python3 --version`).
+- A POSIX shell (Linux, macOS, or WSL).
+- Optional: `git` if you want to clone the repository for the C++ engine.
 
-That's it. Everything else is in the containers.
-
-## 2. Bring up the stack
+## 1. Install the launcher
 
 ```bash
-git clone https://github.com/nimesh08/quantum-stack.git
-cd quantum-stack/platform/deploy
-cp .env.example .env
-
-./run.sh up -d                           # builds db + jobsvc + 2 workers + scheduler + playground
-./run.sh smoke                           # waits for /healthz to return 200
+pip install heisenberg
 ```
 
-When `./run.sh smoke` prints `OK`, you're ready.
+This pulls `heisenberg`, `jobsvc`, `calibration`, and the
+`spinor-submit` adapters in one go. The C++ compiler is optional at
+this stage — every cassette-mode example below works without it, and
+the [C++ install guide](sdks/cpp/install.md) covers the
+`spinorc` binary when you want it.
+
+## 2. Initialise the data directory
+
+```bash
+heisenberg init
+```
+
+`init` creates `~/.local/share/heisenberg/`, generates a JWT signing
+key, and runs the database migrations against the default SQLite
+database `~/.local/share/heisenberg/jobsvc.db`. Re-running it is
+safe — every step is idempotent.
+
+If you would rather use Postgres, pass `--postgres`:
+
+```bash
+heisenberg init --postgres postgresql+asyncpg://user:pass@host:5432/heisenberg
+```
+
+The launcher writes that URL into the data directory's config so
+subsequent `heisenberg run` invocations pick it up automatically.
+
+## 3. Seed the default admin user
+
+```bash
+heisenberg seed
+```
+
+This creates a user `admin@local` with password `admin-password` and
+prints a fresh API key — copy it now, it will not be shown again.
+
+```text
+user:    admin@local
+password: admin-password   (change in the playground)
+api key: Q4r2p8aA.XyZ1...32chars
+```
+
+## 4. Run the stack
+
+```bash
+heisenberg run
+```
+
+You will see something like:
+
+```text
+heisenberg 0.5.0 on http://127.0.0.1:8080/
+data dir:  /home/you/.local/share/heisenberg
+database:  sqlite+aiosqlite:////home/you/.local/share/heisenberg/jobsvc.db
+press Ctrl-C to stop.
+```
+
+Your browser opens automatically. Log in as `admin@local /
+admin-password`, click **Run**, and the default Bell program returns
+a `00 / 11` histogram in under a second.
+
+## 5. Submit from your terminal
+
+Same job, no browser:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $(cat ~/heisenberg-key)" \
+  -d '{
+    "source": "target generic\nqubit q[2]\nh q[0]\ncx q[0], q[1]\n",
+    "source_kind": "spinor",
+    "target": "ibm_heron_r2",
+    "shots": 1000
+  }' | jq
+```
+
+The response carries a job UUID, the cost estimate, and the queued
+state. Poll `GET /api/v1/jobs/{id}` until `state == "Completed"`.
+
+## What just happened
 
 ```mermaid
 flowchart LR
-    you["You<br/>(browser)"] --> pg["Playground<br/>:8080"]
-    pg -- /api/v1 --> api["FastAPI jobsvc<br/>:8000"]
-    api --> db[("PostgreSQL 17.10")]
-    api --> q["Postgres queue"]
-    q --> w["Worker × 2"]
-    w --> prov["Provider<br/>(local sim by default)"]
-    w --> db
-    sched["Calibration scheduler"] -. nightly .-> prov
+  A[".spn or .pho source"] --> B[Photon front-end]
+  B --> C[Phonon optimizer]
+  C --> D[Spinor place + route + decompose]
+  D --> E[QASM3 / QIR / Quil]
+  E --> F[provider layer]
+  F --> G[Histogram in your browser]
 ```
 
-## 3. Log in
+Every layer ran in the same `heisenberg run` process. The provider
+layer was in cassette mode by default (so no real cloud account was
+charged); flip `SPINOR_SUBMIT_MODE=live` to talk to the real IBM /
+AWS / Azure backends once you have credentials.
 
-Open <http://localhost:8080> and log in with the seeded admin:
+## Where to next
 
-| Field | Value |
-|---|---|
-| Email | `admin@local` |
-| Password | `admin-password` |
-
-(The compose file seeds this on first start. To create more users, see
-[admin endpoints](api/rest/index.md#admin) or run
-`docker compose exec jobsvc python -m jobsvc.seed me@x.com mypassword`.)
-
-## 4. Click Run
-
-The editor pre-loads with the Bell program:
-
-```
-target generic
-qubit q[2]
-bit c[2]
-h q[0]
-cx q[0], q[1]
-c = measure q
-```
-
-Pick `generic` from the target dropdown (it's the default), leave
-shots at 1000, click **Run**.
-
-Within ~1 second, the right pane shows:
-
-- A **resource estimate** — `num_qubits: 2`, `two_qubit_count: 1`,
-  `depth: 4`, `t_count: 0`.
-- A **histogram** — two bars, `00` and `11`, ~50/50.
-- The **dollar cost** — `$0.00` because `generic` runs on the local
-  simulator.
-
-That's the entire stack: editor → compile → cost-check → queue →
-worker → verbatim submission → histogram.
-
-## 5. Try a real chip (cassette mode)
-
-Default `SPINOR_SUBMIT_MODE=cassette` replays recorded provider
-responses, so you can target an IBM machine without credentials:
-
-1. In the editor, change the target to `ibm_heron_r2` (Heron r2,
-   156 qubits, $0.00033/shot).
-2. Submit. The dollar cost shows `$0.330000` for 1000 shots.
-3. The histogram comes from
-   [`spinor/submit/python/spinor_submit/cassettes/ibm/bell.json`](https://github.com/nimesh08/quantum-stack/blob/main/spinor/submit/python/spinor_submit/cassettes/ibm/bell.json).
-
-For live submissions, set `SPINOR_SUBMIT_MODE=live` and put real
-credentials in `.env`. See
-[Operations → Live providers](guide/operations.md#live-providers).
-
-## 6. Watch the cost-control seam
-
-Tighten your daily budget so the next IBM run rejects:
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@local","password":"admin-password"}' | jq -r .access_token)
-
-curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
-     -H 'Content-Type: application/json' \
-     -d '{"daily_usd":"0.10"}' \
-     http://localhost:8000/api/v1/me/budget
-```
-
-Now click **Run** with `ibm_heron_r2` and 1000 shots. You'll see a red
-banner:
-
-> **Over budget**: `exceeds_daily_budget`. Cost $0.330000 vs daily
-> remaining $0.10.
-
-The job persists with `state=Rejected`. **Nothing was spent.** That's
-the first quantum-specific seam — see
-[`jobsvc.cost.check_budget`](api/python/jobsvc/cost.md#jobsvc.cost.check_budget).
-
-## What's next
-
-- **Tutorials** —
-  [Bell, end to end](tutorial/bell.md),
-  [GHZ on a real chip](tutorial/ghz.md),
-  [Add a chip in 30 minutes](tutorial/add_a_chip.md).
-- **API reference** —
-  [REST](api/rest/index.md),
-  [Python jobsvc](api/python/jobsvc/index.md),
-  [TypeScript playground](api/typescript/index.md).
-- **Operations** —
-  [Operations guide](guide/operations.md) covers logs, metrics,
-  deployment, calibration, and credentials.
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
-|---|---|
-| `502 Bad Gateway` from the playground | `jobsvc` is still starting; `docker compose logs jobsvc`. |
-| Login banner says "invalid credentials" | Compose hadn't seeded yet on first start; `docker compose exec jobsvc python -m jobsvc.seed admin@local admin-password admin`. |
-| Histogram never appears | Worker isn't running; `docker compose ps worker`; restart with `docker compose up -d worker`. |
-| Over-budget banner you don't expect | `GET /api/v1/me/budget` and `GET /api/v1/jobs?state=Completed` to see what's already counted against today's spend. |
+- Write your first program: pick a [language](languages/index.md).
+- Build something on top of the API: read the
+  [SDKs](sdks/index.md) — Python, C++, TypeScript, REST.
+- Move to a real server:
+  [Operations / Native systemd](operations/native_systemd.md).
+- Stop and clean up: `heisenberg stop`. Your data directory at
+  `~/.local/share/heisenberg/` survives across runs; delete it to
+  reset everything.

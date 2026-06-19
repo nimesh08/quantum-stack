@@ -72,7 +72,7 @@ cnot hadamard phase           ; aliases
 
 ## File extension
 
-By convention `.pho`. The Phase C compiler drives `.pho` directly via
+By convention `.pho`. The Photon front-end parses `.pho` directly via
 `photon::lang::parse(text, "filename.pho")`.
 
 ## See also

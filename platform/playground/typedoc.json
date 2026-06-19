@@ -1,0 +1,25 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/api/jobs.ts",
+    "src/hooks/useJob.ts",
+    "src/hooks/useAuth.ts",
+    "src/components/Editor.tsx",
+    "src/components/Histogram.tsx",
+    "src/components/TargetPicker.tsx",
+    "src/languages/spinor.ts",
+    "src/languages/phonon.ts",
+    "src/languages/photon.ts"
+  ],
+  "out": "../../docs/site/content/reference/typescript",
+  "plugin": ["typedoc-plugin-markdown"],
+  "readme": "none",
+  "hideBreadcrumbs": true,
+  "hidePageHeader": true,
+  "githubPages": false,
+  "skipErrorChecking": true,
+  "excludePrivate": true,
+  "excludeProtected": false,
+  "tsconfig": "tsconfig.json",
+  "name": "Heisenberg playground (TypeScript)"
+}

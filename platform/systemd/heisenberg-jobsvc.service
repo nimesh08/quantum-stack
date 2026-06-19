@@ -1,0 +1,40 @@
+# heisenberg-jobsvc.service -- FastAPI surface for the Heisenberg quantum stack.
+#
+# Author: Nimesh Cheedella.
+
+[Unit]
+Description=Heisenberg quantum stack -- jobsvc (FastAPI)
+Documentation=https://nimesh08.github.io/quantum-stack/operations/native_systemd/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=heisenberg
+Group=heisenberg
+WorkingDirectory=/var/lib/heisenberg
+EnvironmentFile=/etc/heisenberg/heisenberg.env
+ExecStart=/opt/heisenberg/venv/bin/heisenberg run \
+    --production --no-worker --no-scheduler \
+    --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=3
+
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/heisenberg
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

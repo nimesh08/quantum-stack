@@ -1,21 +1,47 @@
 # Phonon
 
-The middle layer. Adds **control flow** and **linear types** on top of
-Spinor, while keeping every Spinor program legal as-is.
+The middle layer. Adds **control flow** and **linear types** on top
+of Spinor, while keeping every Spinor program legal as-is.
 
 > **Phonon = Spinor + (`if` / `for` / `while` / `def` / variables) + linear types**
 
-This is the IR the optimizer works on. It's a public language: every
-shipped optimization (cancellation, rotation merging, ZX, scheduling)
-operates on Phonon and you can read its output with `spinorc dump`.
+This is the IR the optimizer works on. It is a public language:
+every shipped optimisation (cancellation, rotation merging, ZX,
+scheduling) operates on Phonon and you can read its output with
+`spinorc dump`. The linear type system enforces no-cloning *at
+compile time* — physics shows up as a type error.
 
-## On this page
+## A complete program
 
-- [Overview](overview.md)
-- [Lexical structure](lexical.md)
-- [Grammar (delta over Spinor)](grammar.md)
-- [Types](types.md)
-- [Linear types — physics as a compile error](linear_types.md)
+```phonon
+target generic
+
+def repeat_h(qubit q, int n) {
+  for i in 0..n {
+    h q
+  }
+}
+
+qubit q[1]
+bit c[1]
+repeat_h(q[0], 4)              ; four Hadamards = identity
+c = measure q
+```
+
+Same backend as Spinor, but you have functions, loops, and
+parameters.
+
+## What is in this section
+
+- [Install](install.md) — Phonon ships in the same `spinorc` binary
+  as Spinor.
+- [Tutorial](tutorial.md) — write a teleportation circuit using
+  `def` and conditional measurement.
+- [Overview](overview.md) — the seven new things Phonon adds.
+- [Lexical structure](lexical.md), [Grammar (delta over
+  Spinor)](grammar.md), [Types](types.md).
+- [Linear types — physics as a compile error](linear_types.md).
+- [Cookbook](cookbook/index.md).
 
 ## Reference (Phonon-only constructs)
 
@@ -27,25 +53,20 @@ operates on Phonon and you can read its output with `spinorc dump`.
 | Statements | [`assign`](reference/assign.md) · [`block`](reference/block.md) |
 | Expressions | [`condition`](reference/condition.md) |
 
-Every Spinor reference page (gates, declarations, measurements) is
-identically valid in Phonon — see the [Spinor reference](../spinor/index.md#reference-every-keyword-has-its-own-page).
+Every Spinor gate, declaration, and measurement is identically valid
+in Phonon — see [Spinor](../spinor/index.md).
 
 ## Rules
 
-| | Rule |
+| Rule | Page |
 |---|---|
-| [Linearity](rules/linearity.md) | qubit lives in exactly one place |
-| [Compile-time bounds](rules/compile_time_bounds.md) | `for` and `while` need constant bounds |
-| [Feedforward legalisation](rules/feedforward_legalisation.md) | `if` after `measure` needs chip support |
-| [Post-selection](rules/post_selection.md) | what to do when feedforward isn't supported |
+| Qubit lives in exactly one place | [Linearity](rules/linearity.md) |
+| `for` / `while` need constant bounds | [Compile-time bounds](rules/compile_time_bounds.md) |
+| `if` after `measure` needs chip support | [Feedforward legalisation](rules/feedforward_legalisation.md) |
+| What to do when feedforward isn't supported | [Post-selection](rules/post_selection.md) |
 
-## Cookbook
+---
 
-- [Teleportation](cookbook/teleport.md) — Bell pair + measure + classical-controlled X/Z
-- [Deutsch–Jozsa](cookbook/deutsch_jozsa.md) — `def oracle` + balanced/constant flag
-- [Repeated routine](cookbook/repeated_routine.md) — `def` + `for` + `reset`
-- [Classical branching](cookbook/classical_branching.md) — `measure` → `int` → `if`
-- [Parameterised circuit](cookbook/parameterized_circuit.md) — `angle` parameter to a `def`
-- [Compile error: clone](cookbook/compile_error_clone.md) — `q2 = q1` rejected
-- [Compile error: post-measure](cookbook/compile_error_post_measure.md) — gate after `measure`
-- [Chip specialisation](cookbook/chip_specialization.md) — same Phonon, different chips
+!!! quote "Credits"
+    **Phonon** was designed and implemented by **Nimesh Cheedella**
+    as the structured-IR layer of the Heisenberg quantum stack.

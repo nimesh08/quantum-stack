@@ -1,18 +1,66 @@
 # Photon
 
-The top layer. Object-oriented surface: quantum registers as objects,
-gates as methods, a standard library of famous algorithms.
+The top layer. Object-oriented surface: quantum registers as
+objects, gates as methods, a standard library of famous algorithms.
 
-> **Photon = an OO façade over Phonon, plus three frontends (`.pho`,
-> `@photon.kernel`, `[[photon::kernel]]`) that all converge on the same
-> compiler engine.**
+> **Photon = an OO façade over Phonon, plus three frontends
+> (`.pho`, `@photon.kernel`, `[[photon::kernel]]`) that all converge
+> on the same compiler engine.**
 
-## On this page
+If you write *application* code that includes a quantum kernel,
+this is the language you write. The Python decorator and the C++
+attribute let you embed Photon kernels inside an existing Python or
+C++ program; the `.pho` file format is the canonical text form when
+the kernel is a standalone unit.
 
-- [Overview](overview.md) — three doors, one engine
-- [Lexical structure](lexical.md)
-- [Grammar](grammar.md)
-- [Types](types.md) — `int`, `angle`, `bit`, `QReg`, `Oracle`
+## A complete program (Python door)
+
+```python
+from photon import kernel
+
+@kernel
+def bell() -> bit[2]:
+    q = QReg(2)
+    q.h(0)
+    q.cx(0, 1)
+    return q.measure()
+```
+
+Run it:
+
+```python
+from photon import compile, run
+
+artefact = compile(bell, target="ibm_heron_r2")
+hist = run(artefact, shots=1000, mode="cassette")
+print(hist)        # {"00": 503, "11": 497}
+```
+
+Same kernel, same result, written instead in a `.pho` file:
+
+```photon
+target ibm_heron_r2
+
+kernel bell() -> bit[2] {
+  let q = QReg(2);
+  q.h(0);
+  q.cx(0, 1);
+  return q.measure();
+}
+```
+
+Three doors, one engine. The C++ attribute door is documented in
+[`reference/frontends/cpp_attribute.md`](reference/frontends/cpp_attribute.md).
+
+## What is in this section
+
+- [Install](install.md) — `pip install heisenberg-photon` (Python),
+  build `photonc-cxx` from source (C++).
+- [Tutorial](tutorial.md) — a Bell program walked through all three
+  frontends.
+- [Overview](overview.md), [Lexical](lexical.md),
+  [Grammar](grammar.md), [Types](types.md).
+- [Cookbook](cookbook/index.md).
 
 ## Reference
 
@@ -67,13 +115,8 @@ gates as methods, a standard library of famous algorithms.
 | [Three-door convergence](rules/three_door_convergence.md) | all three frontends produce the same Spinor |
 | [Legalisation](rules/legalisation.md) | mid-circuit measure, feedforward, post-selection |
 
-## Cookbook
+---
 
-- [Bell, three doors](cookbook/bell_three_doors.md) — same program in `.pho`, Python, C++
-- [Grover with a custom oracle](cookbook/grover_with_oracle.md)
-- [QFT + phase estimation](cookbook/qft_qpe.md)
-- [Teleport, end to end](cookbook/teleport_full.md)
-- [Variational loop](cookbook/variational_loop.md) — `vqe_ansatz` + outer optimizer
-- [Using aliases](cookbook/using_aliases.md) — `hadamard` vs `h`, `cnot` vs `cx`
-- [Compile to multiple targets](cookbook/compile_to_target.md)
-- [Error: too many qubits](cookbook/error_too_many_qubits.md)
+!!! quote "Credits"
+    **Photon** was designed and implemented by **Nimesh Cheedella**
+    as the user-facing language of the Heisenberg quantum stack.

@@ -49,4 +49,4 @@ walks every AST node and either translates or raises.
 ## See also
 
 [`@photon.kernel`](../reference/frontends/photon_kernel.md),
-[Install: photon Python](../../../install/photon_python.md)
+[Install: photon Python](../../../languages/photon/install.md)

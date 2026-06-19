@@ -78,5 +78,5 @@ the same statistical confidence.
 ## Where to look
 
 - Reference: [`swap`](../reference/swap.md)
-- Tutorial: [Add a chip](../../../tutorial/add_a_chip.md)
+- Tutorial: [Add a chip](../../../sdks/python/cookbook.md)
 - Cookbook: [routing_via_swap](routing_via_swap.md)
