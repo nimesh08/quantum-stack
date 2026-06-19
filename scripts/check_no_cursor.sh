@@ -24,6 +24,8 @@ ALLOW_PATHS=(
   "platform/playground/src/api/jobs.ts"
   "platform/playground/src/styles.css"
   "phonon/dialect/lib/Parse.cpp"
+  "sdks/typescript/src/client.ts"
+  "sdks/typescript/src/hooks.ts"
   "docs/site/content/sdks/rest/pagination.md"
   "docs/site/content/sdks/rest/index.md"
   "docs/site/content/sdks/typescript/cookbook.md"
