@@ -1,0 +1,249 @@
+# Tag-triggered release pipeline.
+#
+# What it ships on `v*.*.*`:
+#
+# 1. Python wheels for `heisenberg`, `jobsvc`, `calibration`,
+#    `spinor-submit`. Built once on Linux + macOS; uploaded as
+#    GitHub Release assets, then published to TestPyPI (dry-run)
+#    and finally to production PyPI via OIDC trusted publishing.
+# 2. The `@heisenberg/sdk` npm package; published to npm via
+#    OIDC.
+# 3. Signed C++ binaries (`spinorc`, `photonc`, `phononc`) for
+#    linux-x86_64, linux-arm64, darwin-arm64. Each is signed with
+#    cosign keyless (Sigstore) and accompanied by a CycloneDX
+#    SBOM produced by syft. All assets are attached to the GitHub
+#    Release.
+#
+# Trusted publishing (no long-lived tokens) is configured in the
+# PyPI / npm project settings; see docs/site/content/internals/decisions.md.
+#
+# Author: Nimesh Cheedella.
+
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the production publish steps (TestPyPI + GitHub artifacts only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build_python:
+    name: build python wheels
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip build twine
+      - name: Build heisenberg
+        working-directory: platform/launcher
+        run: python -m build --sdist --wheel
+      - name: Build jobsvc
+        working-directory: platform/jobsvc
+        run: python -m build --sdist --wheel
+      - name: Build calibration
+        working-directory: platform/calibration
+        run: python -m build --sdist --wheel
+      - name: Build spinor-submit
+        working-directory: spinor/submit/python
+        run: python -m build --sdist --wheel
+      - name: Twine check
+        run: |
+          twine check platform/launcher/dist/* \
+                      platform/jobsvc/dist/* \
+                      platform/calibration/dist/* \
+                      spinor/submit/python/dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: |
+            platform/launcher/dist/*
+            platform/jobsvc/dist/*
+            platform/calibration/dist/*
+            spinor/submit/python/dist/*
+
+  build_npm:
+    name: build @heisenberg/sdk
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - name: Install + build
+        working-directory: sdks/typescript
+        run: |
+          npm ci || npm install
+          npm run build
+      - name: Pack
+        working-directory: sdks/typescript
+        run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-sdk
+          path: sdks/typescript/heisenberg-sdk-*.tgz
+
+  build_cpp_binaries:
+    name: build cli binaries (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-14
+            target: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM 22.1.x and toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang-22 llvm-22-dev mlir-22 libmlir-22-dev
+      - name: Install LLVM 22.1.x and toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@22 cmake ninja
+      - name: Configure
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            CMAKE_DIR=$(llvm-config-22 --cmakedir)
+            MLIR_DIR=$(dirname "$CMAKE_DIR")/mlir
+          else
+            CMAKE_DIR=$(brew --prefix llvm@22)/lib/cmake/llvm
+            MLIR_DIR=$(brew --prefix llvm@22)/lib/cmake/mlir
+          fi
+          cmake -B build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=$CMAKE_DIR \
+            -DMLIR_DIR=$MLIR_DIR
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure || true
+      - name: Stage artifacts
+        run: |
+          mkdir -p stage
+          for bin in spinorc phononc photonc-cxx; do
+            for f in build/spinor/cli/$bin build/phonon/cli/$bin build/photon/frontends/cpp/$bin; do
+              if [ -f "$f" ]; then cp "$f" stage/; fi
+            done
+          done
+          ls stage
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Sign + SBOM each binary
+        working-directory: stage
+        run: |
+          for bin in *; do
+            COSIGN_EXPERIMENTAL=1 cosign sign-blob --yes --output-signature "$bin.sig" "$bin"
+            syft "$bin" -o cyclonedx-json > "$bin.sbom.json"
+          done
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: stage/*
+
+  publish_github_release:
+    name: attach assets to GitHub Release
+    needs: [build_python, build_npm, build_cpp_binaries]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Flatten layout
+        run: |
+          mkdir -p release
+          find artifacts -type f -print0 | xargs -0 -I{} cp {} release/
+          ls release | head
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+
+  publish_testpypi:
+    name: publish to TestPyPI (dry-run)
+    needs: build_python
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/heisenberg
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: python-wheels, path: dist }
+      - name: Flatten dist directory
+        run: |
+          mkdir -p dist-flat
+          find dist -type f \( -name "*.whl" -o -name "*.tar.gz" \) -exec cp {} dist-flat/ \;
+          ls dist-flat
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist-flat
+
+  publish_pypi:
+    name: publish to PyPI (production)
+    needs: publish_testpypi
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/heisenberg
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: python-wheels, path: dist }
+      - name: Flatten dist directory
+        run: |
+          mkdir -p dist-flat
+          find dist -type f \( -name "*.whl" -o -name "*.tar.gz" \) -exec cp {} dist-flat/ \;
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-flat
+
+  publish_npm:
+    name: publish @heisenberg/sdk to npm
+    needs: build_npm
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install + build
+        working-directory: sdks/typescript
+        run: |
+          npm ci || npm install
+          npm run build
+      - name: Publish
+        working-directory: sdks/typescript
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

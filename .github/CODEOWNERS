@@ -1,0 +1,11 @@
+# Default reviewers for every path. Replace with team handles as
+# the project grows.
+*       @nimesh08
+
+# Sensitive areas — explicit review by the maintainer.
+LICENSE                          @nimesh08
+SECURITY.md                      @nimesh08
+.github/workflows/*              @nimesh08
+.github/dependabot.yml           @nimesh08
+cmake/Versions.cmake             @nimesh08
+platform/jobsvc/_alembic/        @nimesh08

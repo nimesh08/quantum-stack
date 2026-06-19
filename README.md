@@ -5,7 +5,7 @@
 > quantum program once; run it on any of **27 chips**.
 
 [![docs](https://img.shields.io/badge/docs-nimesh08.github.io%2Fquantum--stack-4f46e5?style=flat-square)](https://nimesh08.github.io/quantum-stack/)
-[![ci](https://github.com/nimesh08/quantum-stack/actions/workflows/phase-d-ci.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/phase-d-ci.yml)
+[![ci](https://github.com/nimesh08/quantum-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/ci.yml)
 [![docs-ci](https://github.com/nimesh08/quantum-stack/actions/workflows/docs.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/docs.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 

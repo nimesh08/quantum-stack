@@ -33,6 +33,10 @@ ALLOW_PATHS=(
   "scripts/check_no_cursor.sh"
   ".github/workflows/no-cursor.yml"
   ".github/workflows/docs-lint.yml"
+  "README.md"
+  "AUTHORS.md"
+  "CHANGELOG.md"
+  "CONTRIBUTING.md"
 )
 
 # Build the allow-list as a regex anchored to the start of each

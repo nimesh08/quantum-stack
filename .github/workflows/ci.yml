@@ -1,16 +1,19 @@
-# Phase D CI: build the engine + jobsvc + playground; run all tests.
+# CI: build the engine, jobsvc, calibration, and the playground; run
+# all tests; smoke-test `heisenberg run` end-to-end.
 #
 # Pinned versions (re-verified upstream 2026-06-16):
 #   - FastAPI               0.137.1
 #   - PostgreSQL            17.10
 #   - React                 19.2.7
 #   - @monaco-editor/react  ^4.7.0
-#   - nanobind              2.12.0  (from Phase C)
+#   - nanobind              2.12.0
 #   - LLVM/Clang/MLIR       22.1.8  (engine, when present)
 #   - CPython               3.13 target / 3.12 floor
 #   - Node                  22.x
+#
+# Author: Nimesh Cheedella.
 
-name: phase-d-ci
+name: ci
 
 on:
   push:
