@@ -47,6 +47,7 @@ option(QSTACK_BUILD_SPINOR    "Build Phase A (spinor)"           ON)
 option(QSTACK_BUILD_PHONON    "Build Phase B (phonon)"           ON)
 option(QSTACK_BUILD_PHOTON    "Build Phase C (photon engine)"    ON)
 option(QSTACK_ENABLE_TESTS    "Build unit tests"                 ON)
+option(QSTACK_BUILD_PYTHON_WHEEL "Stage chip registry + CLI binaries into the photon wheel layout (set ON when scikit-build-core drives the build)" OFF)
 
 # ----- LLVM / MLIR (pinned to ${QSTACK_LLVM_VERSION}) -------------------------
 # The user must point CMake at an installed/built LLVM tree, e.g.:

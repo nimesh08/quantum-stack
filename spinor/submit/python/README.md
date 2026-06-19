@@ -1,12 +1,24 @@
-# Spinor Submission Adapters
+# heisenberg-spinor-submit
 
-Three provider adapters with a uniform interface, all submitting
-in **verbatim / pass-through** mode (Rule 5):
+Provider submission adapters for the Heisenberg Quantum Stack — three
+provider adapters with a uniform interface, all submitting in
+**verbatim / pass-through** mode (Rule 5):
 
 - `ibm`   — Qiskit Runtime (`qiskit-ibm-runtime`)
 - `aws`   — Braket SDK (`amazon-braket-sdk`)
 - `azure` — Azure Quantum (`azure-quantum`)
 - `local` — runs `spinorc` + the C++ statevector simulator
+- `qci` / `anyon` / `tii` / `alicebob` — cassette-only today
+
+```bash
+pip install heisenberg-spinor-submit
+```
+
+The Python import name is still `spinor_submit`:
+
+```python
+from spinor_submit import submit
+```
 
 ## Modes
 

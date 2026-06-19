@@ -96,3 +96,46 @@ add_custom_target(photon_python_stage ALL DEPENDS ${_PHOTON_PY_STAGED})
 if(TARGET photon_engine_pymod)
   add_dependencies(photon_engine_pymod photon_python_stage)
 endif()
+
+# ----------------------------------------------------------------------------
+# Wheel-only assets: when scikit-build-core drives the build with
+# QSTACK_BUILD_PYTHON_WHEEL=ON, we additionally:
+#   1. Copy the chip registry into photon/registry/ inside the wheel layout.
+#   2. Drop the `spinorc` and `photonc` CLI binaries into photon/bin/ so
+#      `pip install heisenberg-photon` puts them on $PATH automatically.
+# ----------------------------------------------------------------------------
+if(QSTACK_BUILD_PYTHON_WHEEL)
+  message(STATUS "photon: building Python wheel assets (registry + spinorc + photonc)")
+
+  set(_PHOTON_REGISTRY_SRC ${CMAKE_SOURCE_DIR}/spinor/registry)
+  set(_PHOTON_REGISTRY_DST ${_PHOTON_PY_DEST}/registry)
+  add_custom_command(
+    OUTPUT ${_PHOTON_REGISTRY_DST}/.staged
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${_PHOTON_REGISTRY_DST}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_PHOTON_REGISTRY_SRC} ${_PHOTON_REGISTRY_DST}
+    COMMAND ${CMAKE_COMMAND} -E touch ${_PHOTON_REGISTRY_DST}/.staged
+    DEPENDS ${_PHOTON_REGISTRY_SRC}
+    COMMENT "Stage chip registry into the photon wheel layout"
+    VERBATIM)
+  add_custom_target(photon_wheel_registry ALL
+    DEPENDS ${_PHOTON_REGISTRY_DST}/.staged)
+  add_dependencies(photon_python_stage photon_wheel_registry)
+
+  set(_PHOTON_BIN_DST ${_PHOTON_PY_DEST}/bin)
+  file(MAKE_DIRECTORY ${_PHOTON_BIN_DST})
+
+  # Copy spinorc + photonc once they are built. We use POST_BUILD on the
+  # CLI targets so the staging follows the link step automatically.
+  if(TARGET spinorc)
+    add_custom_command(TARGET spinorc POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:spinorc> ${_PHOTON_BIN_DST}/spinorc
+      COMMENT "Stage spinorc binary into the photon wheel layout")
+  endif()
+  if(TARGET photonc)
+    add_custom_command(TARGET photonc POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:photonc> ${_PHOTON_BIN_DST}/photonc
+      COMMENT "Stage photonc binary into the photon wheel layout")
+  endif()
+endif()

@@ -1,5 +1,5 @@
 [project]
-name = "spinor-submit"
+name = "heisenberg-spinor-submit"
 description = "Heisenberg Quantum Stack — provider submission adapters (verbatim mode)"
 readme = "README.md"
 requires-python = ">=3.12"
