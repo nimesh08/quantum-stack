@@ -1,0 +1,40 @@
+# spinor/registry/chips/ibm_berlin.yaml
+
+id: ibm_berlin
+provider: ibm
+qubits: 120
+native_gates: [cz, rz, sx, x]
+
+coupling_map:
+  topology: square_grid_120
+  size: 120
+
+supports:
+  mid_circuit_measure: true
+  feedforward: limited
+  reset: true
+
+calibration:
+  source: ibm_runtime_api
+  refresh: nightly
+  store: ~/.cache/spinor/calibration/ibm_berlin.json
+
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+    pi_2_gate: sx
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+
+pricing:
+  per_shot_usd: 0.0013
+
+notes: |
+  IBM Quantum Nighthawk r1 physical device. 120-qubit square-lattice
+  (12x10 grid), tunable couplers, CZ entangler. Region: eu-de.
+  Plan availability: Premium / Flex early access.
+  source: https://quantum.cloud.ibm.com/computers
+  verified-upstream: 2026-06-27
