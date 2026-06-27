@@ -1,0 +1,5 @@
+# Parity test harness deps. Pin loosely; the comparison only uses
+# stable transpile + Operator + count_ops APIs.
+qiskit>=1.0
+qiskit-ibm-runtime>=0.20
+numpy>=1.26

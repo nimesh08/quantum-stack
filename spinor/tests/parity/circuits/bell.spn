@@ -1,0 +1,6 @@
+target generic
+qubit q[2]
+bit c[2]
+h q[0]
+cx q[0], q[1]
+c = measure q
