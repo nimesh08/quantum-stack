@@ -18,12 +18,9 @@ class Decomposition {
                       dialect::Diagnostics& diag) const;
 };
 
-class Cleanup {
- public:
-  // Local peephole: merge adjacent rz/rz; annihilate sx/sxdg
-  // pairs; drop rz(0) modulo 2π. Idempotent. Does not cross
-  // measure/reset/barrier ops.
-  dialect::Module run(const dialect::Module& m) const;
-};
-
 }  // namespace spinor::passes
+
+// Cleanup is declared in Cleanup.h. Re-include here for
+// backward-compatibility with call sites that only included
+// Decomposition.h.
+#include "spinor/passes/Cleanup.h"

@@ -6,6 +6,17 @@ add_library(spinor_passes STATIC
   lib/Routing.cpp
   lib/Decomposition.cpp
   lib/Cleanup.cpp
+  lib/OptimizationLevel.cpp
+  lib/PassManager.cpp
+  lib/SynthesisTraits.cpp
+  lib/Collect2qBlocks.cpp
+  lib/ConsolidateBlocks.cpp
+  lib/TwoQubitDecomposer.cpp
+  lib/KakResynthesis.cpp
+  lib/OneQubitEulerResynthesis.cpp
+  lib/CommutativeCancellation.cpp
+  lib/OptimizationLoop.cpp
+  lib/VF2PostLayout.cpp
 )
 target_include_directories(spinor_passes
   PUBLIC

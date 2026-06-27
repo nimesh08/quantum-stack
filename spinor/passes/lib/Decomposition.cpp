@@ -25,6 +25,14 @@ using namespace spinor::dialect;
 struct ZYZ { double alpha = 0, beta = 0, gamma = 0; };
 
 // Named-gate ZYZ angles (recipe-table entries).
+//
+// Convention: U = e^{iφ} · Rz(γ) · Ry(β) · Rz(α). The α field is
+// the INNERMOST rotation (applied first to the state); γ is the
+// OUTERMOST (applied last).
+//
+// Verified by direct matrix multiplication against
+// tests/parity/verify_1q_unitary.py — every entry below equals
+// the named gate up to a global phase.
 ZYZ zyzFor(OpKind k, const std::vector<Attribute>& attrs) {
   auto angle = [&]() -> double {
     for (const auto& a : attrs) if (a.name == "angle")
@@ -32,15 +40,15 @@ ZYZ zyzFor(OpKind k, const std::vector<Attribute>& attrs) {
     return 0.0;
   };
   switch (k) {
-    case OpKind::H:   return {0,         M_PI/2, M_PI};
-    case OpKind::X:   return {0,         M_PI,   0};
-    case OpKind::Y:   return {-M_PI/2,   M_PI,   M_PI/2};
+    case OpKind::H:   return {0,        -M_PI/2, M_PI};
+    case OpKind::X:   return {0,         M_PI,   M_PI};
+    case OpKind::Y:   return {0,         M_PI,   0};
     case OpKind::Z:   return {0,         0,      M_PI};
     case OpKind::S:   return {0,         0,      M_PI/2};
     case OpKind::Sdg: return {0,         0,     -M_PI/2};
     case OpKind::T:   return {0,         0,      M_PI/4};
     case OpKind::Tdg: return {0,         0,     -M_PI/4};
-    case OpKind::Rx:  return {-M_PI/2,   angle(), M_PI/2};
+    case OpKind::Rx:  return {M_PI/2,    angle(), -M_PI/2};
     case OpKind::Ry:  return {0,         angle(), 0};
     case OpKind::Rz:  return {0,         0,       angle()};
     default:          return {};
@@ -92,6 +100,8 @@ void emit2qEntangler(Module& out, Builder& b, const std::string& mn,
   if (mn == "ecr") r = b.ecr(live[pa], live[pb]);
   else if (mn == "ms") r = b.ms(live[pa], live[pb]);
   else if (mn == "rzz") r = b.rzz(angle, live[pa], live[pb]);
+  else if (mn == "cz") r = b.cz(live[pa], live[pb]);
+  else if (mn == "cx") r = b.cx(live[pa], live[pb]);
   else throw std::runtime_error("unknown entangler: " + mn);
   ++gen[pa]; ++gen[pb];
   out.setName(r.first, "q" + std::to_string(pa) + "_" +
@@ -106,6 +116,22 @@ void emit2qEntangler(Module& out, Builder& b, const std::string& mn,
 // Uses chip's rotation_gate ("rz" for IBM, "gpi" for IonQ,
 // "u1q" for Quantinuum) and pi_2 gate ("sx" for IBM, "gpi2" for
 // IonQ, none for Quantinuum).
+//
+// For chips with a √X (or √X-like) pi_2 gate, we substitute
+// Ry(β) using the PSX identity (the same one Qiskit's
+// OneQubitEulerDecomposer(basis='PSX'|'ZSX') uses):
+//
+//   Ry(β) ≡ Rz(π) · √X · Rz(β + π) · √X      (up to global phase)
+//
+// So Rz(γ)·Ry(β)·Rz(α) lowers to:
+//
+//   Rz(α) · √X · Rz(β + π) · √X · Rz(γ + π)
+//
+// Verified by direct matrix multiplication for β ∈ {0, ±π/2, ±π,
+// arbitrary rationals}. The previous form
+//   Rz(-π/2) · √X · Rz(β) · √X · Rz(π/2)
+// is NOT equal to Ry(β); the parity test harness caught it
+// against a live Heron r2 (ibm_fez) backend on 2026-06-27.
 void emitZYZ(Module& out, Builder& b, const std::string& rotGate,
              const std::string& pi2Gate, ZYZ z,
              std::vector<ValueId>& live, int p,
@@ -117,31 +143,17 @@ void emitZYZ(Module& out, Builder& b, const std::string& rotGate,
   else if (rotGate == "u1q") rotK = OpKind::U1q;
   else throw std::runtime_error("unknown rotation_gate: " + rotGate);
 
-  // For IBM/IonQ with pi_2 gate, expand Ry(β) as
-  //   Rz(-π/2) · pi_2 · Rz(β) · pi_2 · Rz(π/2)  (IBM identity)
-  // and prefix/suffix with Rz(α), Rz(γ).
-  // For Quantinuum (no pi_2), we'd use a U1q-based identity; for
-  // Phase A we approximate it as three U1q calls (α, β, γ). The
-  // tests use `equalUpToPhase` so the exact numeric path isn't
-  // critical — what matters is the gate vocabulary and
-  // structural correctness. Decisions log notes this approximation.
   if (!pi2Gate.empty()) {
-    // Rz(α)
-    if (std::abs(z.alpha) > 1e-15) emit1q(out, b, rotK, z.alpha, live, p, gen);
-    // Rz(-π/2)
-    emit1q(out, b, rotK, -M_PI/2, live, p, gen);
-    // pi_2
     OpKind p2k = (pi2Gate == "sx") ? OpKind::Sx :
                  (pi2Gate == "gpi2") ? OpKind::Gpi2 : OpKind::Sx;
-    emit1q(out, b, p2k, 0.0, live, p, gen);
-    // Rz(β)
-    emit1q(out, b, rotK, z.beta, live, p, gen);
-    // pi_2
-    emit1q(out, b, p2k, 0.0, live, p, gen);
-    // Rz(π/2)
-    emit1q(out, b, rotK, M_PI/2, live, p, gen);
-    // Rz(γ)
-    if (std::abs(z.gamma) > 1e-15) emit1q(out, b, rotK, z.gamma, live, p, gen);
+    // Emission order (first-emitted op acts first on the state).
+    // Final unitary applied = Rz(γ+π) · √X · Rz(β+π) · √X · Rz(α)
+    //                       = Rz(γ) · Ry(β) · Rz(α)  ✓
+    if (std::abs(z.alpha) > 1e-15) emit1q(out, b, rotK, z.alpha, live, p, gen);
+    emit1q(out, b, p2k, 0.0, live, p, gen);                 // √X
+    emit1q(out, b, rotK, z.beta + M_PI, live, p, gen);      // Rz(β+π)
+    emit1q(out, b, p2k, 0.0, live, p, gen);                 // √X
+    emit1q(out, b, rotK, z.gamma + M_PI, live, p, gen);     // Rz(γ+π)
   } else {
     // Quantinuum-style: emit three Rz/U1q rotations (an
     // approximation; see decisions log entry D6).
@@ -178,6 +190,25 @@ void emitCX(Module& out, Builder& b, const registry::ChipInfo& chip,
     emit2qEntangler(out, b, "rzz", M_PI/2, live, pc, pt, gen);
     emit1q(out, b, OpKind::U1q, -M_PI/2,  live, pc, gen);
     emit1q(out, b, OpKind::U1q, -M_PI/2,  live, pt, gen);
+  } else if (ent == "cz") {
+    // CZ-native CX. Identity (Qiskit's canonical translation for
+    // the Heron / Nighthawk / Rigetti / IQM / OQC basis):
+    //   CX(c, t) = H(t) · CZ(c, t) · H(t)
+    //   H        = Rz(π/2) · Sx · Rz(π/2)     (Euler-ZSX expansion)
+    // Cleanup will merge adjacent Rz angles afterward.
+    // source: qiskit/circuit/library/.../equivalence_library entry
+    //   "CX ≡ H·CZ·H on target" + OneQubitEulerDecomposer(basis='ZSX').
+    emit1q(out, b, OpKind::Rz, M_PI/2, live, pt, gen);
+    emit1q(out, b, OpKind::Sx, 0.0,    live, pt, gen);
+    emit1q(out, b, OpKind::Rz, M_PI/2, live, pt, gen);
+    emit2qEntangler(out, b, "cz", 0.0, live, pc, pt, gen);
+    emit1q(out, b, OpKind::Rz, M_PI/2, live, pt, gen);
+    emit1q(out, b, OpKind::Sx, 0.0,    live, pt, gen);
+    emit1q(out, b, OpKind::Rz, M_PI/2, live, pt, gen);
+  } else if (ent == "cx") {
+    // CX-native target (e.g. Alice & Bob cat-qubit). The CX is
+    // the native gate itself; no surrounding 1Q rotations needed.
+    emit2qEntangler(out, b, "cx", 0.0, live, pc, pt, gen);
   } else {
     throw std::runtime_error("emitCX: no recipe for entangler '" + ent + "'");
   }

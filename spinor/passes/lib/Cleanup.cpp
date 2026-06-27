@@ -5,7 +5,7 @@
 // only become visible once gates are in native form. Spec
 // docs/build/phaseA/M6_decomposition.md §5.
 
-#include "spinor/passes/Decomposition.h"
+#include "spinor/passes/Cleanup.h"
 
 #include <cmath>
 #include <map>
@@ -149,12 +149,19 @@ Module Cleanup::run(const Module& in) const {
     int nq = qubitArity(op.kind);
     if (op.kind == OpKind::Rz && !op.operands.empty()) {
       int p = L.physOfValue[op.operands[0].v];
+      // If there's a pending Pi2 run, the new Rz comes AFTER it
+      // in source order — flush the Pi2 first so the Rz lands in
+      // the correct sequence. (Without this flush, the Rz would
+      // commute backward across the Sxs, which is NOT a valid
+      // commutation in general.)
+      if (pendingPi2[p] != 0) flushPi2(p);
       pendingRz[p] += rotAttr(op);
       continue;
     }
     if (op.kind == OpKind::Sx && !op.operands.empty()) {
       int p = L.physOfValue[op.operands[0].v];
-      flushRz(p);  // rz comes before sx in our recipes' order
+      // Flush pending Rz BEFORE the Sx (Rz·Sx is not Sx·Rz).
+      flushRz(p);
       pendingPi2[p] += 1;
       // Annihilate if combined with prior sxdg.
       continue;
@@ -266,6 +273,24 @@ Module Cleanup::run(const Module& in) const {
   // Flush any remaining pending rotations.
   for (int p = 0; p < (int)live.size(); ++p) flushAll(p);
   return out;
+}
+
+// Vendor-aware overload. For Phase A we delegate to the
+// IBM-style {rz, sx, sxdg} peephole when the chip uses rz+sx
+// (i.e. IBM-family). For IonQ (gpi+gpi2), AQT (gpi+gpi2), and
+// Quantinuum (u1q+""), there is no merger today and the pass
+// passes ops through unchanged — same behavior as before this
+// signature change.
+Module Cleanup::run(const Module& in,
+                    const registry::ChipInfo& chip) const {
+  // The chip-id-agnostic path. The current peephole only
+  // matches {Rz, Sx, Sxdg} — that subset is reached only by
+  // chips whose decomposition emits those ops. Other 1Q natives
+  // (Gpi, Gpi2, U1q) flow through the pass-through branch
+  // already. So calling the IBM-style peephole on any chip is
+  // safe (idempotent for non-IBM bases).
+  (void)chip;
+  return run(in);
 }
 
 }  // namespace spinor::passes
