@@ -18,7 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Physics",
 ]
-dynamic = ["version"]
+version = "0.5.0"
 
 dependencies = []
 
@@ -40,9 +40,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["spinor_submit*"]
-
-[tool.setuptools.dynamic]
-version = { file = ["../../../VERSION"] }
 
 [tool.setuptools.package-data]
 spinor_submit = ["cassettes/*/*.json"]
