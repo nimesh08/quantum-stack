@@ -74,7 +74,9 @@ jobs:
         run: |
           mkdir -p docs/site/content/assets/cpp
           if [ -f docs/cpp/Doxyfile ]; then
-            doxygen docs/cpp/Doxyfile
+            # Run doxygen from docs/cpp so the `INPUT = ../../...`
+            # relative paths in the Doxyfile resolve to the repo root.
+            ( cd docs/cpp && doxygen Doxyfile )
             cp -r docs/cpp/build/html/* docs/site/content/assets/cpp/
           else
             echo '<html><body><p>Doxygen output is generated on tagged releases; this preview build skipped it.</p></body></html>' \
