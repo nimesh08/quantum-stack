@@ -8,6 +8,9 @@ target_link_libraries(photonc PRIVATE
   phonon_optimizer
   qs::common_cli
   phonon_dialect
+  phonon::lower
+  phonon::types
+  phonon::parser
 )
 target_compile_features(photonc PRIVATE cxx_std_20)
 target_compile_definitions(photonc PRIVATE

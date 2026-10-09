@@ -12,6 +12,17 @@
 
 id: ionq_aria_proto
 provider: aws
+
+schema_version: 2
+vendor: ionq
+readiness: offline_only
+readiness_reason: "Synthetic compiler test profile; never a live device."
+routes: [aws, ionq]
+formats: [native-json, qasm3]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 25
 native_gates: [gpi, gpi2, ms]
 

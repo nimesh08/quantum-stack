@@ -9,7 +9,7 @@
 - [ ] Bug fix
 - [ ] New feature
 - [ ] New chip (YAML only) or new submission adapter
-- [ ] New optimiser pass in Phonon
+- [ ] New logical or physical optimization pass
 - [ ] Documentation
 - [ ] Refactor / housekeeping
 
@@ -26,11 +26,11 @@
 
 ## Rule check
 
-- [ ] No new optimisation in Spinor
+- [ ] Logical and physical optimizations preserve semantics at their respective layers
       ([RULE 2](https://nimesh08.github.io/quantum-stack/internals/seven_rules/)).
 - [ ] No reimplementation of compilation outside the C++ engine
       ([RULE 3](https://nimesh08.github.io/quantum-stack/internals/seven_rules/)).
-- [ ] No silent provider transpilation
+- [ ] No provider SDK transpiler calls; mandatory service processing is recorded
       ([RULE 5](https://nimesh08.github.io/quantum-stack/internals/seven_rules/)).
 - [ ] All third-party version pins are unchanged or have been
       re-verified upstream

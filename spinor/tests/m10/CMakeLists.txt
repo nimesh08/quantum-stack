@@ -23,7 +23,7 @@ target_compile_definitions(spinor_m10_test PRIVATE
 add_test(NAME spinor_m10_test COMMAND spinor_m10_test)
 set_tests_properties(spinor_m10_test PROPERTIES LABELS "M10")
 
-# Python adapter tests (cassette mode).
+# Offline provider contracts, artifact and real-local execution tests.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   add_test(
@@ -33,5 +33,7 @@ if(Python3_Interpreter_FOUND)
             -v
   )
   set_tests_properties(spinor_m10_python_pytest
-                       PROPERTIES LABELS "M10;python")
+                       PROPERTIES
+                       LABELS "M10;python"
+                       ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/spinor/submit/python")
 endif()

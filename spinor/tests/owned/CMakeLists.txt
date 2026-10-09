@@ -1,0 +1,7 @@
+if(NOT QSTACK_ENABLE_TESTS)
+  return()
+endif()
+add_executable(spinor_owned_test owned_test.cpp)
+target_link_libraries(spinor_owned_test PRIVATE spinor::passes spinor::sim spinor::emit spinor::parser spinor::submit)
+target_compile_features(spinor_owned_test PRIVATE cxx_std_20)
+add_test(NAME spinor_owned_test COMMAND spinor_owned_test)

@@ -51,8 +51,8 @@ TEST(M2_struct, qft_loop) {
     for (const auto& it : r.diag.items()) std::cerr << "DIAG: " << it.message << "\n";
   }
   EXPECT_FALSE(r.diag.hasErrors());
-  EXPECT_EQ(countOpKind(*r.module, pd::OpKind::For), static_cast<std::size_t>(1));
-  EXPECT_EQ(countOpKind(*r.module, pd::OpKind::EndFor), static_cast<std::size_t>(1));
+  EXPECT_EQ(countOpKind(*r.module, pd::OpKind::H), static_cast<std::size_t>(4));
+  EXPECT_EQ(countOpKind(*r.module, pd::OpKind::For), static_cast<std::size_t>(0));
 }
 
 TEST(M2_struct, teleportation) {

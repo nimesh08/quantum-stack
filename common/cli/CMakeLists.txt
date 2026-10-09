@@ -11,6 +11,7 @@ add_library(qs_common_cli STATIC
   lib/Flags.cpp
   lib/Providers.cpp
   lib/Submit.cpp
+  lib/Process.cpp
   lib/Manifest.cpp
 )
 

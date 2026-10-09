@@ -55,14 +55,17 @@ TEST(M5_ingest, ghz) {
   EXPECT_EQ(countOps(*lr.module, "spinor.cx"), 2);
 }
 
-TEST(M5_ingest, lib_grover) {
+TEST(M5_ingest, unresolved_grover_is_rejected) {
   auto src = readFile(corpus("lib_grover.cpp"));
   auto r = ingestCpp(src, "grover_demo");
   EXPECT_TRUE(r.module.has_value());
   auto lr = pl::lowerToPhonon(*r.module);
-  EXPECT_TRUE(lr.module.has_value());
-  // grover with rounds=2: 2 oracle calls + diffusion blocks.
-  EXPECT_EQ(countOps(*lr.module, "phonon.call"), 2);
+  EXPECT_FALSE(lr.module.has_value());
+  bool diagnosed = false;
+  for (const auto& d : lr.diag.items())
+    if (d.severity == pl::DiagSeverity::Error &&
+        d.message.find("grover") != std::string::npos) diagnosed = true;
+  EXPECT_TRUE(diagnosed);
 }
 
 TEST(M5_ingest, no_kernel_marker) {

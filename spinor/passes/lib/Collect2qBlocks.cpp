@@ -77,6 +77,10 @@ std::vector<TwoQBlock> Collect2qBlocks::run(const Module& m) const {
 
     int nq = qubitArity(op.kind);
     if (isFence(op.kind)) {
+      if(op.kind==OpKind::Barrier&&op.operands.empty()){
+        for(auto& [qubit,index]:openIdx)index=-1;
+        continue;
+      }
       // Close any open block touching this op's qubits.
       for (const auto& v : op.operands) {
         int q = vi.ofValue[v.v];

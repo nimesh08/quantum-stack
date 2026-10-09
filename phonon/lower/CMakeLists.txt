@@ -2,6 +2,7 @@
 
 add_library(phonon_lower STATIC
   lib/Lowering.cpp
+  lib/Source.cpp
 )
 add_library(phonon::lower ALIAS phonon_lower)
 

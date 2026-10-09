@@ -2,6 +2,18 @@
 
 id: quantinuum_h1_1
 provider: azure
+
+schema_version: 2
+vendor: quantinuum
+qir_platform: quantinuum-h2
+readiness: needs_refresh
+readiness_reason: "Live submission requires a discovered, concrete capability snapshot."
+routes: [azure, quantinuum]
+formats: [qir, qasm2]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 20
 native_gates: [u1q, rzz]
 

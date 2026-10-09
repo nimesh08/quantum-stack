@@ -1,9 +1,9 @@
 # spinor/emit/CMakeLists.txt
 add_library(spinor_emit STATIC
+  lib/PhysicalJson.cpp
   lib/Qasm3.cpp
   lib/Qir.cpp
   lib/Quil.cpp
-  lib/QiskitPython.cpp
 )
 target_include_directories(spinor_emit
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

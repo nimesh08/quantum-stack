@@ -20,6 +20,9 @@
 #include "phonon/dialect/Phonon.h"
 #include "phonon/optimizer/Pipeline.h"
 #include "qs/common/cli/Flags.h"
+#include "phonon/lower/Lowering.h"
+#include "phonon/types/LinearTypeChecker.h"
+#include "phonon/parser/Parser.h"
 #include "qs/common/cli/Manifest.h"
 #include "qs/common/cli/Providers.h"
 #include "qs/common/cli/Submit.h"
@@ -91,7 +94,7 @@ enum class InputLang { Pho, Phonon, Spinor, Unknown };
 InputLang detectInput(const fs::path& p) {
   auto ext = p.extension().string();
   if (ext == ".pho")     return InputLang::Pho;
-  if (ext == ".phonon")  return InputLang::Phonon;
+  if (ext == ".phonon" || ext == ".phn")  return InputLang::Phonon;
   if (ext == ".spn" || ext == ".spinor") return InputLang::Spinor;
   return InputLang::Unknown;
 }
@@ -117,8 +120,19 @@ std::string findSpinorc() {
     std::string s = path;
     std::string token;
     std::stringstream ss(s);
-    while (std::getline(ss, token, ':')) {
-      fs::path cand = fs::path(token) / "spinorc";
+    while (std::getline(ss, token,
+#ifdef _WIN32
+        ';'
+#else
+        ':'
+#endif
+        )) {
+      fs::path cand = fs::path(token) /
+#ifdef _WIN32
+          "spinorc.exe";
+#else
+          "spinorc";
+#endif
       if (fs::exists(cand)) return cand.string();
     }
   }
@@ -130,37 +144,12 @@ std::string findSpinorc() {
 // Run a subprocess and capture stdout/stderr. Returns exit code.
 struct ProcResult { int rc = 0; std::string out, err; };
 ProcResult runProc(const std::vector<std::string>& argv) {
-  // Reuse the same approach as common/cli/Submit.cpp via popen on
-  // Windows, fork+exec on POSIX. To keep this file small we use the
-  // existing helper indirectly.
-  // For simplicity, we just merge stderr into the parent's stderr
-  // (no capture) and capture stdout via popen.
-  std::ostringstream cmd;
-  for (size_t i = 0; i < argv.size(); ++i) {
-    if (i) cmd << ' ';
-    cmd << '"' << argv[i] << '"';
-  }
-  ProcResult res;
-  // Stream stderr to parent's stderr so users see compile errors live.
-  std::string full = cmd.str() + " 2>&1";
-  FILE* p = ::popen(full.c_str(), "r");
-  if (!p) {
-    res.rc = 127;
-    res.err = "popen failed for: " + cmd.str();
-    return res;
-  }
-  char buf[4096];
-  while (std::fgets(buf, sizeof(buf), p)) {
-    res.out += buf;
-  }
-  int rc = ::pclose(p);
-  // pclose returns the wait status on POSIX; extract the exit code.
-#ifdef WEXITSTATUS
-  res.rc = WIFEXITED(rc) ? WEXITSTATUS(rc) : rc;
-#else
-  res.rc = rc;
-#endif
-  return res;
+  auto result = runProcess(argv);
+  if (!result.stderr_text.empty()) std::cerr << result.stderr_text;
+  ProcResult out;
+  out.rc = result.exit_code;
+  out.out = std::move(result.stdout_text);
+  return out;
 }
 
 // Walk a lowered Phonon module and emit it in the simple spinor-text
@@ -176,77 +165,19 @@ ProcResult runProc(const std::vector<std::string>& argv) {
 // This sits alongside (not on top of) phonon::dialect::print(), which
 // emits the MLIR-style textual form used by the engine and tests.
 std::string emitSpinorText(const phonon::dialect::Module& m) {
-  using OK = phonon::dialect::OpKind;
-  std::ostringstream os;
-  os << "target " << (m.targetAttr.empty() ? "generic" : m.targetAttr) << "\n";
-
-  // Map ValueId -> qubit index. Each AllocQubit op produces a result
-  // value; we assign sequential indices as we encounter them.
-  // Use std::map (ValueId has operator<) since ValueId is not hashable.
-  std::map<phonon::dialect::ValueId, int> qIdx;
-  int nextQubit = 0;
-  int bitCount = 0;
-
-  // First pass: count qubits + bits to emit the declarations.
-  for (const auto& op : m.ops()) {
-    if (op.kind == OK::AllocQubit) {
-      qIdx[op.results.front()] = nextQubit++;
-    } else if (op.kind == OK::AllocBit) {
-      ++bitCount;
-    }
+  phonon::dialect::Diagnostics diag;
+  phonon::types::Options options;
+  options.midCircuitMeasure = true;
+  if (!phonon::types::typecheck(m, options, diag)) {
+    dumpDiagnostics(diag);
+    std::exit(1);
   }
-  if (nextQubit > 0) os << "qubit q[" << nextQubit << "]\n";
-  if (bitCount  > 0) os << "bit __c_q[" << bitCount << "]\n";
-
-  // Second pass: emit gates / measurements. Track value forwarding:
-  // a gate op's operand may be a result of a previous gate op (SSA),
-  // but the qubit slot is the same. Build a value->slot resolver that
-  // chases through prior gate results back to the original AllocQubit.
-  std::map<phonon::dialect::ValueId, int> slotOf = qIdx;
-  // The allocator above only mapped AllocQubit results. As we walk
-  // gate ops, each result that flows from a qubit operand inherits
-  // its slot. We process ops in order; for any gate op, the i-th
-  // qubit result inherits the i-th qubit operand's slot.
-  auto resolveSlot = [&](phonon::dialect::ValueId v) -> int {
-    auto it = slotOf.find(v);
-    return (it == slotOf.end()) ? -1 : it->second;
-  };
-
-  int measured = 0;
-  for (const auto& op : m.ops()) {
-    if (op.kind == OK::AllocQubit || op.kind == OK::AllocBit) continue;
-    if (op.kind == OK::Measure) {
-      int s = resolveSlot(op.operands.front());
-      if (s < 0) continue;
-      os << "__c_q[" << measured << "] = measure q[" << s << "]\n";
-      ++measured;
-      continue;
-    }
-    auto mn = phonon::dialect::opMnemonic(op.kind);
-    // mnemonic includes the dialect prefix (e.g. "spinor.h"); strip it.
-    std::string name(mn);
-    auto dot = name.find('.');
-    if (dot != std::string::npos) name = name.substr(dot + 1);
-    int qa = phonon::dialect::qubitArity(op.kind);
-    if (qa == 0) continue;  // skip non-quantum (constants etc.)
-    if (qa == 1) {
-      int s = resolveSlot(op.operands.front());
-      if (s < 0) continue;
-      os << name << " q[" << s << "]\n";
-      // The op's qubit result inherits the slot.
-      if (!op.results.empty()) slotOf[op.results.front()] = s;
-    } else if (qa == 2) {
-      int sa = resolveSlot(op.operands[0]);
-      int sb = resolveSlot(op.operands[1]);
-      if (sa < 0 || sb < 0) continue;
-      os << name << " q[" << sa << "], q[" << sb << "]\n";
-      if (op.results.size() >= 2) {
-        slotOf[op.results[0]] = sa;
-        slotOf[op.results[1]] = sb;
-      }
-    }
+  auto lowered = phonon::lower::lower(m);
+  if (!lowered.module) {
+    dumpDiagnostics(lowered.diag);
+    std::exit(1);
   }
-  return os.str();
+  return phonon::lower::emitSpinorSource(*lowered.module);
 }
 
 // Read source, lower to phonon module, run the Phonon optimizer
@@ -267,6 +198,18 @@ std::string lowerPhotonToSpinorText(const std::string& src,
     std::exit(1);
   }
   pr.module->target = std::string(target);
+  std::size_t kernels = 0;
+  for (const auto& function : pr.module->functions) if (function.is_kernel) {
+    ++kernels;
+    if (!function.params.empty()) {
+      std::cerr << "photonc: bind kernel parameters before compilation; an unbound kernel is not an executable program\n";
+      std::exit(1);
+    }
+  }
+  if (kernels != 1) {
+    std::cerr << "photonc: exactly one entry kernel is required\n";
+    std::exit(1);
+  }
   auto lr = photon::lang::lowerToPhonon(*pr.module);
   if (!lr.module) {
     dumpDiagnostics(lr.diag);
@@ -277,7 +220,7 @@ std::string lowerPhotonToSpinorText(const std::string& src,
   // PyZX, set PHONON_PYZX_LIVE=1 and ensure pyzx is on the include
   // path; that decision is the caller's, not photonc's.
   phonon::optimizer::PipelineConfig cfg;
-  (void)phonon::optimizer::runPipeline(*lr.module, std::move(cfg));
+  // Exact optimization runs after lowering in Spinor PassManager.
   return emitSpinorText(*lr.module);
 }
 
@@ -336,9 +279,17 @@ std::string prepareLoweredFile(const Flags& f, std::string_view target) {
     writeFile(tmp, txt);
     return tmp.string();
   }
-  if (lang == InputLang::Phonon || lang == InputLang::Spinor) {
-    return in.string();
+  if (lang == InputLang::Phonon) {
+    auto parsed = phonon::parser::parse(slurp(in), in.string());
+    if (!parsed.module) { dumpDiagnostics(parsed.diag); std::exit(1); }
+    parsed.module->targetAttr = std::string(target);
+    auto text = emitSpinorText(*parsed.module);
+    fs::path tmp = fs::temp_directory_path() /
+        (std::string("photonc_") + std::to_string(_qs_pid()) + ".spn");
+    writeFile(tmp, text);
+    return tmp.string();
   }
+  if (lang == InputLang::Spinor) return in.string();
   std::cerr << "photonc: cannot detect input language for "
             << in.string() << " (expected .pho / .phonon / .spinor / .spn)\n";
   std::exit(2);
@@ -361,17 +312,15 @@ int cmdCompile(const Flags& f) {
     else writeFile(outPath, body);
   } else if (f.emit == EmitFormat::Spinor) {
     // Run `spinorc compile -t <chip> <lowered>` to get spinor text.
-    auto r = runProc({sc, "compile", "-t", *f.target, lowered});
+    auto r = runProc({sc, "compile", "-t", *f.target, "-O", std::to_string(f.optimization_level), lowered});
     if (r.rc != 0) { std::cerr << r.out; return r.rc; }
     if (outPath.empty()) std::cout << r.out;
     else writeFile(outPath, r.out);
   } else {
     // qasm3 / qir / quil emit through spinorc emit.
-    std::string fmt = (f.emit == EmitFormat::Qasm3) ? "qasm3"
-                    : (f.emit == EmitFormat::Qir)   ? "qir"
-                                                    : "quil";
+    std::string fmt = toString(f.emit);
     std::vector<std::string> argv =
-        {sc, "emit", "-t", *f.target, "-f", fmt};
+        {sc, "emit", "-t", *f.target, "-f", fmt, "-O", std::to_string(f.optimization_level)};
     if (f.verbatim) argv.emplace_back("--verbatim");
     argv.emplace_back(lowered);
     auto r = runProc(argv);
@@ -411,7 +360,7 @@ int cmdEstimate(const Flags& f) {
   if (!f.target) { std::cerr << "estimate: --target required\n"; return 2; }
   auto lowered = prepareLoweredFile(f, *f.target);
   auto sc = findSpinorc();
-  auto r = runProc({sc, "check", "-t", *f.target, lowered});
+  auto r = runProc({sc, "check", "-t", *f.target, "-O", std::to_string(f.optimization_level), lowered});
   std::cout << r.out;
   return r.rc;
 }
@@ -491,6 +440,14 @@ int cmdRun(const Flags& f) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && (std::string_view(argv[1]) == "run" ||
+                   std::string_view(argv[1]) == "submit")) {
+    std::vector<std::string> args(argv + 1, argv + argc);
+    auto result = runQstack(args);
+    std::cout << result.stdout_text;
+    std::cerr << result.stderr_text;
+    return result.exit_code;
+  }
   auto f = parseArgv(argc, argv);
   if (!f.errors.empty()) {
     for (const auto& e : f.errors) std::cerr << "photonc: " << e << "\n";

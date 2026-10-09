@@ -18,6 +18,8 @@
 #include <complex>
 #include <cstddef>
 #include <optional>
+#include <map>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -25,11 +27,9 @@ namespace spinor::sim {
 
 using cdbl = std::complex<double>;
 
-// Run a small (≤24 qubit) circuit on the dense statevector
-// engine. Initial state is |0...0>. Measurement ops are treated
-// as projectors: the sim records each measure but does not
-// collapse for equivalence-check purposes (we compare the
-// pre-measure state vector).
+// Run a small (≤24 qubit) unitary circuit from |0...0>. Terminal
+// measurements are ignored; reset, control flow and gates following
+// measurement require the trajectory sampler instead.
 //
 // The mapping from `dialect::Module` ValueIds to qubit indices
 // is by allocation order: the k-th `alloc_qubit` op corresponds
@@ -41,13 +41,21 @@ struct StateVector {
 
 StateVector simulate(const dialect::Module& m);
 
+// Sample projective measurements and resets, retaining classical destination
+// indices. Physical wires are compacted before allocating a statevector.
+std::map<std::string, std::size_t> sample(const dialect::Module& m,
+    std::size_t shots, std::mt19937_64& rng);
+
 struct EquivResult {
   bool equivalent = false;
   double maxAbsDiff = 0.0;        // post-phase-removal
   std::optional<cdbl> phase;      // applied to b before comparison
 };
 
-// Are two modules equivalent up to a global phase?
+// Exhaustive unitary equivalence up to one global phase, including terminal
+// readout mapping. Honors initial/final placement and zero-initialized routing
+// ancillas. Limited to 8 logical and 12 active physical qubits; unsupported
+// dynamic/nonunitary circuits and larger inputs throw instead of claiming a pass.
 EquivResult equivalent(const dialect::Module& a,
                        const dialect::Module& b,
                        double tol = 1e-6);

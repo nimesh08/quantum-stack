@@ -2,6 +2,18 @@
 
 id: ibm_miami
 provider: ibm
+
+schema_version: 2
+vendor: ibm
+readiness: needs_refresh
+readiness_reason: "Offline synthetic topology only; live submission requires discovered per-instruction connectivity."
+routes: [ibm]
+formats: [qasm3]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
+connectivity_provenance: synthetic_offline_fixture
 qubits: 120
 native_gates: [cz, rz, sx, x]
 

@@ -16,6 +16,8 @@ struct EmitOptions {
   bool braketVerbatim = false;     // wrap body in `#pragma braket verbatim`
 };
 
+std::string emitPhysicalJson(const dialect::Module& m);
+
 // OpenQASM 3.1 emitter. The `chip` param is required when
 // `opts.braketVerbatim` is true (uses `$<n>` physical qubit
 // syntax); otherwise we emit named registers.
@@ -24,7 +26,7 @@ std::string emitQasm3(const dialect::Module& m,
                       EmitOptions opts = {});
 
 // QIR emitter. Always emits the textual LLVM-IR form (.ll); QIR
-// bitcode is just `llc -filetype=obj` away. Profile is selected
+// bitcode is assembled with `llvm-as` or `clang -x ir -emit-llvm -c`. Profile is selected
 // from `chip->supports.feedforward`: None → Base; Limited/Full →
 // Adaptive (at the cost of additional declarations).
 std::string emitQir(const dialect::Module& m,
@@ -32,20 +34,5 @@ std::string emitQir(const dialect::Module& m,
 
 // Quil emitter. Narrow but cheap: walks the IR.
 std::string emitQuil(const dialect::Module& m);
-
-// Qiskit Python emitter. Generates a self-contained Python program
-// that builds the equivalent `QuantumCircuit`, runs Qiskit's
-// `transpile(..., optimization_level=N)` against the target IBM
-// backend, submits via `SamplerV2`, and prints a single-line JSON
-// blob `{"histogram": {...}, "job_id": "...", "depth": N, "gates": {...}}`
-// to stdout. Used by `spinorc emit`/`spinorc run` for IBM chips.
-//
-// The emitter walks the IR at its INPUT level (universal gates,
-// before decompose/cleanup) — Qiskit's transpiler does the
-// lowering to the chip's native basis better than Spinor's
-// scaffolded passes can today.
-std::string emitQiskitPython(const dialect::Module& m,
-                             const registry::ChipInfo& chip,
-                             int optimizationLevel = 3);
 
 }  // namespace spinor::emit

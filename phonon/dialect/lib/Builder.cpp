@@ -46,6 +46,9 @@ ValueId Builder::allocBit(Location loc) {
   auto r = issue(m_, OpKind::AllocBit, {}, {}, {bitType()}, std::move(loc));
   return r[0];
 }
+void Builder::globalPhase(double angle, Location loc) {
+  issue(m_, OpKind::GlobalPhase, {}, {Attribute{"angle", angle}}, {}, std::move(loc));
+}
 
 #define SQG(name, kind_)                                              \
   ValueId Builder::name(ValueId q, Location loc) {                    \
@@ -106,6 +109,14 @@ TQG(ms,   Ms)
 std::pair<ValueId, ValueId> Builder::rzz(double angle, ValueId a,
                                          ValueId b_, Location loc) {
   auto r = issue(m_, OpKind::Rzz, {a, b_},
+                 {Attribute{"angle", angle}},
+                 {qubitType(), qubitType()}, std::move(loc));
+  return {r[0], r[1]};
+}
+
+std::pair<ValueId, ValueId> Builder::rxx(double angle, ValueId a,
+                                         ValueId b_, Location loc) {
+  auto r = issue(m_, OpKind::Rxx, {a, b_},
                  {Attribute{"angle", angle}},
                  {qubitType(), qubitType()}, std::move(loc));
   return {r[0], r[1]};

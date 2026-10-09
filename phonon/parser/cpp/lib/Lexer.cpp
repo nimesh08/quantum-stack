@@ -14,8 +14,8 @@ const std::set<std::string>& gateMnemonics() {
       "h",    "x",    "y",    "z",    "s",    "sdg",  "t",    "tdg",
       "rx",   "ry",   "rz",
       "cx",   "cz",   "swap",
-      "ecr",  "ms",   "rzz",  "sx",   "sxdg",
-      "gpi",  "gpi2", "u1q",
+      "ecr",  "ms",   "rzz", "rxx",  "sx",   "sxdg",
+      "gpi",  "gpi2", "u1q", "gphase",
   };
   return s;
 }

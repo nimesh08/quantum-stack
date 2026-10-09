@@ -59,6 +59,7 @@ std::string toString(EmitFormat f) {
     case EmitFormat::Quil:   return "quil";
     case EmitFormat::Phonon: return "phonon";
     case EmitFormat::Spinor: return "spinor";
+    case EmitFormat::Json: return "json";
   }
   return "qasm3";
 }
@@ -69,6 +70,7 @@ std::optional<EmitFormat> parseEmitFormat(std::string_view w) {
   if (w == "quil")   return EmitFormat::Quil;
   if (w == "phonon") return EmitFormat::Phonon;
   if (w == "spinor") return EmitFormat::Spinor;
+  if (w == "json") return EmitFormat::Json;
   return std::nullopt;
 }
 
@@ -188,6 +190,12 @@ Flags parseArgv(int argc, const char* const* argv) {
 
     auto v = takeValue(it, "--target", f.errors);
     if (v) { f.target = std::move(*v); continue; }
+    v = takeValue(it, "-O", f.errors);
+    if (v) {
+      if (v->size() != 1 || (*v)[0] < '0' || (*v)[0] > '3') f.errors.emplace_back("-O requires 0, 1, 2 or 3");
+      else f.optimization_level = (*v)[0] - '0';
+      continue;
+    }
     v = takeValue(it, "-t", f.errors);
     if (v) { f.target = std::move(*v); continue; }
     v = takeValue(it, "--provider", f.errors);

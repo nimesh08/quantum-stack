@@ -7,6 +7,7 @@
 #include "spinor/passes/SynthesisTraits.h"
 
 #include <cmath>
+#include <algorithm>
 
 namespace spinor::passes {
 
@@ -31,7 +32,7 @@ EntanglerProps classifyEntangler(const std::string& name) {
   if (name == "cx" || name == "cz" || name == "ecr" || name == "ms") {
     return {cnotClass, true};
   }
-  if (name == "rzz") {
+  if (name == "rzz" || name == "rxx") {
     // Parametric: at the canonical π/2 it's supercontrolled;
     // arbitrary-θ blocks need the variable-angle path.
     return {{M_PI / 4.0, 0.0, 0.0}, true};
@@ -40,6 +41,8 @@ EntanglerProps classifyEntangler(const std::string& name) {
     // DCNOT class: Weyl (π/4, π/4, 0). Still supercontrolled.
     return {{M_PI / 4.0, M_PI / 4.0, 0.0}, true};
   }
+  if(name=="sqrt_iswap"||name=="sqrt_iswap_inv")return {{M_PI/8,M_PI/8,0},false};
+  if(name=="syc")return {{M_PI/4,M_PI/4,M_PI/24},false};
   // Unknown entangler: assume CNOT-class to keep downstream
   // passes functional; passes can branch on isSupercontrolled
   // if they need to be conservative.
@@ -66,8 +69,12 @@ EulerBasis classifyEulerBasis(const std::string& rotGate,
 
 SynthesisTraits computeTraits(const registry::ChipInfo& chip) {
   SynthesisTraits t;
+  t.nativeGates = chip.nativeGates;
   t.entanglerName     = chip.decompose.twoQubitEntangler;
   t.entanglerCountMax = chip.decompose.twoQubitEntanglerCountMax;
+  if(t.entanglerName=="iswap")t.entanglerCountMax=std::max(6,t.entanglerCountMax);
+  if(t.entanglerName=="sqrt_iswap"||t.entanglerName=="sqrt_iswap_inv")t.entanglerCountMax=std::max(6,t.entanglerCountMax);
+  if(t.entanglerName=="syc")t.entanglerCountMax=std::max(18,t.entanglerCountMax);
   auto props          = classifyEntangler(t.entanglerName);
   t.entanglerWeyl     = props.weyl;
   t.isSupercontrolled = props.supercontrolled;
@@ -75,7 +82,10 @@ SynthesisTraits computeTraits(const registry::ChipInfo& chip) {
   t.rotationGate      = chip.decompose.oneQubitRotationGate;
   t.pi2Gate           = chip.decompose.oneQubitPi2Gate;
   t.eulerBasis        = classifyEulerBasis(t.rotationGate, t.pi2Gate);
-  t.continuousOneQubit = true;  // toggled false only for cat-qubit chips
+  t.continuousOneQubit = false;
+  for(const auto& gate:chip.nativeGates)
+    if(gate=="rx"||gate=="ry"||gate=="rz"||gate=="u1q"||gate=="gpi"||gate=="gpi2"||gate=="phased_xz")t.continuousOneQubit=true;
+  if(!t.continuousOneQubit)t.eulerBasis=EulerBasis::Discrete;
   return t;
 }
 

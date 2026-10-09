@@ -14,6 +14,7 @@
 namespace spinor::parser {
 
 enum class Tok : std::uint8_t {
+  If, Else, LBrace, RBrace, Unknown,
   Target,
   Generic,
   Qubit,

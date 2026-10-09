@@ -5,6 +5,7 @@
 // Spec: docs/build/phaseA/M7_cpp_parser.md.
 
 #include "spinor/parser/Parser.h"
+#include "spinor/dialect/Circuit.h"
 
 #include "Lexer.h"
 
@@ -59,6 +60,7 @@ class Driver {
   Module& m_;
   Diagnostics& diag_;
   Builder b_;
+  int branchDepth_=0;
 
   // Per-register state.
   struct RegState {
@@ -96,7 +98,7 @@ class Driver {
     if (peek().kind == Tok::Newline) {
       ++pos_;
       skipBlankLines();
-    } else if (peek().kind != Tok::Eof) {
+    } else if (peek().kind != Tok::Eof && peek().kind != Tok::RBrace) {
       ParseError e;
       e.message = "expected end of line, got '" + peek().text + "'";
       e.loc = locOf(peek());
@@ -129,6 +131,7 @@ class Driver {
   // ---- statement ----
   void parseStatement() {
     switch (peek().kind) {
+      case Tok::If:parseIfStmt();return;
       case Tok::Qubit:    parseQubitDecl();  return;
       case Tok::Bit:      parseBitDecl();    return;
       case Tok::Reset:    parseResetStmt();  return;
@@ -159,9 +162,30 @@ class Driver {
     }
   }
 
+  void parseIfStmt() {
+    Token start=consume();auto bit=parseOperand();
+    auto it=regs_.find(bit.reg);
+    if(it==regs_.end()||it->second.isQubit||bit.idx<0||bit.idx>=it->second.size)
+      throw ParseError{"condition requires a declared classical bit",locOf(start)};
+    expect(Tok::Equals,"'=='");expect(Tok::Equals,"'=='");
+    if(peek().kind!=Tok::Integer||(peek().text!="0"&&peek().text!="1"))
+      throw ParseError{"condition comparison must be 0 or 1",locOf(peek())};
+    bool value=consume().text=="1";expect(Tok::LBrace,"'{'");skipBlankLines();
+    b_.beginIf(classicalIndex(m_,it->second.latestBits[bit.idx]),value,locOf(start));++branchDepth_;
+    while(peek().kind!=Tok::RBrace){if(peek().kind==Tok::Eof)throw ParseError{"unclosed if block",locOf(start)};parseStatement();}
+    consume();skipBlankLines();
+    if(match(Tok::Else)){
+      b_.elseBranch(locOf(start));expect(Tok::LBrace,"'{'");skipBlankLines();
+      while(peek().kind!=Tok::RBrace){if(peek().kind==Tok::Eof)throw ParseError{"unclosed else block",locOf(start)};parseStatement();}
+      consume();skipBlankLines();
+    }
+    b_.endIf(locOf(start));--branchDepth_;
+  }
+
   // ---- declarations ----
   void parseQubitDecl() {
     Token kw = consume();  // 'qubit'
+    if(branchDepth_)throw ParseError{"declare registers outside conditional blocks",locOf(kw)};
     if (peek().kind != Tok::Identifier) {
       ParseError e;
       e.message = "expected register name after 'qubit'";
@@ -199,6 +223,7 @@ class Driver {
 
   void parseBitDecl() {
     Token kw = consume();  // 'bit'
+    if(branchDepth_)throw ParseError{"declare registers outside conditional blocks",locOf(kw)};
     if (peek().kind != Tok::Identifier) {
       ParseError e;
       e.message = "expected register name after 'bit'";
@@ -351,6 +376,7 @@ class Driver {
       e.loc = locOf(op.loc);
       throw e;
     }
+    setMeasurementTarget(m_, v, classicalIndex(m_, it->second.latestBits[op.idx]));
     int g = ++it->second.genBits[op.idx];
     it->second.latestBits[op.idx] = v;
     m_.setName(v, op.reg + std::to_string(op.idx) + "_" +
@@ -363,8 +389,10 @@ class Driver {
     std::vector<double> params;
     if (peek().kind == Tok::LParen) params = parseParams();
     std::vector<ParsedOperand> ops;
-    ops.push_back(parseOperand());
-    while (match(Tok::Comma)) ops.push_back(parseOperand());
+    if (nameTok.text != "gphase") {
+      ops.push_back(parseOperand());
+      while (match(Tok::Comma)) ops.push_back(parseOperand());
+    }
     expectNewlineOrEof();
 
     const std::string& mn = nameTok.text;
@@ -392,7 +420,7 @@ class Driver {
     };
 
     auto sq1 = [&](auto fn) {
-      need(1);
+      need(1); needAngles(0);
       ValueId v = resolveQubit(ops[0]);
       ValueId r = (b_.*fn)(v, L);
       updateLiveQubit(ops[0], r);
@@ -404,7 +432,7 @@ class Driver {
       updateLiveQubit(ops[0], r);
     };
     auto tq = [&](auto fn) {
-      need(2);
+      need(2); needAngles(0);
       ValueId a = resolveQubit(ops[0]);
       ValueId c = resolveQubit(ops[1]);
       auto [na, nc] = (b_.*fn)(a, c, L);
@@ -412,6 +440,7 @@ class Driver {
       updateLiveQubit(ops[1], nc);
     };
 
+    if (mn == "gphase") { need(0); needAngles(1); b_.globalPhase(params[0], L); return; }
     if (mn == "h")   { sq1(&Builder::h);   return; }
     if (mn == "x")   { sq1(&Builder::x);   return; }
     if (mn == "y")   { sq1(&Builder::y);   return; }
@@ -427,6 +456,14 @@ class Driver {
     if (mn == "rz")  { sq1a(&Builder::rz); return; }
     if (mn == "gpi") { sq1a(&Builder::gpi); return; }
     if (mn == "gpi2"){ sq1a(&Builder::gpi2); return; }
+    if(mn=="phased_xz"){
+      need(1);needAngles(3);auto q=resolveQubit(ops[0]);
+      updateLiveQubit(ops[0],b_.phasedXZ(params[0],params[1],params[2],q,L));return;
+    }
+    if(mn=="sqrt_iswap"){tq(&Builder::sqrtISwap);return;}
+    if(mn=="iswap"){tq(&Builder::iSwap);return;}
+    if(mn=="sqrt_iswap_inv"){tq(&Builder::sqrtISwapInv);return;}
+    if(mn=="syc"){tq(&Builder::syc);return;}
     if (mn == "u1q") {
       need(1); needAngles(2);
       ValueId v = resolveQubit(ops[0]);
@@ -439,11 +476,11 @@ class Driver {
     if (mn == "swap") { tq(&Builder::swap); return; }
     if (mn == "ecr")  { tq(&Builder::ecr);  return; }
     if (mn == "ms")   { tq(&Builder::ms);   return; }
-    if (mn == "rzz") {
+    if (mn == "rzz" || mn == "rxx") {
       need(2); needAngles(1);
       ValueId a = resolveQubit(ops[0]);
       ValueId c = resolveQubit(ops[1]);
-      auto [na, nc] = b_.rzz(params[0], a, c, L);
+      auto [na, nc] = mn == "rxx" ? b_.rxx(params[0], a, c, L) : b_.rzz(params[0], a, c, L);
       updateLiveQubit(ops[0], na);
       updateLiveQubit(ops[1], nc);
       return;

@@ -42,6 +42,8 @@ struct OpSig {
 
 constexpr const char* kAngleAttr[] = {"angle", nullptr};
 constexpr const char* kU1qAttrs[]  = {"theta", "phi", nullptr};
+constexpr const char* kPhasedXZAttrs[] = {"x", "z", "axis_phase", nullptr};
+constexpr const char* kIfAttrs[] = {"condition_clbit", "condition_value", nullptr};
 constexpr const char* kNoAttrs[]   = {nullptr};
 
 constexpr OpSig kSigs[] = {
@@ -64,11 +66,21 @@ constexpr OpSig kSigs[] = {
     {OpKind::Ecr,        "spinor.ecr",         2, 2, false, kNoAttrs,   false},
     {OpKind::Ms,         "spinor.ms",          2, 2, false, kNoAttrs,   false},
     {OpKind::Rzz,        "spinor.rzz",         2, 2, false, kAngleAttr, false},
+    {OpKind::Rxx,        "spinor.rxx",         2, 2, false, kAngleAttr, false},
     {OpKind::Sx,         "spinor.sx",          1, 1, false, kNoAttrs,   false},
     {OpKind::Sxdg,       "spinor.sxdg",        1, 1, false, kNoAttrs,   false},
     {OpKind::Gpi,        "spinor.gpi",         1, 1, false, kAngleAttr, false},
     {OpKind::Gpi2,       "spinor.gpi2",        1, 1, false, kAngleAttr, false},
     {OpKind::U1q,        "spinor.u1q",         1, 1, false, kU1qAttrs,  false},
+    {OpKind::PhasedXZ,"spinor.phased_xz",1,1,false,kPhasedXZAttrs,false},
+    {OpKind::SqrtISwap,"spinor.sqrt_iswap",2,2,false,kNoAttrs,false},
+    {OpKind::ISwap,"spinor.iswap",2,2,false,kNoAttrs,false},
+    {OpKind::SqrtISwapInv,"spinor.sqrt_iswap_inv",2,2,false,kNoAttrs,false},
+    {OpKind::Syc,"spinor.syc",2,2,false,kNoAttrs,false},
+    {OpKind::If, "spinor.if", 0, 0, false, kIfAttrs, true},
+    {OpKind::Else, "spinor.else", 0, 0, false, kNoAttrs, true},
+    {OpKind::EndIf, "spinor.endif", 0, 0, false, kNoAttrs, true},
+    {OpKind::GlobalPhase, "spinor.gphase", 0, 0, false, kAngleAttr, true},
     {OpKind::Measure,    "spinor.measure",     1, 0, true,  kNoAttrs,   true },
     {OpKind::Reset,      "spinor.reset",       1, 1, false, kNoAttrs,   true },
     {OpKind::Barrier,    "spinor.barrier",     -1, 0, false, kNoAttrs,  true },
@@ -187,6 +199,7 @@ ValueId Builder::allocQubit(Location loc) {
 }
 
 ValueId Builder::allocBit(Location loc) {
+  ++m_.numClbits;
   Build b{m_, OpKind::AllocBit, std::move(loc), {}, {}};
   auto r = b.issue();
   return r[0];
@@ -226,6 +239,18 @@ SQGA(gpi,  Gpi)
 SQGA(gpi2, Gpi2)
 #undef SQGA
 
+ValueId Builder::phasedXZ(double x,double z,double axis,ValueId q,Location loc){
+  Build op{m_,OpKind::PhasedXZ,std::move(loc),{q},{namedDouble("x",x),namedDouble("z",z),namedDouble("axis_phase",axis)}};
+  return op.issue()[0];
+}
+void Builder::beginIf(std::size_t clbit,bool value,Location loc) {
+  m_.addOp({OpKind::If,{}, {}, {namedDouble("condition_clbit",clbit),namedDouble("condition_value",value?1:0)},std::move(loc)});
+  m_.numClbits=std::max(m_.numClbits,clbit+1);
+}
+void Builder::elseBranch(Location loc){m_.addOp({OpKind::Else,{}, {},{},std::move(loc)});}
+void Builder::endIf(Location loc){m_.addOp({OpKind::EndIf,{}, {},{},std::move(loc)});}
+void Builder::globalPhase(double angle,Location loc){m_.addOp({OpKind::GlobalPhase,{}, {},{angleAttr(angle)},std::move(loc)});}
+
 ValueId Builder::u1q(double theta, double phi, ValueId q, Location loc) {
   Build b{m_, OpKind::U1q, std::move(loc), {q},
           {Attribute{"theta", theta}, Attribute{"phi", phi}}};
@@ -246,6 +271,10 @@ TQG(cz,   Cz)
 TQG(swap, Swap)
 TQG(ecr,  Ecr)
 TQG(ms,   Ms)
+TQG(sqrtISwap,SqrtISwap)
+TQG(iSwap,ISwap)
+TQG(sqrtISwapInv,SqrtISwapInv)
+TQG(syc,Syc)
 #undef TQG
 
 std::pair<ValueId, ValueId> Builder::rzz(double angle, ValueId a,
@@ -261,6 +290,25 @@ ValueId Builder::measure(ValueId q, Location loc) {
   auto r = b.issue();
   // Measure has 0 qubit results + 1 bit result, so r has exactly 1 elt.
   return r.front();
+}
+
+std::pair<ValueId, ValueId> Builder::rxx(double angle, ValueId a,
+                                      ValueId b_, Location loc) {
+  Build b{m_, OpKind::Rxx, std::move(loc), {a, b_}, {angleAttr(angle)}};
+  auto r = b.issue();
+  return {r[0], r[1]};
+}
+
+void setMeasurementTarget(Module& m, ValueId bit, std::size_t index) {
+  auto& op = m.opMut(m.producerOf(bit));
+  if (op.kind != OpKind::Measure) throw std::invalid_argument("expected measurement result");
+  for (auto& attr : op.attributes) if (attr.name == "clbit") {
+    attr.value = static_cast<double>(index);
+    m.numClbits = std::max(m.numClbits, index + 1);
+    return;
+  }
+  op.attributes.push_back(namedDouble("clbit", static_cast<double>(index)));
+  m.numClbits = std::max(m.numClbits, index + 1);
 }
 
 ValueId Builder::reset(ValueId q, Location loc) {

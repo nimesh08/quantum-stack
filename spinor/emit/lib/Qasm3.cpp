@@ -1,165 +1,76 @@
-// spinor/emit/lib/Qasm3.cpp
-
 #include "spinor/emit/Emitters.h"
-
-#include <charconv>
-#include <map>
+#include "spinor/dialect/Circuit.h"
+#include <iomanip>
+#include <set>
 #include <sstream>
-#include <string>
-#include <variant>
-#include <vector>
+#include <stdexcept>
 
 namespace spinor::emit {
-
-namespace {
-
-using namespace spinor::dialect;
-
-std::string fmtDouble(double d) {
-  char buf[64];
-  auto res = std::to_chars(buf, buf + sizeof(buf), d);
-  return std::string(buf, res.ptr);
-}
-
-// Recover physical qubit index from the operand value lineage.
-struct Lineage {
-  std::vector<int> physOf;
-  int nAlloc = 0;
-};
-
-Lineage buildLineage(const Module& m) {
-  Lineage L;
-  L.physOf.assign(m.numValues(), -1);
-  for (uint32_t i = 0; i < m.numOps(); ++i) {
-    const Op& op = m.op(OpId{i});
-    if (op.kind == OpKind::AllocQubit) {
-      L.physOf[op.results.front().v] = L.nAlloc++;
-      continue;
-    }
-    int nq = qubitArity(op.kind);
-    if (nq <= 0) continue;
-    int qResults = nq;
-    if (op.kind == OpKind::Measure) qResults = 0;
-    for (int k = 0; k < qResults && k < (int)op.results.size(); ++k) {
-      L.physOf[op.results[k].v] = L.physOf[op.operands[k].v];
-    }
+using namespace dialect;
+std::string emitQasm3(const Module& m,const registry::ChipInfo* chip,EmitOptions opts) {
+  auto c=flatten(m);std::ostringstream os;os<<std::setprecision(17);
+  os<<"OPENQASM 3.0;\n";
+  if(!opts.braketVerbatim){
+    os<<"include \"stdgates.inc\";\n";
+    std::set<OpKind> kinds;for(const auto& op:c.instructions)kinds.insert(op.kind);
+    // Stable alphabetical formal names also interoperate with importers that
+    // bind custom-gate parameters by their internal sorted parameter list.
+    if(kinds.count(OpKind::PhasedXZ))os<<"gate phased_xz(a_x,b_z,c_axis) q { gphase((a_x+b_z)/2); rz(-c_axis) q; rx(a_x) q; rz(c_axis+b_z) q; }\n";
+    if(kinds.count(OpKind::U1q)||kinds.count(OpKind::Gpi)||kinds.count(OpKind::Gpi2))
+      os<<"gate u1q(a_theta, b_phi) a { rz(-b_phi) a; rx(a_theta) a; rz(b_phi) a; }\n";
+    if(kinds.count(OpKind::Gpi))os<<"gate gpi(phi) a { gphase(pi/2); u1q(pi, phi) a; }\n";
+    if(kinds.count(OpKind::Gpi2))os<<"gate gpi2(phi) a { u1q(pi/2, phi) a; }\n";
+    if(kinds.count(OpKind::Rzz))os<<"gate rzz(theta) a, b { cx a,b; rz(theta) b; cx a,b; }\n";
+    if(kinds.count(OpKind::Rxx)||kinds.count(OpKind::Ms)||kinds.count(OpKind::SqrtISwap)||kinds.count(OpKind::SqrtISwapInv)||kinds.count(OpKind::Syc))os<<"gate rxx(theta) a, b { h a; h b; cx a,b; rz(theta) b; cx a,b; h a; h b; }\n";
+    if(kinds.count(OpKind::SqrtISwap))os<<"gate sqrt_iswap a,b { rxx(-pi/4) a,b; s a; s b; rxx(-pi/4) a,b; sdg a; sdg b; }\n";
+    if(kinds.count(OpKind::SqrtISwapInv)||kinds.count(OpKind::Syc))os<<"gate sqrt_iswap_inv a,b { rxx(pi/4) a,b; s a; s b; rxx(pi/4) a,b; sdg a; sdg b; }\n";
+    if(kinds.count(OpKind::Syc))os<<"gate syc a,b { sqrt_iswap_inv a,b; sqrt_iswap_inv a,b; cp(-pi/6) a,b; }\n";
+    if(kinds.count(OpKind::ISwap))os<<"gate iswap a,b { s a; s b; cz a,b; swap a,b; }\n";
+    if(kinds.count(OpKind::Ms))os<<"gate ms a,b { rxx(pi/2) a,b; }\n";
+    if(kinds.count(OpKind::Ecr))os<<"gate ecr a,b { gphase(pi/4); x a; cx a,b; sdg a; h b; sdg b; h b; }\n";
+    if(c.numQubits)os<<"qubit["<<c.numQubits<<"] q;\n";
   }
-  return L;
-}
-
-double extractAngle(const Op& op, const std::string& key = "angle") {
-  for (const auto& a : op.attributes) {
-    if (a.name == key && std::holds_alternative<double>(a.value)) {
-      return std::get<double>(a.value);
-    }
+  if(c.numClbits)os<<"bit["<<c.numClbits<<"] c;\n";
+  auto qref=[&](int q){return opts.braketVerbatim?"$"+std::to_string(q):"q["+std::to_string(q)+"]";};
+  if(opts.braketVerbatim)os<<"#pragma braket verbatim\nbox {\n";
+  if(c.globalPhase!=0){
+    if(opts.braketVerbatim)os<<"// Scalar global phase (radians): "<<c.globalPhase<<"; retained in physical JSON.\n";
+    else os<<"gphase("<<c.globalPhase<<");\n";
   }
-  return 0.0;
-}
-
-// Output qubit reference: $N when `verbatim` else q[N].
-std::string qref(int p, bool verbatim) {
-  if (verbatim) return "$" + std::to_string(p);
-  return "q[" + std::to_string(p) + "]";
-}
-
-}  // namespace
-
-std::string emitQasm3(const Module& m, const registry::ChipInfo* chip,
-                      EmitOptions opts) {
-  std::ostringstream os;
-  os << "OPENQASM 3.1;\n";
-  if (!opts.braketVerbatim) {
-    os << "include \"stdgates.inc\";\n";
+  bool measured=false;
+  if(opts.braketVerbatim)for(const auto& op:c.instructions){
+    if(isControl(op.kind))throw std::runtime_error("Braket verbatim output does not support dynamic control flow");
+    if(op.kind==OpKind::Measure)measured=true;
+    else if(measured&&op.kind!=OpKind::Barrier&&op.kind!=OpKind::GlobalPhase)throw std::runtime_error("Braket verbatim output requires terminal measurements");
   }
-
-  Lineage L = buildLineage(m);
-  std::size_t nQ = static_cast<std::size_t>(L.nAlloc);
-  // Count bit registers (we accumulate a single flat `bit[]`).
-  std::size_t nBits = 0;
-  for (uint32_t i = 0; i < m.numOps(); ++i) {
-    if (m.op(OpId{i}).kind == OpKind::AllocBit) ++nBits;
+  for(const auto& op:c.instructions){
+    if(opts.braketVerbatim&&op.kind==OpKind::Measure)continue;
+    if(op.kind==OpKind::If){os<<"if (c["<<op.clbit<<"] == "<<parameter(op,"condition_value")<<") {\n";continue;}
+    if(op.kind==OpKind::Else){os<<"} else {\n";continue;}
+    if(op.kind==OpKind::EndIf){os<<"}\n";continue;}
+    if(op.kind==OpKind::GlobalPhase){
+      if(opts.braketVerbatim)os<<"// Scalar global phase (radians): "<<parameter(op)<<"\n";
+      else os<<"gphase("<<parameter(op)<<");\n";continue;
+    }
+    if(op.kind==OpKind::Measure){os<<"c["<<op.clbit<<"] = measure "<<qref(op.qubits.at(0))<<";\n";continue;}
+    if(op.kind==OpKind::Barrier){os<<"barrier";for(std::size_t i=0;i<op.qubits.size();++i)os<<(i?", ":" ")<<qref(op.qubits[i]);os<<";\n";continue;}
+    auto name=std::string(opMnemonic(op.kind)).substr(7);
+    if(op.kind!=OpKind::Reset && qubitArity(op.kind)<=0)throw std::runtime_error("OpenQASM cannot emit "+name);
+    if(opts.braketVerbatim&&op.kind==OpKind::Rzz)name="zz";
+    if(opts.braketVerbatim&&op.kind==OpKind::Rxx)name="xx";
+    if(opts.braketVerbatim&&op.kind==OpKind::U1q&&chip&&(chip->vendor=="iqm"||chip->provider=="iqm"||chip->vendor=="aqt"||chip->provider=="aqt"))name="prx";
+    os<<name;
+    if(opts.braketVerbatim&&op.kind==OpKind::Ms)os<<"(0, 0, "<<std::acos(-1.0)/2<<")";
+    else if(op.kind==OpKind::PhasedXZ)os<<'('<<parameter(op,"x")<<", "<<parameter(op,"z")<<", "<<parameter(op,"axis_phase")<<')';
+    else if(op.kind==OpKind::U1q)os<<'('<<parameter(op,"theta")<<", "<<parameter(op,"phi")<<')';
+    else if(op.kind==OpKind::Rx||op.kind==OpKind::Ry||op.kind==OpKind::Rz||op.kind==OpKind::Rxx||op.kind==OpKind::Rzz||op.kind==OpKind::Gpi||op.kind==OpKind::Gpi2)os<<'('<<parameter(op)<<')';
+    for(std::size_t i=0;i<op.qubits.size();++i)os<<(i?", ":" ")<<qref(op.qubits[i]);
+    os<<";\n";
   }
-
-  if (!opts.braketVerbatim) {
-    if (nQ > 0) os << "qubit[" << nQ << "] q;\n";
-    if (nBits > 0) os << "bit[" << nBits << "] c;\n";
-  } else {
-    // Verbatim: physical-qubit mode; the runtime infers the
-    // qubit mapping from `$N` references. We still need a bit
-    // declaration for measurements.
-    if (nBits > 0) os << "bit[" << nBits << "] c;\n";
-  }
-
-  if (opts.braketVerbatim) {
-    os << "#pragma braket verbatim\n";
-    os << "box {\n";
-  }
-
-  // Walk ops.
-  std::size_t nextBitIdx = 0;
-  std::map<std::uint32_t, std::size_t> bitIdxOf;  // value -> bit index
-  std::size_t allocBitCount = 0;
-  for (uint32_t i = 0; i < m.numOps(); ++i) {
-    const Op& op = m.op(OpId{i});
-    if (op.kind == OpKind::AllocQubit) continue;
-    if (op.kind == OpKind::AllocBit) {
-      bitIdxOf[op.results.front().v] = allocBitCount++;
-      continue;
-    }
-    auto indent = opts.braketVerbatim ? "  " : "";
-    int nq = qubitArity(op.kind);
-    if (op.kind == OpKind::Measure) {
-      int p = L.physOf[op.operands[0].v];
-      // The measurement target is the latest bit value the
-      // sim/parser has produced. We assume the bit reg target
-      // index is the per-program ordinal of the measurement.
-      os << indent << "c[" << nextBitIdx << "] = measure "
-         << qref(p, opts.braketVerbatim) << ";\n";
-      ++nextBitIdx;
-      continue;
-    }
-    if (op.kind == OpKind::Reset) {
-      int p = L.physOf[op.operands[0].v];
-      os << indent << "reset " << qref(p, opts.braketVerbatim) << ";\n";
-      continue;
-    }
-    if (op.kind == OpKind::Barrier) {
-      os << indent << "barrier";
-      for (std::size_t k = 0; k < op.operands.size(); ++k) {
-        os << (k == 0 ? " " : ", ");
-        os << qref(L.physOf[op.operands[k].v], opts.braketVerbatim);
-      }
-      os << ";\n";
-      continue;
-    }
-    if (nq <= 0) continue;
-    // Mnemonic.
-    std::string mn{opMnemonic(op.kind)};
-    if (mn.starts_with("spinor.")) mn = mn.substr(7);
-    os << indent << mn;
-    if (op.kind == OpKind::Rx || op.kind == OpKind::Ry ||
-        op.kind == OpKind::Rz || op.kind == OpKind::Rzz ||
-        op.kind == OpKind::Gpi || op.kind == OpKind::Gpi2) {
-      os << "(" << fmtDouble(extractAngle(op)) << ")";
-    } else if (op.kind == OpKind::U1q) {
-      double th = 0, ph = 0;
-      for (const auto& a : op.attributes) {
-        if (a.name == "theta") th = std::get<double>(a.value);
-        else if (a.name == "phi") ph = std::get<double>(a.value);
-      }
-      os << "(" << fmtDouble(th) << ", " << fmtDouble(ph) << ")";
-    }
-    for (int k = 0; k < nq && k < (int)op.operands.size(); ++k) {
-      os << (k == 0 ? " " : ", ");
-      os << qref(L.physOf[op.operands[k].v], opts.braketVerbatim);
-    }
-    os << ";\n";
-  }
-
-  if (opts.braketVerbatim) {
-    os << "}\n";
+  if(opts.braketVerbatim){
+    os<<"}\n";
+    for(const auto& op:c.instructions)if(op.kind==OpKind::Measure)os<<"c["<<op.clbit<<"] = measure "<<qref(op.qubits.at(0))<<";\n";
   }
   return os.str();
 }
-
-}  // namespace spinor::emit
+}

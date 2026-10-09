@@ -1,0 +1,5 @@
+include setup.py
+include README.md
+recursive-include spinor_submit/cassettes *.json
+recursive-include qstack/data/registry *.yaml
+include qstack/providers/CONTRACTS.md

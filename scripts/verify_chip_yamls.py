@@ -13,8 +13,7 @@ Checks performed:
 
 1.  Every YAML parses cleanly.
 2.  Required keys are present.
-3.  ``provider`` is one of the known providers (post-Step-2:
-    ``ibm aws azure local qci anyon tii alicebob``).
+3.  Vendor, access routes, readiness and schema metadata are explicit.
 4.  Every gate in ``native_gates`` is one the lexer accepts. The
     accepted set is read directly from
     ``spinor/parser/cpp/lib/Lexer.cpp`` so the check stays canonical.
@@ -27,8 +26,9 @@ Checks performed:
     ``verified-upstream: YYYY-MM-DD`` line.
 8.  Smoke compile (only if ``spinorc`` is on ``PATH`` or
     ``$SPINORC_BIN``): compile a tiny Bell program against each chip
-    and assert success or that failure is a precise W6 / W7 because
-    the chip does not have a needed gate.
+    and assert success, except for the documented one-qubit cat target
+    whose capacity cannot support a Bell program. No missing-gate or
+    missing-recipe fallback is accepted.
 """
 
 from __future__ import annotations
@@ -54,12 +54,14 @@ LEXER_CPP = REPO_ROOT / "spinor" / "parser" / "cpp" / "lib" / "Lexer.cpp"
 KNOWN_PROVIDERS = {
     "ibm", "aws", "azure", "local",
     "qci", "anyon", "tii", "alicebob",
+    "google", "quantinuum", "ionq", "rigetti", "iqm", "oqc", "aqt", "qibolab",
 }
 
 REQUIRED_TOP_KEYS = {
     "id", "provider", "qubits", "native_gates",
     "coupling_map", "supports", "calibration",
     "decomposition", "pricing", "notes",
+    "vendor", "readiness", "routes", "formats", "parameter_units", "capability_verified", "capability_provenance",
 }
 
 BUILTIN_TOPOLOGIES = {"linear_n", "all_to_all"}
@@ -150,7 +152,7 @@ def check_one(path: pathlib.Path, lexer_gates: set[str]) -> list[Failure]:
     if ent and ent not in lexer_gates:
         fails.append(Failure(
             cid, f"entangler {ent!r} not in lexer set"))
-    if two.get("entangler_count_max") != 3:
+    if two.get("entangler_count_max") not in ({0, 3} if qubits == 1 else {3}):
         fails.append(Failure(
             cid, "decomposition.two_qubit.entangler_count_max must be 3"))
     pr = data.get("pricing") or {}
@@ -159,7 +161,7 @@ def check_one(path: pathlib.Path, lexer_gates: set[str]) -> list[Failure]:
     notes = str(data.get("notes") or "")
     if "source:" not in notes:
         fails.append(Failure(cid, "notes missing 'source:' citation"))
-    if not re.search(r"verified-upstream:\s*\d{4}-\d{2}-\d{2}", notes):
+    if data.get("capability_verified") and not re.search(r"verified-upstream:\s*\d{4}-\d{2}-\d{2}", notes):
         fails.append(Failure(
             cid, "notes missing 'verified-upstream: YYYY-MM-DD'"))
     return fails
@@ -183,6 +185,8 @@ def find_spinorc() -> str | None:
     if on_path:
         return on_path
     here = REPO_ROOT / "build" / "spinor" / "cli" / "spinorc"
+    if os.name == "nt":
+        here = here.with_suffix(".exe")
     if here.exists():
         return str(here)
     return None
@@ -228,12 +232,9 @@ def smoke_compile(chips: Iterable[str], spinorc: str) -> tuple[list[Failure], li
             if r.returncode == 0:
                 continue
             err = r.stderr or ""
-            if "W6" in err or "W7" in err:
-                continue
-            if "emitCX: no recipe for entangler" in err:
-                soft.append(Failure(
-                    cid, "compiler does not yet ship a KAK-CZ/CX recipe "
-                         "(known gap; tracked in chips_unsupported.md)"))
+            capacity = yaml.safe_load((CHIPS_DIR / f"{cid}.yaml").read_text())["qubits"]
+            if capacity < 2 and any(text in err.lower() for text in ("capacity", "qubit", "placement")):
+                soft.append(Failure(cid, "documented one-qubit target rejects the two-qubit Bell program"))
                 continue
             hard.append(Failure(
                 cid,
@@ -258,6 +259,9 @@ def main() -> int:
     print(f"checking {len(chips)} chip YAML files in "
           f"{CHIPS_DIR.relative_to(REPO_ROOT)}")
     all_fails: list[Failure] = []
+    vendors = {yaml.safe_load(p.read_text())["vendor"] for p in chips}
+    if len(chips) != 31 or len(vendors) != 11:
+        all_fails.append(Failure("registry", "expected all 31 profiles across 11 hardware vendors"))
     for p in chips:
         fails = check_one(p, lexer_gates)
         for f in fails:

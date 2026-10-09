@@ -75,11 +75,14 @@ enum class OpKind : std::uint16_t {
   Ecr,
   Ms,    // 2q
   Rzz,   // 2q with angle
+  Rxx,   // exp(-i angle XX/2)
   Sx,    // 1q
   Sxdg,  // 1q
   Gpi,   // 1q with angle
   Gpi2,  // 1q with angle
   U1q,   // 1q with two angles (theta, phi)
+  PhasedXZ, SqrtISwap, SqrtISwapInv, Syc, ISwap,
+  If, Else, EndIf, GlobalPhase,
   // measurement / reset / barrier
   Measure,
   Reset,
@@ -200,6 +203,12 @@ class Module {
   // attributes
   std::string targetAttr;  // "generic" or a device id
   std::string name = "main";
+  // Program U = exp(i*globalPhase) times the ordered gate sequence.
+  double globalPhase = 0.0;
+  std::size_t numClbits = 0;
+  // Final physical wire for each original logical qubit, after routing/layout.
+  std::vector<int> finalLayout;
+  std::vector<int> initialLayout;
 
   // value table
   ValueId addValue(Type t, OpId producer);
@@ -267,6 +276,15 @@ class Builder {
   ValueId sxdg(ValueId q, Location loc = {});
   ValueId gpi(double angle, ValueId q, Location loc = {});
   ValueId gpi2(double angle, ValueId q, Location loc = {});
+  ValueId phasedXZ(double x,double z,double axisPhase,ValueId q,Location loc = {});
+  std::pair<ValueId,ValueId> sqrtISwap(ValueId a,ValueId b,Location loc = {});
+  std::pair<ValueId,ValueId> iSwap(ValueId a,ValueId b,Location loc = {});
+  std::pair<ValueId,ValueId> sqrtISwapInv(ValueId a,ValueId b,Location loc = {});
+  std::pair<ValueId,ValueId> syc(ValueId a,ValueId b,Location loc = {});
+  void beginIf(std::size_t clbit, bool value, Location loc = {});
+  void elseBranch(Location loc = {});
+  void endIf(Location loc = {});
+  void globalPhase(double angle, Location loc = {});
   ValueId u1q(double theta, double phi, ValueId q, Location loc = {});
 
   // native two-qubit
@@ -274,6 +292,8 @@ class Builder {
                                   Location loc = {});
   std::pair<ValueId, ValueId> ms(ValueId a, ValueId b, Location loc = {});
   std::pair<ValueId, ValueId> rzz(double angle, ValueId a, ValueId b,
+                                  Location loc = {});
+  std::pair<ValueId, ValueId> rxx(double angle, ValueId a, ValueId b,
                                   Location loc = {});
 
   // measure / reset / barrier
@@ -301,5 +321,8 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag);
 // every operand has the right type, results are unique, attributes
 // match the op's expected set, target is set.
 void verify(const Module& m, Diagnostics& diag);
+
+// Assign a measurement result to its declared classical register slot.
+void setMeasurementTarget(Module& m, ValueId bit, std::size_t index);
 
 }  // namespace spinor::dialect

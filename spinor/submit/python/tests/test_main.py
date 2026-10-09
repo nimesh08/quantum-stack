@@ -157,4 +157,7 @@ def test_main_api_key_file_resolves(bell_qasm, tmp_path, capsys, monkeypatch):
         "--api-key-file", str(keyfile),
     ])
     assert rc == 0
-    assert os.environ.get("IBM_QUANTUM_TOKEN") == "MY-IBM-TOKEN-123"
+    # Credential resolution no longer mutates the caller's environment.
+    assert os.environ.get("IBM_QUANTUM_TOKEN") is None
+    from qstack.config import resolve_config
+    assert resolve_config("ibm", {"api_key_file": str(keyfile)}).values["api_key"] == "MY-IBM-TOKEN-123"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import ast
 import inspect
+import math
 import textwrap
 from typing import Any, Callable, List, Optional
 from ._errors import UnsupportedConstructError
@@ -10,7 +11,7 @@ from ._errors import UnsupportedConstructError
 _GATE_METHODS = {
     "h", "x", "y", "z", "s", "sdg", "t", "tdg",
     "rx", "ry", "rz", "cx", "cz", "swap",
-    "sx", "sxdg", "ecr", "ms", "rzz",
+    "sx", "sxdg", "ecr", "ms", "rzz", "rxx",
     "gpi", "gpi2", "u1q",
     "cnot", "hadamard", "phase",
 }
@@ -25,6 +26,14 @@ def _const_value(node: ast.AST) -> Optional[Any]:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         v = _const_value(node.operand)
         return -v if v is not None else None
+    if isinstance(node, ast.BinOp):
+        lhs, rhs = _const_value(node.left), _const_value(node.right)
+        if not isinstance(lhs, (int, float)) or not isinstance(rhs, (int, float)):
+            return None
+        if isinstance(node.op, ast.Add): return lhs + rhs
+        if isinstance(node.op, ast.Sub): return lhs - rhs
+        if isinstance(node.op, ast.Mult): return lhs * rhs
+        if isinstance(node.op, ast.Div) and rhs != 0: return lhs / rhs
     return None
 
 
@@ -78,7 +87,7 @@ class Translator(ast.NodeVisitor):
             getattr(node, "col_offset", 0))
 
     # ----- entry ----------------------------------------------------------
-    def translate(self, fn: Callable[..., Any]) -> str:
+    def translate(self, fn: Callable[..., Any], bindings: Optional[dict[str, Any]] = None) -> str:
         """Pull the function source, parse, walk, return Phonon text."""
         try:
             src = inspect.getsource(fn)
@@ -101,6 +110,18 @@ class Translator(ast.NodeVisitor):
                 break
         if func is None:
             raise UnsupportedConstructError("no `def` in kernel source")
+        if bindings:
+            for name, value in bindings.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise UnsupportedConstructError(f"parameter '{name}' must be a finite int or float")
+            class BindParameters(ast.NodeTransformer):
+                def visit_Name(self, node):
+                    if isinstance(node.ctx, ast.Store) and node.id in bindings:
+                        raise UnsupportedConstructError(f"rebinding kernel parameter '{node.id}'")
+                    if isinstance(node.ctx, ast.Load) and node.id in bindings:
+                        return ast.copy_location(ast.Constant(value=bindings[node.id]), node)
+                    return node
+            func = BindParameters().visit(func)
         self.func_name = func.name
         self.lines = [f"target {self.target}"]
         # Render the kernel as a phonon `def` (the engine wraps it in a
@@ -115,18 +136,26 @@ class Translator(ast.NodeVisitor):
         # because the engine accepts that form.
         # Pre-pass: identify the QReg declaration so we can emit `qubit q[N]`
         # at the top of the program before any gate stmts.
-        qreg_size = self._find_qreg(fn.body)
-        if qreg_size is None:
+        declarations = []
+        for stmt in fn.body:
+            declaration = self._find_qreg([stmt])
+            if declaration:
+                declarations.append(declaration)
+        if not declarations:
             raise UnsupportedConstructError(
-                "kernel must contain `q = photon.QReg(N)` exactly once")
-        self.qreg_var, n = qreg_size
-        self.qregs[self.qreg_var] = n
+                "kernel must contain a QReg with a positive integer size")
         # Reset to top-level (no `def { ... }` wrapper at M4; the engine
         # accepts a flat Phonon program).
         self.indent = 0
-        self._emit(f"qubit {self.qreg_var}[{n}]")
-        self._emit(f"bit __c_{self.qreg_var}[{n}]")
-        for stmt in fn.body:
+        for name, n in declarations:
+            if name in self.qregs:
+                raise UnsupportedConstructError(f"duplicate quantum register '{name}'")
+            self.qregs[name] = n
+            self._emit(f"qubit {name}[{n}]")
+            self._emit(f"bit __c_{name}[{n}]")
+        for index, stmt in enumerate(fn.body):
+            if isinstance(stmt, ast.Return) and index + 1 != len(fn.body):
+                raise self._err("statements after an early return are unsupported", stmt)
             self._visit_stmt(stmt)
 
     def _find_qreg(self, body: List[ast.stmt]) -> Optional[tuple[str, int]]:
@@ -140,9 +169,9 @@ class Translator(ast.NodeVisitor):
                     (isinstance(fn, ast.Attribute) and fn.attr == "QReg") or
                     (isinstance(fn, ast.Name) and fn.id == "QReg")
                 )
-                if is_qreg and stmt.value.args:
+                if is_qreg and len(stmt.value.args) == 1 and not stmt.value.keywords:
                     n = _const_value(stmt.value.args[0])
-                    if isinstance(n, int) and n > 0:
+                    if isinstance(n, int) and not isinstance(n, bool) and 0 < n <= 1000000:
                         return (stmt.targets[0].id, n)
         return None
 
@@ -182,6 +211,8 @@ class Translator(ast.NodeVisitor):
             # QReg declaration already handled; skip.
             if (isinstance(node.value, ast.Call) and
                     self._is_qreg_call(node.value)):
+                if target not in self.qregs:
+                    raise self._err("QReg must have a positive static size and be declared at kernel scope", node)
                 return
             # measure() returning a bit list is recorded so future
             # `if c == 1:` can resolve to a phonon bit reference.
@@ -190,6 +221,8 @@ class Translator(ast.NodeVisitor):
                 isinstance(node.value.func.value, ast.Name) and
                 node.value.func.value.id in self.qregs and
                 node.value.func.attr == "measure"):
+                if node.value.args or node.value.keywords:
+                    raise self._err("measure() accepts no arguments; index the returned measured bits", node.value)
                 qname = node.value.func.value.id
                 # Emit per-slot measure into __c_q[i] bits.
                 for i in range(self.qregs[qname]):
@@ -220,6 +253,8 @@ class Translator(ast.NodeVisitor):
         raise self._err("standalone expression", node)
 
     def _emit_call(self, call: ast.Call) -> None:
+        if call.keywords:
+            raise self._err("keyword gate arguments are not supported", call)
         f = call.func
         if not isinstance(f, ast.Attribute):
             raise self._err(f"free-function call '{ast.dump(f)}'", call)
@@ -251,11 +286,11 @@ class Translator(ast.NodeVisitor):
                 t, p, i = args_text
                 self._emit(f"u1q({t}, {p}) {recv}[{i}]")
                 return
-            if method == "rzz":
+            if method in ("rzz", "rxx"):
                 if len(args_text) != 3:
-                    raise self._err("rzz expects (angle, a, b)", call)
+                    raise self._err(f"{method} expects (angle, a, b)", call)
                 a, ia, ib = args_text
-                self._emit(f"rzz({a}) {recv}[{ia}], {recv}[{ib}]")
+                self._emit(f"{method}({a}) {recv}[{ia}], {recv}[{ib}]")
                 return
             if method in ("cx", "cnot", "cz", "swap", "ecr", "ms"):
                 if len(args_text) != 2:
@@ -271,12 +306,7 @@ class Translator(ast.NodeVisitor):
             self._emit(f"{gname} {recv}[{args_text[0]}]")
             return
         if method in _LIB_ROUTINES:
-            # Photon source surface: `q.<routine>(args)`. Phonon doesn't
-            # have library calls natively; we emit a phonon.call op via
-            # the textual `call lib.<name>` placeholder. Phase D's
-            # platform driver may inline; M2's Library.cpp handles it
-            # only at the .pho parse-and-lower path. For the Python
-            # decorator's M4 scope we expand inline here.
+            # Expand supported routines into concrete Phonon instructions.
             self._inline_lib(recv, method, call.args, call); return
         if method in _MEASURE_METHODS:
             # Bare `q.measure()` / `q.measure_int()` as a statement is
@@ -290,9 +320,27 @@ class Translator(ast.NodeVisitor):
     def _inline_lib(self, recv: str, name: str,
                     args: List[ast.expr], call: ast.Call) -> None:
         n = self.qregs[recv]
+        allowed = {"bell_pair": (0, 2), "teleport": (0, 3),
+                   "ghz": (0,), "qft": (0,), "iqft": (0,), "vqe_ansatz": (0, 1)}
+        if name in allowed and len(args) not in allowed[name]:
+            raise self._err(f"{name} expects argument count in {allowed[name]}", call)
+
+        def constant(arg):
+            try:
+                return _const_value(arg)
+            except (TypeError, ValueError, ArithmeticError):
+                return None
+
+        def indices(defaults):
+            values = [constant(arg) for arg in args] if args else list(defaults)
+            if any(type(value) is not int for value in values):
+                raise self._err(f"{name}: indices must be compile-time integers", call)
+            if any(value < 0 or value >= n for value in values) or len(set(values)) != len(values):
+                raise self._err(f"{name} requires distinct in-range qubits", call)
+            return values
+
         if name == "bell_pair":
-            a = _const_value(args[0]) if args else 0
-            b = _const_value(args[1]) if len(args) > 1 else 1
+            a, b = indices((0, 1))
             self._emit(f"h {recv}[{a}]")
             self._emit(f"cx {recv}[{a}], {recv}[{b}]"); return
         if name == "ghz":
@@ -311,11 +359,14 @@ class Translator(ast.NodeVisitor):
                     self._emit(f"rz({-theta/2}) {recv}[{j}]")
                     self._emit(f"cx {recv}[{k}], {recv}[{j}]")
                     self._emit(f"rz({theta/2}) {recv}[{j}]")
+                    self._emit(f"gphase({theta/4})")
             for i in range(n // 2):
                 self._emit(f"swap {recv}[{i}], {recv}[{n - 1 - i}]")
             return
         if name == "vqe_ansatz":
-            depth = _const_value(args[0]) if args else 1
+            depth = constant(args[0]) if args else 1
+            if type(depth) is not int or depth < 1 or depth * n > 100000:
+                raise self._err("vqe_ansatz: depth must be a positive integer and expansion must not exceed 100000 qubit-layers", call)
             for d in range(depth):
                 for i in range(n):
                     theta = 0.1 * (d * n + i)
@@ -324,10 +375,7 @@ class Translator(ast.NodeVisitor):
                     self._emit(f"cx {recv}[{i}], {recv}[{i+1}]")
             return
         if name == "teleport":
-            # Slots default 0,1,2; folder allows literal indices.
-            src = _const_value(args[0]) if len(args) > 0 else 0
-            anc = _const_value(args[1]) if len(args) > 1 else 1
-            dst = _const_value(args[2]) if len(args) > 2 else 2
+            src, anc, dst = indices((0, 1, 2))
             self._emit(f"h {recv}[{anc}]")
             self._emit(f"cx {recv}[{anc}], {recv}[{dst}]")
             self._emit(f"cx {recv}[{src}], {recv}[{anc}]")
@@ -342,21 +390,7 @@ class Translator(ast.NodeVisitor):
             self._emit("}")
             return
         if name == "grover":
-            rounds = 1
-            for a in args:
-                v = _const_value(a)
-                if isinstance(v, int): rounds = v
-            for i in range(n): self._emit(f"h {recv}[{i}]")
-            for _ in range(rounds):
-                self._emit('# oracle call (resolved by Phase D)')
-                # Diffusion: H^N X^N CZ-chain X^N H^N.
-                for i in range(n): self._emit(f"h {recv}[{i}]")
-                for i in range(n): self._emit(f"x {recv}[{i}]")
-                for i in range(n - 1):
-                    self._emit(f"cz {recv}[{i}], {recv}[{n-1}]")
-                for i in range(n): self._emit(f"x {recv}[{i}]")
-                for i in range(n): self._emit(f"h {recv}[{i}]")
-            return
+            raise self._err("grover requires a bound oracle and exact diffusion; callable oracle lowering is unsupported", call)
         if name == "iqft":
             import math
             for i in range(n // 2):
@@ -369,6 +403,7 @@ class Translator(ast.NodeVisitor):
                     self._emit(f"rz({-theta/2}) {recv}[{j}]")
                     self._emit(f"cx {recv}[{k}], {recv}[{j}]")
                     self._emit(f"rz({theta/2}) {recv}[{j}]")
+                    self._emit(f"gphase({theta/4})")
                 self._emit(f"h {recv}[{j}]")
             return
         raise self._err(f"library routine '{name}'", call)
@@ -407,18 +442,26 @@ class Translator(ast.NodeVisitor):
                 len(cmp_.ops) == 1 and isinstance(cmp_.ops[0], ast.Eq)):
             raise self._err(
                 "if-predicate must be `<measured_bit> == <int>`", node)
-        if not isinstance(cmp_.left, ast.Name):
-            raise self._err("if-predicate lhs must be a name", node)
+        lhs = cmp_.left
         rhs = _const_value(cmp_.comparators[0])
         if not isinstance(rhs, int):
             raise self._err("if-predicate rhs must be a literal int", node)
-        var = cmp_.left.id
-        bit_ref = self.measured_bits.get(var, var)
-        # If bit_ref is a `__c_q` register, take slot 0 (matches the
-        # canonical teleport idiom); the user can also `bit c0 =
-        # q.measure()[0]` style which we don't support yet.
-        if bit_ref.startswith("__c_"):
-            bit_ref = bit_ref + "[0]"
+        if isinstance(lhs, ast.Subscript) and isinstance(lhs.value, ast.Name):
+            var = lhs.value.id
+            index = _const_value(lhs.slice)
+            if var not in self.measured_bits or not isinstance(index, int) or index < 0:
+                raise self._err("condition requires a measured bit with a static index", node)
+            bit_ref = f"{self.measured_bits[var]}[{index}]"
+        elif isinstance(lhs, ast.Name):
+            var = lhs.id
+            bit_ref = self.measured_bits.get(var, var)
+            if var in self.measured_bits:
+                qname = bit_ref.removeprefix("__c_")
+                if self.qregs[qname] != 1:
+                    raise self._err("comparison of a measured register requires an explicit bit index", node)
+                bit_ref += "[0]"
+        else:
+            raise self._err("if-predicate lhs must be a scalar or indexed measured bit", node)
         self._emit(f"if ({bit_ref} == {rhs}) {{")
         self.indent += 1
         for s in node.body:
@@ -434,6 +477,8 @@ class Translator(ast.NodeVisitor):
             self._emit("}")
 
     def _visit_return(self, node: ast.Return) -> None:
+        if self.indent:
+            raise self._err("return inside a loop or conditional is unsupported", node)
         if node.value is None:
             return
         v = node.value
@@ -442,6 +487,8 @@ class Translator(ast.NodeVisitor):
                 isinstance(v.func.value, ast.Name) and
                 v.func.value.id in self.qregs and
                 v.func.attr in _MEASURE_METHODS):
+            if v.args or v.keywords:
+                raise self._err(f"{v.func.attr}() accepts no arguments", v)
             qname = v.func.value.id
             for i in range(self.qregs[qname]):
                 self._emit(f"__c_{qname}[{i}] = measure {qname}[{i}]")
@@ -451,5 +498,6 @@ class Translator(ast.NodeVisitor):
             node)
 
 
-def translate(fn: Callable[..., Any], target: str = "generic") -> str:
-    return Translator(target).translate(fn)
+def translate(fn: Callable[..., Any], target: str = "generic", *,
+              bindings: Optional[dict[str, Any]] = None) -> str:
+    return Translator(target).translate(fn, bindings=bindings)

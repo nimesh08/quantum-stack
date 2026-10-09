@@ -32,7 +32,7 @@ TEST(M4_loader, load_ibm_heron_r2) {
   EXPECT_EQ(static_cast<size_t>(c.qubits), static_cast<size_t>(156));
   EXPECT_FALSE(c.allToAll);
   EXPECT_EQ(c.nativeGates.size(), static_cast<size_t>(4));
-  EXPECT_EQ(c.decompose.twoQubitEntangler, std::string("ecr"));
+  EXPECT_EQ(c.decompose.twoQubitEntangler, std::string("cz"));
   EXPECT_EQ(c.decompose.oneQubitPi2Gate, std::string("sx"));
 }
 
@@ -88,7 +88,7 @@ TEST(M4_loader, four_chips_load_same_path) {
   // a code change.
   Diagnostics d;
   Registry r = Registry::load(kRoot, d);
-  EXPECT_EQ(static_cast<size_t>(r.size()), static_cast<size_t>(4));
+  EXPECT_EQ(static_cast<size_t>(r.size()), static_cast<size_t>(31));
   std::vector<std::string> ids = r.ids();
   EXPECT_TRUE(std::find(ids.begin(), ids.end(),
                         std::string("ibm_heron_r2")) != ids.end());
@@ -197,4 +197,53 @@ decomposition:
   EXPECT_CONTAINS(joined, "KAK");
 }
 
+static Registry calibrationFixture(const std::string& calibration, Diagnostics& diagnostics) {
+  const auto tmp = std::filesystem::temp_directory_path() / "spinor_m4_calibration";
+  writeFixture(tmp, "calibrated.yaml", R"(
+id: calibrated
+provider: local
+qubits: 4
+native_gates: [rz, ry, cx]
+coupling_map:
+  topology: linear_n
+  size: 4
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+  two_qubit:
+    recipe: kak
+    entangler: cx
+    entangler_count_max: 3
+calibration:
+)" + calibration);
+  return Registry::load(tmp, diagnostics);
+}
+
+TEST(M4_loader, normalized_calibration_errors) {
+  Diagnostics d;
+  auto r = calibrationFixture(
+      "  one_qubit_errors: [[0, 0.001], [1, 0.002]]\n"
+      "  readout_errors: [[0, 0.01], [1, 0.02]]\n"
+      "  two_qubit_errors: [[0, 1, 0.03], [3, 2, 0.004]]\n", d);
+  EXPECT_FALSE(d.hasErrors());EXPECT_TRUE(r.has("calibrated"));
+  const auto& c = r.get("calibrated");
+  EXPECT_EQ(c.calibrationOneQubitError.at(0), 0.001);
+  EXPECT_EQ(c.calibrationReadoutError.at(1), 0.02);
+  EXPECT_EQ(c.calibrationTwoQubitError.at(std::pair{3, 2}), 0.004);
+}
+TEST(M4_loader, rejects_invalid_calibration) {
+  for (const auto& text : {
+      "  one_qubit_errors: [[0, -0.1]]\n",
+      "  one_qubit_errors: [[0, 1]]\n",
+      "  one_qubit_errors: [[0.5, 0.1]]\n",
+      "  readout_errors: [[4, 0.1]]\n",
+      "  readout_errors: [[1, 0.1], [1, 0.2]]\n",
+      "  two_qubit_errors: [[0, 0, 0.1]]\n",
+      "  two_qubit_errors: [[0, 3, 0.1]]\n",
+      "  two_qubit_errors: [[0, 1]]\n"}) {
+    Diagnostics d;auto r = calibrationFixture(text, d);
+    EXPECT_TRUE(d.hasErrors());EXPECT_FALSE(r.has("calibrated"));
+  }
+}
 SPINOR_TEST_MAIN()

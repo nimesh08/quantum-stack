@@ -43,6 +43,11 @@ struct SubmitResult {
   std::string stderr_text;       // Python's stderr (errors)
 };
 
+// Argument-safe process launch; no shell, independent stdout/stderr drains.
+SubmitResult runProcess(const std::vector<std::string>& argv,
+                        const std::map<std::string, std::string>& envOverrides = {});
+SubmitResult runQstack(const std::vector<std::string>& args);
+
 // Build the argv for the python subprocess. Exposed so unit tests can
 // assert the shape without actually spawning Python.
 std::vector<std::string> buildPythonArgv(const SubmitRequest& r);

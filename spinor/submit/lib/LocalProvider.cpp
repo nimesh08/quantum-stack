@@ -31,31 +31,7 @@ Job LocalProvider::submit(const dialect::Module& m,
   j.status = "completed";
   Histogram hist;
   hist.shots = shots;
-  sim::StateVector sv = sim::simulate(m);
-  // Sample shots from |amp|^2 distribution.
-  std::vector<double> probs(sv.amps.size());
-  double total = 0.0;
-  for (std::size_t i = 0; i < sv.amps.size(); ++i) {
-    probs[i] = std::norm(sv.amps[i]);
-    total += probs[i];
-  }
-  if (total <= 0.0) {
-    // Empty/all-zero state — fall back to uniform.
-    for (auto& p : probs) p = 1.0 / static_cast<double>(probs.size());
-    total = 1.0;
-  }
-  for (auto& p : probs) p /= total;
-  std::uniform_real_distribution<double> u(0.0, 1.0);
-  for (std::size_t s = 0; s < shots; ++s) {
-    double r = u(rng_);
-    double acc = 0.0;
-    std::size_t pick = probs.size() - 1;
-    for (std::size_t i = 0; i < probs.size(); ++i) {
-      acc += probs[i];
-      if (r <= acc) { pick = i; break; }
-    }
-    ++hist.counts[bitstring(pick, sv.qubits)];
-  }
+  hist.counts = sim::sample(m, shots, rng_);
   jobs_[j.id] = {j.status, std::move(hist)};
   return j;
 }

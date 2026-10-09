@@ -1,63 +1,55 @@
 # heisenberg-photon
 
-The Heisenberg Quantum Stack compiler engine, packaged for Python.
+The Photon Python facade, C++ compiler engine, and native command-line tools.
 
-```bash
-pip install heisenberg-photon
+```console
+python -m pip install heisenberg-photon
 ```
 
-## What ships in the wheel
+The wheel includes:
 
-- `photon._engine` — the nanobind C++ extension that drives the
-  full Photon → Phonon → Spinor pipeline.
-- `photon` — the Python facade with `@kernel`, `QReg`, and
-  `compile_phonon`.
-- `spinorc` and `photonc` — the everyday CLI binaries, dropped on
-  `$PATH` after install. (`phononc` and `photonc-cxx` are
-  power-user-only; they ship as signed binaries on GitHub Releases
-  for users who want them.)
-- The chip registry: `photon/registry/chips/*.yaml` and
-  `photon/registry/topologies/*.yaml`. The launcher's
-  `find_spinor_registry()` looks for them at
-  `Path(photon.__file__).parent / "registry"`.
+- the `photon._engine` nanobind extension and Python `kernel`/`QReg` facade;
+- the `photonc`, `phononc`, `spinorc`, and `photonc-cxx` native binaries,
+  with console launchers installed on PATH;
+- all 31 target profiles and topology data;
+- the matching qstack runtime as a declared dependency.
 
-## Quickstart
+## Local execution
+
+Save this example in a Python file so the decorator can read its source:
 
 ```python
-from photon import kernel, compile_phonon
+from photon import QReg, kernel
 
-@kernel
-def bell() -> bit[2]:
+@kernel(target="ibm_heron_r2")
+def bell():
     q = QReg(2)
     q.h(0)
     q.cx(0, 1)
     return q.measure()
+
+counts = bell.run(shots=1024, mode="local")
+print(counts)
 ```
 
-Or from the shell (the `photonc` binary lands on `$PATH`):
+Local mode invokes the real C++ compiler and simulator. Hardware execution
+requires an explicit live mode and provider configuration; historical profiles
+are not evidence that a device is currently accessible.
 
-```bash
-echo 'target generic
-qubit q[2]
-bit c[2]
-h q[0]
-cx q[0], q[1]
-c = measure q' > bell.spn
+## Building from a checkout
 
-spinorc compile -t ibm_heron_r2 bell.spn
+From the repository root:
+
+```console
+python -m build --wheel photon/bindings/python
 ```
 
-## Where this fits
+The build needs a C++20 compiler and CMake 3.28 or newer. The core compiler does
+not require LLVM/MLIR. The build frontend installs the pinned nanobind binding
+dependency. Release CI builds and tests Python 3.12/3.13 wheels on supported
+Linux, macOS and Windows architectures, including a fresh local Bell execution.
 
-This package is the **compiler half** of the Heisenberg Quantum Stack.
-The platform half — the FastAPI service `jobsvc`, the calibration
-scheduler, the playground UI, and the `heisenberg run` launcher —
-lives at <https://github.com/nimesh08/heisenberg-platform> and depends
-on this wheel from PyPI.
+The installed-wheel test is `tests/installed_smoke.py`; run it using the
+interpreter into which the wheel and matching runtime were installed.
 
-## License
-
-[Apache-2.0](https://github.com/nimesh08/quantum-stack/blob/main/LICENSE).
-
-Heisenberg, Spinor, Phonon and Photon were designed and implemented
-by **Nimesh Cheedella**.
+Licensed under Apache-2.0. The full license is included in the wheel.

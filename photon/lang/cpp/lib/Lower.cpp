@@ -2,6 +2,8 @@
 #include "photon/lang/Lower.h"
 #include "photon/lang/Library.h"
 #include <cmath>
+#include <numbers>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -26,6 +28,12 @@ struct Lowerer {
   std::unordered_map<std::string, std::vector<pd::ValueId>> bslots;
   std::unordered_map<std::string, pd::ValueId> classicals;
   std::unordered_map<std::string, std::int64_t> intConsts;
+  std::unordered_map<std::string, double> angleConsts;
+  std::unordered_map<std::string, std::size_t> bitBase;
+  std::size_t nextBit = 0;
+  std::size_t expandedIterations = 0;
+  bool returned = false;
+  int runtimeDepth=0;
   bool in_def_ = false;  // true while inside a phonon.def body.
 
   Lowerer(const Module& m) : src(m), b(out) { out.targetAttr = m.target; }
@@ -43,7 +51,7 @@ struct Lowerer {
     if (!e) return std::nullopt;
     switch (e->kind) {
       case ExprKind::IntLit: return e->int_value;
-      case ExprKind::RealLit: return static_cast<std::int64_t>(e->real_value);
+      case ExprKind::RealLit: return std::nullopt;
       case ExprKind::Ident: {
         auto it = intConsts.find(e->text);
         if (it != intConsts.end()) return it->second;
@@ -51,17 +59,22 @@ struct Lowerer {
       }
       case ExprKind::UnaryMinus: {
         auto v = foldInt(e->children[0]);
-        if (!v) return std::nullopt;
+        if (!v || *v == std::numeric_limits<std::int64_t>::min()) return std::nullopt;
         return -*v;
       }
       case ExprKind::BinOp: {
         auto a = foldInt(e->children[0]);
         auto bv = foldInt(e->children[1]);
         if (!a || !bv) return std::nullopt;
-        if (e->text == "+") return *a + *bv;
-        if (e->text == "-") return *a - *bv;
-        if (e->text == "*") return *a * *bv;
-        if (e->text == "/" && *bv != 0) return *a / *bv;
+        long double result;
+        if (e->text == "+") result = static_cast<long double>(*a) + *bv;
+        else if (e->text == "-") result = static_cast<long double>(*a) - *bv;
+        else if (e->text == "*") result = static_cast<long double>(*a) * *bv;
+        else if (e->text == "/" && *bv != 0 &&
+                 !(*a == std::numeric_limits<std::int64_t>::min() && *bv == -1)) return *a / *bv;
+        else return std::nullopt;
+        if (result >= std::numeric_limits<std::int64_t>::min() &&
+            result <= std::numeric_limits<std::int64_t>::max()) return static_cast<std::int64_t>(result);
         return std::nullopt;
       }
       default: return std::nullopt;
@@ -74,7 +87,7 @@ struct Lowerer {
     switch (e->kind) {
       case ExprKind::IntLit:  return static_cast<double>(e->int_value);
       case ExprKind::RealLit: return e->real_value;
-      case ExprKind::Pi:      return M_PI;
+      case ExprKind::Pi:      return std::numbers::pi;
       case ExprKind::UnaryMinus: {
         auto v = foldReal(e->children[0]);
         if (!v) return std::nullopt;
@@ -91,6 +104,8 @@ struct Lowerer {
         return std::nullopt;
       }
       case ExprKind::Ident: {
+        auto angle = angleConsts.find(e->text);
+        if (angle != angleConsts.end()) return angle->second;
         auto it = intConsts.find(e->text);
         if (it != intConsts.end()) return static_cast<double>(it->second);
         return std::nullopt;
@@ -132,7 +147,7 @@ struct Lowerer {
         err(gate + " expects an angle as first argument", aloc); return;
       }
       auto angle = foldReal(args[0]);
-      if (!angle) {
+      if (!angle || !std::isfinite(*angle)) {
         err("rotation angle must fold at compile time", aloc); return;
       }
       if (gate == "rx") r = b.rx(*angle, q, L);
@@ -146,7 +161,7 @@ struct Lowerer {
       }
       auto th = foldReal(args[0]);
       auto ph = foldReal(args[1]);
-      if (!th || !ph) {
+      if (!th || !ph || !std::isfinite(*th) || !std::isfinite(*ph)) {
         err("u1q angles must fold at compile time", aloc); return;
       }
       r = b.u1q(*th, *ph, q, L);
@@ -166,6 +181,7 @@ struct Lowerer {
       err("unknown qreg '" + reg + "'", aloc); return;
     }
     auto& slots = it->second;
+    if (a == b_) { err("two-qubit gate requires distinct qubits", aloc); return; }
     if (a < 0 || b_ < 0 ||
         a >= static_cast<std::int64_t>(slots.size()) ||
         b_ >= static_cast<std::int64_t>(slots.size())) {
@@ -179,11 +195,11 @@ struct Lowerer {
     else if (gate == "swap") r = b.swap(qa, qb, L);
     else if (gate == "ecr")  r = b.ecr(qa, qb, L);
     else if (gate == "ms")   r = b.ms(qa, qb, L);
-    else if (gate == "rzz") {
+    else if (gate == "rzz" || gate == "rxx") {
       if (args.empty()) { err("rzz expects angle", aloc); return; }
       auto ang = foldReal(args[0]);
-      if (!ang) { err("rzz angle must fold", aloc); return; }
-      r = b.rzz(*ang, qa, qb, L);
+      if (!ang || !std::isfinite(*ang)) { err("two-qubit angle must fold to a finite value", aloc); return; }
+      r = gate == "rxx" ? b.rxx(*ang, qa, qb, L) : b.rzz(*ang, qa, qb, L);
     } else {
       err("unsupported 2q gate '" + gate + "'", aloc); return;
     }
@@ -193,7 +209,10 @@ struct Lowerer {
 
   void lowerStmt(const Stmt& s);
   void lowerBlock(const std::vector<StmtPtr>& body) {
-    for (const auto& s : body) if (s) lowerStmt(*s);
+    for (const auto& s : body) {
+      if (fatal || returned) break;
+      if (s) lowerStmt(*s);
+    }
   }
   void lowerFunction(const Function& f);
 };
@@ -201,6 +220,9 @@ struct Lowerer {
 void Lowerer::lowerStmt(const Stmt& s) {
   if (fatal) return;
   pd::Location L = loc(s.loc);
+  if(runtimeDepth && (s.kind==StmtKind::VarDecl||s.kind==StmtKind::Assign||s.kind==StmtKind::ReturnStmt)){
+    err("runtime branches cannot declare variables, change compile-time scalars, or return",s.loc);return;
+  }
   switch (s.kind) {
     case StmtKind::VarDecl: {
       if (s.decl_type.kind == TypeKind::QReg) {
@@ -215,7 +237,9 @@ void Lowerer::lowerStmt(const Stmt& s) {
         std::vector<pd::ValueId> cs;
         cs.reserve(n);
         std::string bname = "__c_" + s.name;
+        bitBase[s.name] = nextBit;
         for (std::uint32_t i = 0; i < n; ++i) cs.push_back(b.allocBit(L));
+        nextBit += n;
         bslots[bname] = std::move(cs);
       } else if (s.decl_type.kind == TypeKind::Int) {
         if (s.init) {
@@ -230,9 +254,27 @@ void Lowerer::lowerStmt(const Stmt& s) {
       } else if (s.decl_type.kind == TypeKind::Angle) {
         if (s.init) {
           auto v = foldReal(s.init);
-          if (v) classicals[s.name] = b.constAngle(*v, L);
+          if (v) {
+            angleConsts[s.name] = *v;
+            classicals[s.name] = b.constAngle(*v, L);
+          }
           else err("angle initializer must fold to a literal", s.loc);
         }
+      } else if (s.decl_type.kind == TypeKind::Bit) {
+        if(!s.init||s.init->kind!=ExprKind::Call){err("Bit initializer must be an indexed measurement",s.loc);return;}
+        auto dot=s.init->text.find('.');auto name=s.init->text.substr(0,dot);
+        if(dot==std::string::npos||s.init->text.substr(dot+1)!="measure"||!qslots.count(name)){
+          err("Bit initializer must be q.measure(index)",s.loc);return;
+        }
+        auto& qs=qslots[name];std::optional<std::int64_t> index;
+        if(s.init->children.size()==1)index=foldInt(s.init->children[0]);
+        else if(s.init->children.empty()&&qs.size()==1)index=0;
+        if(!index||*index<0||static_cast<std::size_t>(*index)>=qs.size()){
+          err("measurement of a register requires an explicit valid bit index",s.loc);return;
+        }
+        auto bit=b.measure(qs[*index],L);
+        out.opMut(out.producerOf(bit)).attributes.push_back({"clbit",static_cast<double>(bitBase[name]+*index)});
+        classicals[s.name]=bit;
       }
       break;
     }
@@ -246,17 +288,17 @@ void Lowerer::lowerStmt(const Stmt& s) {
       if (gate == "rx" || gate == "ry" || gate == "rz" ||
           gate == "gpi" || gate == "gpi2") skip = 1;
       else if (gate == "u1q") skip = 2;
-      else if (gate == "rzz") skip = 1;  // 2q with angle.
+      else if (gate == "rzz" || gate == "rxx") skip = 1;  // 2q with angle.
 
       // Number of qubit indices follows the gate's arity:
       auto needed = [&](const std::string& g) -> int {
         if (g == "cx" || g == "cnot" || g == "cz" || g == "swap" ||
-            g == "ecr" || g == "ms" || g == "rzz") return 2;
+            g == "ecr" || g == "ms" || g == "rzz" || g == "rxx") return 2;
         return 1;
       };
       int qa = needed(gate);
-      if (s.args.size() < skip + static_cast<std::size_t>(qa)) {
-        err("gate '" + gate + "' missing qubit index", s.loc); return;
+      if (s.args.size() != skip + static_cast<std::size_t>(qa)) {
+        err("gate '" + gate + "' has the wrong number of arguments", s.loc); return;
       }
       auto idx0 = foldInt(s.args[skip]);
       if (!idx0) { err("qubit index must fold to a literal int", s.loc); return; }
@@ -282,6 +324,8 @@ void Lowerer::lowerStmt(const Stmt& s) {
       auto& bits = bit->second;
       for (std::size_t i = 0; i < qit->second.size(); ++i) {
         bits[i] = b.measure(qit->second[i], L);
+        out.opMut(out.producerOf(bits[i])).attributes.push_back(
+            {"clbit", static_cast<double>(bitBase[s.receiver] + i)});
       }
       // Note: M2 will use this measurement to compute return values
       // for `q.measure_int()`. M1 leaves the measure ops in the IR
@@ -289,6 +333,7 @@ void Lowerer::lowerStmt(const Stmt& s) {
       break;
     }
     case StmtKind::ReturnStmt: {
+      returned = true;
       // Special-case: `return q.measure_int()` — emit per-slot measures,
       // pack them into an int, return that. This is the canonical
       // Photon return path (see Deep-Dive Part 1 §3 worked example).
@@ -303,17 +348,24 @@ void Lowerer::lowerStmt(const Stmt& s) {
       };
       if (s.init) {
         if (auto recv = isMeasureIntCall(*s.init)) {
+          if (!s.init->children.empty()) {
+            err("measurement-valued return expects no arguments", s.loc); return;
+          }
           auto qit = qslots.find(*recv);
           if (qit == qslots.end()) {
             err("measure on unknown qreg '" + *recv + "'", s.loc); return;
           }
           std::vector<pd::ValueId> bits;
-          for (auto qv : qit->second) bits.push_back(b.measure(qv, L));
+          for (auto qv : qit->second) {
+            auto bit = b.measure(qv, L);
+            out.opMut(out.producerOf(bit)).attributes.push_back(
+                {"clbit", static_cast<double>(bitBase[*recv] + bits.size())});
+            bits.push_back(bit);
+          }
           // Skip phonon.return at top-level (flatten mode); it's only
           // valid inside a phonon.def body.
           if (in_def_) {
-            pd::ValueId rv = bits.empty() ? b.constInt(0, L) : bits.front();
-            b.returnOp(std::span<const pd::ValueId>(&rv, 1), L);
+            err("measurement-valued returns from parameterized functions require bit-packing support", s.loc);
           }
           return;
         }
@@ -323,8 +375,8 @@ void Lowerer::lowerStmt(const Stmt& s) {
             pd::ValueId r = b.constInt(*v, L);
             b.returnOp(std::span<const pd::ValueId>(&r, 1), L);
           }
-        } else if (in_def_) {
-          b.returnOp({}, L);
+        } else {
+          err("unsupported return value", s.loc);
         }
       } else if (in_def_) {
         b.returnOp({}, L);
@@ -337,57 +389,77 @@ void Lowerer::lowerStmt(const Stmt& s) {
       if (!lo || !hi) {
         err("for-loop bounds must fold to literal ints", s.loc); return;
       }
-      pd::ValueId loV = b.constInt(*lo, L);
-      pd::ValueId hiV = b.constInt(*hi, L);
-      auto begin = b.beginFor(s.for_var, loV, hiV, L);
-      // Bind loop variable to the lo bound for in-body indexing.
-      // (Phonon's M4 unroller does the same; this matches D10.)
       auto save = intConsts.find(s.for_var) != intConsts.end()
                       ? std::make_optional(intConsts[s.for_var])
                       : std::nullopt;
-      intConsts[s.for_var] = *lo;
-      lowerBlock(s.body);
+      // Expand before building SSA: every iteration resolves its own indices
+      // and angles, and consumes the previous iteration's qubit values.
+      for (auto i = *lo; i < *hi && !fatal && !returned; ++i) {
+        if (++expandedIterations > 100000) {
+          err("static loop expansion exceeds 100000 iterations", s.loc);
+          break;
+        }
+        intConsts[s.for_var] = i;
+        lowerBlock(s.body);
+      }
       if (save) intConsts[s.for_var] = *save;
       else intConsts.erase(s.for_var);
-      b.endFor(begin, L);
       break;
     }
     case StmtKind::IfStmt: {
-      // For M1 we only support `c[i] == 1` style predicates (matches
-      // Phonon's teleportation corpus). We compile to phonon.if with a
-      // bit-typed predicate.
       if (!s.predicate) { err("if missing predicate", s.loc); return; }
-      // Best-effort: if predicate is a comparison `c == 1`, resolve
-      // c's slot. Otherwise leave a placeholder constInt(0).
-      pd::ValueId pred;
       const Expr& p = *s.predicate;
-      if (p.kind == ExprKind::CmpEq && p.children.size() == 2 &&
-          p.children[0]->kind == ExprKind::Ident) {
-        const auto& cname = p.children[0]->text;
-        auto cit = classicals.find(cname);
-        if (cit != classicals.end()) {
-          auto rhs = foldInt(p.children[1]);
-          pd::ValueId rhsV = b.constInt(rhs.value_or(0), L);
-          pred = b.cmp("==", cit->second, rhsV, L);
-        } else {
-          pred = b.constInt(0, L);
-        }
-      } else {
-        pred = b.constInt(0, L);
+      if (p.children.size() != 2) {
+        err("if predicate must be a compile-time comparison; runtime feedforward is not supported by Spinor", s.loc);
+        return;
       }
-      auto begin = b.beginIf(pred, L);
-      lowerBlock(s.then_body);
-      if (!s.else_body.empty()) {
-        b.elseIf(begin);
-        lowerBlock(s.else_body);
+      auto lhs = foldReal(p.children[0]);
+      auto rhs = foldReal(p.children[1]);
+      if (!lhs || !rhs) {
+        auto expression=[&](const ExprPtr& e,std::optional<double> folded)->std::optional<pd::ValueId>{
+          if(folded)return b.constAngle(*folded,L);
+          if(e->kind==ExprKind::Ident){auto it=classicals.find(e->text);if(it!=classicals.end()&&out.typeOf(it->second)==pd::bitType())return it->second;}
+          return std::nullopt;
+        };
+        auto left=expression(p.children[0],lhs),right=expression(p.children[1],rhs);
+        if(!left||!right||(!lhs&&!rhs)){err("runtime comparison requires one measured Bit and one constant",s.loc);return;}
+        std::string compare;
+        switch(p.kind){case ExprKind::CmpEq:compare="==";break;case ExprKind::CmpNeq:compare="!=";break;
+          case ExprKind::CmpLt:compare="<";break;case ExprKind::CmpGt:compare=">";break;
+          case ExprKind::CmpLe:compare="<=";break;case ExprKind::CmpGe:compare=">=";break;
+          default:err("unsupported runtime comparison",s.loc);return;}
+        auto predicate=b.cmp(compare,*left,*right,L);auto id=b.beginIf(predicate,L);
+        ++runtimeDepth;lowerBlock(s.then_body);
+        if(!s.else_body.empty()){b.elseIf(id);lowerBlock(s.else_body);}
+        --runtimeDepth;b.endIf(id,L);break;
       }
-      b.endIf(begin, L);
+      bool taken;
+      switch (p.kind) {
+        case ExprKind::CmpEq: taken = *lhs == *rhs; break;
+        case ExprKind::CmpNeq: taken = *lhs != *rhs; break;
+        case ExprKind::CmpLt: taken = *lhs < *rhs; break;
+        case ExprKind::CmpGt: taken = *lhs > *rhs; break;
+        case ExprKind::CmpLe: taken = *lhs <= *rhs; break;
+        case ExprKind::CmpGe: taken = *lhs >= *rhs; break;
+        default: err("unsupported comparison predicate", s.loc); return;
+      }
+      lowerBlock(taken ? s.then_body : s.else_body);
       break;
     }
     case StmtKind::Assign: {
       if (s.init) {
         auto v = foldInt(s.init);
-        if (v) intConsts[s.name] = *v;
+        if (angleConsts.count(s.name)) {
+          auto angle = foldReal(s.init);
+          if (!angle) { err("angle assignment must fold at compile time", s.loc); return; }
+          angleConsts[s.name] = *angle;
+          classicals[s.name] = b.constAngle(*angle, L);
+        } else if (v && intConsts.count(s.name)) {
+          intConsts[s.name] = *v;
+          classicals[s.name] = b.constInt(*v, L);
+        } else {
+          err("assignment requires a declared compile-time scalar", s.loc);
+        }
       }
       break;
     }
@@ -402,17 +474,17 @@ void Lowerer::lowerStmt(const Stmt& s) {
       ctx.foldReal = [this](const ExprPtr& e) { return foldReal(e); };
       ctx.diag = &diag;
       if (expandLibrary(s.method, s.receiver, s.args, s.loc, ctx)) break;
-      // Otherwise: leave a phonon.call placeholder for the platform.
-      b.call(std::string("lib.") + s.method, {}, {}, L);
+      err("unsupported library routine '" + s.method + "'", s.loc);
       break;
     }
     case StmtKind::ExprStmt:
-      // No-op for M1: side-effecting plain expressions are uncommon.
+      err("unsupported expression statement", s.loc);
       break;
   }
 }
 
 void Lowerer::lowerFunction(const Function& f) {
+  returned = false;
   pd::Location L = loc(f.loc);
   bool flatten = f.is_kernel && f.params.empty();
   if (flatten) {
@@ -420,6 +492,7 @@ void Lowerer::lowerFunction(const Function& f) {
     bslots.clear();
     classicals.clear();
     intConsts.clear();
+    angleConsts.clear();
     in_def_ = false;
     lowerBlock(f.body);
     return;
@@ -448,6 +521,7 @@ void Lowerer::lowerFunction(const Function& f) {
   bslots.clear();
   classicals.clear();
   intConsts.clear();
+  angleConsts.clear();
   for (std::size_t i = 0; i < f.params.size(); ++i) {
     pd::ValueId v = b.paramValue(def, i);
     if (f.params[i].type.kind == TypeKind::QReg) {

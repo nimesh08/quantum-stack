@@ -2,8 +2,19 @@
 
 id: ionq_tempo
 provider: aws
+
+schema_version: 2
+vendor: ionq
+readiness: needs_refresh
+readiness_reason: "Live submission requires a discovered, concrete capability snapshot."
+routes: [aws, ionq]
+formats: [native-json, qasm3]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 64
-native_gates: [gpi, gpi2, ms]
+native_gates: [gpi, gpi2, rzz]
 
 coupling_map:
   topology: all_to_all
@@ -26,7 +37,7 @@ decomposition:
     pi_2_gate: gpi2
   two_qubit:
     recipe: kak
-    entangler: ms
+    entangler: rzz
     entangler_count_max: 3
 
 pricing:

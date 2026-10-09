@@ -2,6 +2,18 @@
 
 id: ibm_nighthawk_r1
 provider: ibm
+
+schema_version: 2
+vendor: ibm
+readiness: family
+readiness_reason: "Architecture family; select a concrete discovered backend."
+routes: [ibm]
+formats: [qasm3]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
+connectivity_provenance: synthetic_offline_fixture
 qubits: 120
 native_gates: [cz, rz, sx, x]
 

@@ -1,8 +1,10 @@
 // phonon/lower/lib/Lowering.cpp
 
 #include "phonon/lower/Lowering.h"
+#include "spinor/dialect/Circuit.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -43,12 +45,35 @@ struct Lowerer {
   // For each call we are inlining, push the function name; used to
   // detect recursion.
   std::vector<std::string> callStack;
+  std::vector<sd::ValueId>* returnSink = nullptr;
+  bool returning = false;
+  std::size_t expandedIterations = 0;
+  std::size_t nextAnonymousBit = 0;
 
   Lowerer(const pd::Module& m,
           const spinor::verify::TargetInfo* t)
       : src(m), b(out), target(t) {
     out.targetAttr = m.targetAttr;
     out.name = m.name;
+    // Reserve source register slots and explicit destinations before assigning
+    // anonymous library measurements. A later named readout must not overwrite
+    // a bit which an earlier feed-forward predicate still references.
+    std::size_t declaredBits = 0;
+    for (const auto& op : m.ops()) {
+      if (op.kind == pd::OpKind::AllocBit) ++declaredBits;
+      if (op.kind != pd::OpKind::Measure) continue;
+      for (const auto& a : op.attributes) if (a.name == "clbit") {
+        const auto* value = std::get_if<double>(&a.value);
+        if (!value || !std::isfinite(*value) || *value < 0 ||
+            std::floor(*value) != *value || *value >= 1000000) {
+          diag.error("measurement destination must be an integer in [0, 1000000)", op.loc);
+          continue;
+        }
+        nextAnonymousBit = std::max(nextAnonymousBit, static_cast<std::size_t>(*value) + 1);
+      }
+    }
+    nextAnonymousBit = std::max(nextAnonymousBit, declaredBits);
+    out.numClbits = nextAnonymousBit;
   }
 
   sd::ValueId mapValue(pd::ValueId pv) {
@@ -118,13 +143,21 @@ struct Lowerer {
     for (pd::ValueId v : op.operands) sop.operands.push_back(mapValue(v));
     // Copy attributes: only "angle" / "theta" / "phi" carry to spinor.*
     for (const auto& a : op.attributes) {
-      if (a.name == "angle" || a.name == "theta" || a.name == "phi") {
+      if (a.name == "angle" || a.name == "theta" || a.name == "phi" || a.name == "clbit") {
         sop.attributes.push_back(sd::Attribute{a.name, a.value});
       }
+    }
+    if (sk == sd::OpKind::Measure &&
+        std::none_of(sop.attributes.begin(), sop.attributes.end(),
+                     [](const auto& a) { return a.name == "clbit"; })) {
+      sop.attributes.push_back({"clbit", static_cast<double>(nextAnonymousBit++)});
     }
     sop.loc = sd::Location{op.loc.file, op.loc.line, op.loc.column};
     sd::OpId sid = out.addOp(std::move(sop));
     sd::Op& live = out.opMut(sid);
+    for (const auto& attr : live.attributes) if (attr.name == "clbit") {
+      out.numClbits = std::max(out.numClbits, static_cast<std::size_t>(std::get<double>(attr.value)) + 1);
+    }
     // Allocate result types matching the Spinor signature, in order.
     int qResults = 0;
     bool producesBit = false;
@@ -134,9 +167,9 @@ struct Lowerer {
       producesBit = true;
     } else if (sk == sd::OpKind::Cx || sk == sd::OpKind::Cz ||
                sk == sd::OpKind::Swap || sk == sd::OpKind::Ecr ||
-               sk == sd::OpKind::Ms || sk == sd::OpKind::Rzz) {
+               sk == sd::OpKind::Ms || sk == sd::OpKind::Rzz || sk == sd::OpKind::Rxx) {
       qResults = 2;
-    } else if (sk == sd::OpKind::Barrier) {
+    } else if (sk == sd::OpKind::Barrier || sk == sd::OpKind::GlobalPhase) {
       qResults = 0;
     } else {
       // single-qubit gates
@@ -157,6 +190,14 @@ struct Lowerer {
     for (std::size_t k = 0; k < op.results.size() && k < outResults.size(); ++k) {
       vmap[op.results[k].v] = outResults[k];
     }
+    // Repeated function/loop bodies must consume the latest SSA value for
+    // their slot, rather than reuse the value from the first invocation.
+    for (std::size_t k = 0; k < op.operands.size() && k < outResults.size(); ++k) {
+      if (src.typeOf(op.operands[k]).kind != pd::TypeKind::Qubit ||
+          out.typeOf(outResults[k]).kind != sd::TypeKind::Qubit) continue;
+      auto previous = live.operands[k];
+      for (auto& [_, value] : vmap) if (value == previous) value = outResults[k];
+    }
     // Carry value names through (improves output readability).
     for (std::size_t k = 0; k < op.results.size() && k < outResults.size(); ++k) {
       std::string n = src.nameOf(op.results[k]);
@@ -170,7 +211,7 @@ struct Lowerer {
   // -- Emit a range of ops, recursively unrolling control flow --------
   void emitRange(std::uint32_t lo, std::uint32_t hi) {
     std::uint32_t i = lo;
-    while (i < hi) {
+    while (i < hi && !returning && !diag.hasErrors()) {
       pd::OpId pid{i};
       const pd::Op& op = src.op(pid);
 
@@ -203,16 +244,30 @@ struct Lowerer {
             if      (opn == "+") r = a->second + b_->second;
             else if (opn == "-") r = a->second - b_->second;
             else if (opn == "*") r = a->second * b_->second;
-            else if (opn == "/") r = a->second / b_->second;
+            else if (opn == "/" && b_->second != 0) r = a->second / b_->second;
+            else { diag.error("unsupported or invalid compile-time arithmetic"); break; }
             for (pd::ValueId rv : op.results) ctMap[rv.v] = r;
           }
           ++i; break;
         }
         case pd::OpKind::Cmp: {
-          // No-op for lowering: the comparison's result feeds into
-          // phonon.if which we flatten below. The spinor IR has no
-          // notion of compare-bit; runtime feedforward is handled by
-          // M9's emitter.
+          auto lhs = ctMap.find(op.operands.at(0).v);
+          auto rhs = ctMap.find(op.operands.at(1).v);
+          if (lhs != ctMap.end() && rhs != ctMap.end()) {
+            std::string predicate;
+            for (const auto& attr : op.attributes)
+              if (attr.name == "op") predicate = std::get<std::string>(attr.value);
+            const double a = lhs->second, b = rhs->second;
+            bool result;
+            if (predicate == "==") result = a == b;
+            else if (predicate == "!=") result = a != b;
+            else if (predicate == "<") result = a < b;
+            else if (predicate == ">") result = a > b;
+            else if (predicate == "<=") result = a <= b;
+            else if (predicate == ">=") result = a >= b;
+            else { diag.error("unsupported comparison predicate"); break; }
+            for (auto value : op.results) ctMap[value.v] = result ? 1 : 0;
+          }
           ++i; break;
         }
         case pd::OpKind::Assign: {
@@ -245,48 +300,43 @@ struct Lowerer {
             ++i; break;
           }
           // Recursion check.
-          for (const auto& s : callStack) {
-            if (s == name) {
-              diag.error("recursive call to '" + name + "' is not supported");
-              ++i; break;
-            }
+          if (std::find(callStack.begin(), callStack.end(), name) != callStack.end()) {
+            diag.error("recursive call to '" + name + "' is not supported");
+            return;
           }
           // Bind parameter values via vmap (qubit args) and ctMap
           // (classical args).
           const FuncRange& fr = it->second;
+          if (fr.paramValues.size() != op.operands.size()) {
+            diag.error("argument count mismatch for function '" + name + "'");
+            return;
+          }
           // Save vmap entries for params so we can restore after inlining.
           std::vector<std::pair<std::uint32_t, std::optional<sd::ValueId>>> savedV;
+          auto savedCt = ctMap;
           for (std::size_t k = 0; k < fr.paramValues.size() &&
                                    k < op.operands.size(); ++k) {
             std::uint32_t pv = fr.paramValues[k].v;
             auto sv = vmap.find(pv);
             savedV.push_back({pv, sv != vmap.end() ? std::optional<sd::ValueId>{sv->second} : std::nullopt});
-            sd::ValueId sval = mapValue(op.operands[k]);
-            vmap[pv] = sval;
+            if (fr.paramTypes[k].kind == pd::TypeKind::Int ||
+                fr.paramTypes[k].kind == pd::TypeKind::Angle) {
+              auto value = ctMap.find(op.operands[k].v);
+              if (value == ctMap.end()) { diag.error("unbound classical function argument"); return; }
+              ctMap[pv] = value->second;
+            } else {
+              vmap[pv] = mapValue(op.operands[k]);
+            }
           }
           // Inline the body. Track "return values" produced by a
           // phonon.return inside.
           std::vector<sd::ValueId> returnValues;
           callStack.push_back(name);
+          auto oldSink = returnSink;
+          returnSink = &returnValues;
           {
-            // Manual emit so we can intercept phonon.return.
-            std::uint32_t j = fr.bodyStart;
-            bool sawReturn = false;
-            while (j < fr.bodyEnd) {
-              pd::OpId jid{j};
-              const pd::Op& jop = src.op(jid);
-              if (jop.kind == pd::OpKind::Return) {
-                sawReturn = true;
-                for (pd::ValueId v : jop.operands) {
-                  auto vmit = vmap.find(v.v);
-                  if (vmit != vmap.end()) returnValues.push_back(vmit->second);
-                }
-                ++j; continue;
-              }
-              emitRange(j, j + 1);
-              ++j;
-            }
-            if (!sawReturn) {
+            emitRange(fr.bodyStart, fr.bodyEnd);
+            if (!returning) {
               // Auto-return: the latest vmap binding of each qubit
               // parameter is the function's result.
               for (std::size_t k = 0; k < fr.paramValues.size(); ++k) {
@@ -297,7 +347,10 @@ struct Lowerer {
               }
             }
           }
+          returnSink = oldSink;
+          returning = false;
           callStack.pop_back();
+          ctMap = std::move(savedCt);
           // Bind call results to the returned values, in order
           // (qubit results only).
           std::size_t rk = 0;
@@ -306,6 +359,7 @@ struct Lowerer {
               vmap[rv.v] = returnValues[rk++];
             }
           }
+          if (rk != op.results.size()) diag.error("function returned the wrong number of values: " + name);
           // Restore param vmap entries.
           for (const auto& p : savedV) {
             if (p.second) vmap[p.first] = *p.second;
@@ -331,34 +385,20 @@ struct Lowerer {
           std::uint32_t bodyStart = i + 1;
           std::uint32_t bodyEnd   = matchMarker(i, pd::OpKind::For,
                                                  pd::OpKind::EndFor);
-          int loInt = static_cast<int>(lo);
-          int hiInt = static_cast<int>(hi);
-          for (int v = loInt; v < hiInt; ++v) {
-            // Find the loop-var ValueId by name lookup in src? We
-            // bound it during parsing into ctMap of the lo bound.
-            // Re-bind by searching: if there is a const_int op in the
-            // body that produced var bindings, no — var was held in
-            // parser-side ctConst, not as a module value. The body
-            // ops reference compile-time constants we already stored
-            // in ctMap (the lo value). So our lo-binding already
-            // serves as the iteration value for v == loInt. For
-            // higher iterations we need to update the corresponding
-            // ctMap entry.
-            //
-            // Pragmatic approach: walk the body once per iteration,
-            // but rebind the var-tagged const_int. The body's
-            // index references go through emitSpinorOp's mapValue,
-            // which depends on per-op ctMap entries that are set at
-            // body-emit time. So we just emit the body N times.
-            //
-            // For correctness of indexed qubit refs that depend on
-            // the loop var: the parser folded those at parse time
-            // using the `lo` value, so all iterations index the
-            // SAME slot. To get true unrolling with different slots,
-            // the parser would have to re-emit the body per
-            // iteration. That is a known limitation of the simple
-            // unroller; we mark a TODO and document in D9.
+          if (!std::isfinite(lo) || !std::isfinite(hi) ||
+              std::floor(lo) != lo || std::floor(hi) != hi || hi - lo > 100000 ||
+              std::abs(lo) > 9007199254740991.0 || std::abs(hi) > 9007199254740991.0) {
+            diag.error("for-loop requires finite integer bounds and at most 100000 iterations");
+            return;
+          }
+          auto loInt = static_cast<std::int64_t>(lo);
+          auto hiInt = static_cast<std::int64_t>(hi);
+          for (auto v = loInt; v < hiInt && !returning; ++v) {
+            // Source-level induction indices were resolved before SSA construction.
+            // A programmatically built For repeats its fixed body while the
+            // value mapping threads each slot's latest value between iterations.
             (void)v;
+            if (++expandedIterations > 100000) { diag.error("static loop expansion exceeds 100000 iterations"); return; }
             emitRange(bodyStart, bodyEnd);
           }
           i = bodyEnd + 1;  // skip end_for
@@ -368,8 +408,6 @@ struct Lowerer {
           ++i; break;
 
         case pd::OpKind::If: {
-          // Phase B M4: emit then-body unconditionally; M9 will
-          // wrap in chip-specific feedforward syntax.
           std::uint32_t bodyStart = i + 1;
           std::uint32_t bodyEnd   = matchMarker(i, pd::OpKind::If,
                                                  pd::OpKind::EndIf);
@@ -380,8 +418,41 @@ struct Lowerer {
             if (a.name == "then_count") thenCount = static_cast<std::uint32_t>(std::get<double>(a.value));
             if (a.name == "else_count") elseCount = static_cast<std::uint32_t>(std::get<double>(a.value));
           }
-          (void)elseCount;
-          emitRange(bodyStart, bodyStart + thenCount);
+          auto condition = op.operands.empty() ? ctMap.end() : ctMap.find(op.operands.front().v);
+          if (condition == ctMap.end()) {
+            auto predicate=op.operands.front();
+            const auto& cmp=src.op(src.producerOf(predicate));
+            pd::ValueId bit=predicate;double constant=1;std::string comparison="==";bool reverse=false;
+            if(cmp.kind==pd::OpKind::Cmp){
+              for(const auto& attr:cmp.attributes)if(attr.name=="op")comparison=std::get<std::string>(attr.value);
+              auto left=ctMap.find(cmp.operands[0].v),right=ctMap.find(cmp.operands[1].v);
+              if(right!=ctMap.end()){bit=cmp.operands[0];constant=right->second;}
+              else if(left!=ctMap.end()){bit=cmp.operands[1];constant=left->second;reverse=true;}
+              else {diag.error("runtime comparison requires one measured bit and one compile-time value",op.loc);return;}
+            }
+            auto mapped=vmap.find(bit.v);
+            if(mapped==vmap.end()||out.typeOf(mapped->second)!=sd::bitType()){
+              diag.error("runtime predicate is not a measured classical bit",op.loc);return;
+            }
+            auto evaluate=[&](double value){
+              double lhs=reverse?constant:value,rhs=reverse?value:constant;
+              if(comparison=="==")return lhs==rhs;if(comparison=="!=")return lhs!=rhs;
+              if(comparison=="<")return lhs<rhs;if(comparison==">")return lhs>rhs;
+              if(comparison=="<=")return lhs<=rhs;if(comparison==">=")return lhs>=rhs;
+              throw std::runtime_error("unsupported classical predicate");
+            };
+            bool zero=evaluate(0),one=evaluate(1);
+            if(zero==one){if(one)emitRange(bodyStart,bodyStart+thenCount);else emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
+            else {
+              b.beginIf(sd::classicalIndex(out,mapped->second),one,op.loc);
+              emitRange(bodyStart,bodyStart+thenCount);
+              if(returning){diag.error("conditional return requires explicit control-flow return lowering",op.loc);return;}
+              if(elseCount){b.elseBranch(op.loc);emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
+              if(returning){diag.error("conditional return requires explicit control-flow return lowering",op.loc);return;}
+              b.endIf(op.loc);
+            }
+          } else if (condition->second != 0) emitRange(bodyStart, bodyStart + thenCount);
+          else emitRange(bodyStart + thenCount, bodyStart + thenCount + elseCount);
           i = bodyEnd + 1;
           break;
         }
@@ -396,9 +467,13 @@ struct Lowerer {
         }
 
         case pd::OpKind::Return:
-          // Should be handled inside Call inlining; if seen at the
-          // top level, ignore.
-          ++i; break;
+          if (!returnSink) {
+            diag.error("return outside an inlined function is unsupported");
+            return;
+          }
+          for (auto value : op.operands) returnSink->push_back(mapValue(value));
+          returning = true;
+          return;
 
         default:
           ++i; break;

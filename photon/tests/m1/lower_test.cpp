@@ -63,18 +63,41 @@ TEST(M1_photon_lower, ghz) {
   EXPECT_EQ(countOps(*m, "spinor.cx"), 2);
 }
 
-TEST(M1_photon_lower, for_loop_emits_phonon_for) {
+TEST(M1_photon_lower, for_loop_resolves_each_induction_index) {
   auto m = lowerOrFail(corpus("for_loop.pho"));
   EXPECT_TRUE(m.has_value());
-  EXPECT_EQ(countOps(*m, "phonon.for"), 1);
-  EXPECT_EQ(countOps(*m, "phonon.end_for"), 1);
+  if (!m) return;
+  EXPECT_EQ(countOps(*m, "spinor.h"), 4);
+  std::vector<pd::ValueId> allocated;
+  std::size_t i = 0;
+  for (const auto& op : m->ops()) {
+    if (op.kind == pd::OpKind::AllocQubit) allocated.push_back(op.results.front());
+    if (op.kind == pd::OpKind::H) EXPECT_TRUE(op.operands.front() == allocated.at(i++));
+  }
 }
 
-TEST(M1_photon_lower, if_else_emits_phonon_if) {
+TEST(M1_photon_lower, ambiguous_measurement_predicate_is_rejected) {
   auto m = lowerOrFail(corpus("if_else.pho"));
-  EXPECT_TRUE(m.has_value());
-  EXPECT_EQ(countOps(*m, "phonon.if"), 1);
-  EXPECT_EQ(countOps(*m, "phonon.end_if"), 1);
+  EXPECT_FALSE(m.has_value());
+}
+
+TEST(M1_photon_lower, static_else_and_angle_assignment) {
+  auto parsed = parse("target generic\nkernel sample() {\nQReg q(1)\nangle theta = 0.25\ntheta = theta + 0.5\nif (2 < 1) {\nq.x(0)\n} else {\nq.rz(theta, 0)\n}\n}\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (!parsed.module) return;
+  auto lowered = lowerToPhonon(*parsed.module);
+  EXPECT_TRUE(lowered.module.has_value());
+  if (!lowered.module) return;
+  EXPECT_EQ(countOps(*lowered.module, "spinor.x"), 0);
+  EXPECT_EQ(countOps(*lowered.module, "spinor.rz"), 1);
+  for (const auto& op : lowered.module->ops()) if (op.kind == pd::OpKind::Rz)
+    EXPECT_TRUE(std::get<double>(op.attributes.front().value) == 0.75);
+}
+
+TEST(M1_photon_lower, fractional_qubit_index_is_rejected) {
+  auto parsed = parse("target generic\nkernel sample() {\nQReg q(2)\nq.x(0.5)\n}\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (parsed.module) EXPECT_FALSE(lowerToPhonon(*parsed.module).module.has_value());
 }
 
 TEST(M1_photon_lower, target_propagated) {
@@ -91,6 +114,17 @@ TEST(M1_photon_lower, def_wrapper_present) {
   EXPECT_TRUE(m.has_value());
   EXPECT_EQ(countOps(*m, "spinor.alloc_qubit"), 2);
   EXPECT_EQ(countOps(*m, "spinor.h"), 1);
+}
+
+TEST(M1_photon_lower, measured_bit_index_and_runtime_branches) {
+  auto parsed=parse("target generic\nkernel dynamic() {\nQReg q(2)\nq.h(0)\nBit c = q.measure(0)\nif (c == 1) {\nq.x(1)\n} else {\nq.z(1)\n}\nBit d = q.measure(1)\n}\n");
+  EXPECT_TRUE(parsed.module.has_value());if(!parsed.module)return;
+  auto result=lowerToPhonon(*parsed.module);
+  EXPECT_TRUE(result.module.has_value());if(!result.module)return;
+  EXPECT_EQ(countOps(*result.module,"phonon.if"),1);
+  EXPECT_EQ(countOps(*result.module,"spinor.measure"),2);
+  EXPECT_EQ(countOps(*result.module,"spinor.x"),1);
+  EXPECT_EQ(countOps(*result.module,"spinor.z"),1);
 }
 
 SPINOR_TEST_MAIN()

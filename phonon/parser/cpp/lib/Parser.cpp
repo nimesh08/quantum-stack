@@ -15,7 +15,9 @@
 #include "Lexer.h"
 
 #include <cmath>
+#include <numbers>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -47,6 +49,9 @@ struct Parser {
   // Classical scalars whose compile-time value is known (used for
   // for-loop bound resolution and qubit register sizes).
   std::unordered_map<std::string, double> ctConst;
+  std::unordered_map<std::string, std::vector<std::size_t>> bitTargets;
+  std::size_t nextBit = 0;
+  std::size_t expandedIterations = 0;
 
   // Function templates, parser-side. body_start is index into the
   // token stream (the '{' after the param list). Used by call sites
@@ -126,6 +131,7 @@ struct Parser {
   void parseAssignStmt(const std::string& name);
   void parseReturnStmt();
   void parseBlock();  // expects '{', parses stmts, expects '}'
+  void skipBlock();
 
   // helpers
   std::optional<std::pair<std::string, int>> parseQubitRef();
@@ -150,7 +156,7 @@ std::optional<double> Parser::foldFactor() {
   }
   if (cur().kind == Tok::Pi) {
     consume();
-    return M_PI;
+    return std::numbers::pi;
   }
   if (cur().kind == Tok::Integer) {
     return std::stod(consume().text);
@@ -182,6 +188,7 @@ std::optional<double> Parser::foldTerm() {
     Tok op = cur().kind; consume();
     auto b_ = foldFactor();
     if (!b_) return std::nullopt;
+    if (op == Tok::Slash && *b_ == 0) { err("division by zero"); return std::nullopt; }
     if (op == Tok::Star) a = *a * *b_; else a = *a / *b_;
   }
   return a;
@@ -215,7 +222,7 @@ pd::ValueId Parser::parseFactor() {
   }
   if (cur().kind == Tok::Pi) {
     consume();
-    return b.constAngle(M_PI);
+    return b.constAngle(std::numbers::pi);
   }
   if (cur().kind == Tok::Integer) {
     return b.constInt(static_cast<int64_t>(std::stoll(consume().text)));
@@ -236,7 +243,8 @@ pd::ValueId Parser::parseFactor() {
       consume();
       auto idxOpt = foldExpr();
       expect(Tok::RBracket, "']'");
-      if (!idxOpt) {
+      if (!idxOpt || !std::isfinite(*idxOpt) || std::floor(*idxOpt) != *idxOpt ||
+          *idxOpt < 0 || *idxOpt > std::numeric_limits<int>::max()) {
         err("array index must be a compile-time integer");
         return b.constInt(0);
       }
@@ -306,7 +314,9 @@ pd::ValueId Parser::getQubitSlot(const std::string& name, int idx,
   return it->second[idx];
 }
 void Parser::setQubitSlot(const std::string& name, int idx, pd::ValueId v) {
-  qreg[name][idx] = v;
+  auto it = qreg.find(name);
+  if (it != qreg.end() && idx >= 0 && static_cast<std::size_t>(idx) < it->second.size())
+    it->second[idx] = v;
 }
 
 pd::ValueId Parser::getBitSlot(const std::string& name, int idx,
@@ -325,7 +335,17 @@ pd::ValueId Parser::getBitSlot(const std::string& name, int idx,
   return it->second[idx];
 }
 void Parser::setBitSlot(const std::string& name, int idx, pd::ValueId v) {
-  creg[name][idx] = v;
+  auto it = creg.find(name);
+  if (it == creg.end() || idx < 0 || static_cast<std::size_t>(idx) >= it->second.size()) {
+    err("bit index out of range for " + name);
+    return;
+  }
+  it->second[idx] = v;
+  auto target = bitTargets.find(name);
+  if (target != bitTargets.end()) {
+    mod.opMut(mod.producerOf(v)).attributes.push_back(
+        {"clbit", static_cast<double>(target->second[idx])});
+  }
 }
 
 // --- Header --------------------------------------------------------------
@@ -355,7 +375,10 @@ void Parser::parseDeclQubit() {
   if (!expect(Tok::LBracket, "'['")) return;
   auto sizeOpt = foldExpr();
   if (!expect(Tok::RBracket, "']'")) return;
-  if (!sizeOpt) { err("qubit register size must be a compile-time integer"); return; }
+  if (!sizeOpt || !std::isfinite(*sizeOpt) || std::floor(*sizeOpt) != *sizeOpt ||
+      *sizeOpt <= 0 || *sizeOpt > 1000000) {
+    err("qubit register size must be a positive compile-time integer up to 1000000"); return;
+  }
   int n = static_cast<int>(*sizeOpt);
   std::vector<pd::ValueId> slots;
   slots.reserve(static_cast<std::size_t>(n));
@@ -374,16 +397,23 @@ void Parser::parseDeclBit() {
   if (!expect(Tok::LBracket, "'['")) return;
   auto sizeOpt = foldExpr();
   if (!expect(Tok::RBracket, "']'")) return;
-  if (!sizeOpt) { err("bit register size must be a compile-time integer"); return; }
+  if (!sizeOpt || !std::isfinite(*sizeOpt) || std::floor(*sizeOpt) != *sizeOpt ||
+      *sizeOpt <= 0 || *sizeOpt > 1000000) {
+    err("bit register size must be a positive compile-time integer up to 1000000"); return;
+  }
   int n = static_cast<int>(*sizeOpt);
   std::vector<pd::ValueId> slots;
   slots.reserve(static_cast<std::size_t>(n));
+  std::vector<std::size_t> targets;
   for (int i = 0; i < n; ++i) {
     pd::ValueId v = b.allocBit();
+    targets.push_back(nextBit++);
+    mod.opMut(mod.producerOf(v)).attributes.push_back({"clbit", static_cast<double>(targets.back())});
     mod.setName(v, name + std::to_string(i));
     slots.push_back(v);
   }
   creg[name] = std::move(slots);
+  bitTargets[name] = std::move(targets);
 }
 
 void Parser::parseDeclClassical(bool isAngle) {
@@ -395,10 +425,14 @@ void Parser::parseDeclClassical(bool isAngle) {
   std::size_t save = pos;
   auto folded = foldExpr();
   if (folded && (cur().kind == Tok::Newline || cur().kind == Tok::Eof)) {
+    if (!std::isfinite(*folded) || (!isAngle && std::floor(*folded) != *folded)) {
+      err("classical initializer must match its finite numeric type"); return;
+    }
     ctConst[name] = *folded;
     classicals[name] = isAngle ? b.constAngle(*folded)
                                 : b.constInt(static_cast<int64_t>(*folded));
   } else {
+    ctConst.erase(name);
     pos = save;
     pd::ValueId v = parseExpr();
     classicals[name] = v;
@@ -418,7 +452,10 @@ std::optional<std::pair<std::string, int>> Parser::parseQubitRef() {
     consume();
     auto v = foldExpr();
     if (!expect(Tok::RBracket, "']'")) return std::nullopt;
-    if (!v) { err("qubit index must be a compile-time integer"); return std::nullopt; }
+    if (!v || !std::isfinite(*v) || std::floor(*v) != *v ||
+        *v < 0 || *v > std::numeric_limits<int>::max()) {
+      err("qubit index must be a non-negative compile-time integer"); return std::nullopt;
+    }
     idx = static_cast<int>(*v);
   }
   return std::make_pair(std::move(name), idx);
@@ -443,11 +480,28 @@ void Parser::parseGateStmt() {
         pos = save;
         pd::ValueId v = parseExpr();
         angleVals.push_back(v);
-        angleConsts.push_back(0.0);  // placeholder
+        err("unbound gate parameter: bind a finite angle before compiling");
       }
       if (!accept(Tok::Comma)) break;
     }
     expect(Tok::RParen, "')'");
+  }
+  const std::size_t expectedAngles = g == "u1q" ? 2 :
+      (g == "rx" || g == "ry" || g == "rz" || g == "gpi" ||
+       g == "gpi2" || g == "rzz" || g == "rxx" || g == "gphase") ? 1 : 0;
+  if (angleConsts.size() != expectedAngles || !angleVals.empty()) {
+    err("gate '" + g + "' has missing, extra, or unbound angle parameters");
+    return;
+  }
+  for (double angle : angleConsts) if (!std::isfinite(angle)) {
+    err("gate angle must be finite"); return;
+  }
+  if (g == "gphase") {
+    if (cur().kind != Tok::Newline && cur().kind != Tok::Eof && cur().kind != Tok::RBrace) {
+      err("gphase takes no qubit operands"); return;
+    }
+    b.globalPhase(angleConsts.at(0));
+    return;
   }
   // Operands: 1 or 2 qubit references, comma-separated.
   std::vector<std::pair<std::string, int>> ops;
@@ -486,6 +540,7 @@ void Parser::parseGateStmt() {
     auto& [reg, idx] = ops[0];
     if (idx == -1) {
       // whole register
+      if (!qreg.count(reg)) { err("unknown qubit register: " + reg); return; }
       auto& slots = qreg[reg];
       for (std::size_t i = 0; i < slots.size(); ++i) {
         slots[i] = applyGate(reg, static_cast<int>(i));
@@ -506,13 +561,15 @@ void Parser::parseGateStmt() {
     }
     pd::ValueId va = getQubitSlot(ra, ia, gateTok);
     pd::ValueId vb = getQubitSlot(rb, ib, gateTok);
+    if (ra == rb && ia == ib) { err("two-qubit gate requires distinct qubits"); return; }
     std::pair<pd::ValueId, pd::ValueId> r{va, vb};
     if      (g == "cx")   r = b.cx(va, vb);
     else if (g == "cz")   r = b.cz(va, vb);
     else if (g == "swap") r = b.swap(va, vb);
     else if (g == "ecr")  r = b.ecr(va, vb);
     else if (g == "ms")   r = b.ms(va, vb);
-    else if (g == "rzz")  r = b.rzz(angleConsts.empty()?0.0:angleConsts[0], va, vb);
+    else if (g == "rzz")  r = b.rzz(angleConsts[0], va, vb);
+    else if (g == "rxx")  r = b.rxx(angleConsts[0], va, vb);
     else { err("unknown 2q gate: " + g); }
     setQubitSlot(ra, ia, r.first);
     setQubitSlot(rb, ib, r.second);
@@ -543,7 +600,7 @@ void Parser::parseMeasureAssign(const std::string& lhsName,
     }
     for (std::size_t i = 0; i < qit->second.size(); ++i) {
       pd::ValueId vbit = b.measure(qit->second[i]);
-      cit->second[i] = vbit;
+      setBitSlot(lhsName, static_cast<int>(i), vbit);
     }
   } else {
     pd::ValueId vq = getQubitSlot(reg, idx, cur());
@@ -557,7 +614,7 @@ void Parser::parseMeasureAssign(const std::string& lhsName,
         err("expected indexed lhs in 'measure' assignment");
         return;
       }
-      cit->second[0] = vbit;
+      setBitSlot(lhsName, 0, vbit);
     }
   }
   if (cur().kind == Tok::Newline) consume();
@@ -603,6 +660,31 @@ void Parser::parseBarrierStmt() {
 void Parser::parseIfStmt() {
   consume();
   expect(Tok::LParen, "'('");
+  // Resolve static conditions before constructing SSA so the untaken branch
+  // cannot change qubit bindings or leak a value into the following code.
+  const auto conditionStart = pos;
+  auto foldedLeft = foldExpr();
+  const auto comparison = cur().kind;
+  if (foldedLeft && (comparison == Tok::EqEq || comparison == Tok::NotEq ||
+      comparison == Tok::Lt || comparison == Tok::Gt ||
+      comparison == Tok::Le || comparison == Tok::Ge)) {
+    consume();
+    auto foldedRight = foldExpr();
+    if (foldedRight && accept(Tok::RParen)) {
+      bool takeThen = comparison == Tok::EqEq ? *foldedLeft == *foldedRight :
+          comparison == Tok::NotEq ? *foldedLeft != *foldedRight :
+          comparison == Tok::Lt ? *foldedLeft < *foldedRight :
+          comparison == Tok::Gt ? *foldedLeft > *foldedRight :
+          comparison == Tok::Le ? *foldedLeft <= *foldedRight : *foldedLeft >= *foldedRight;
+      if (takeThen) parseBlock(); else skipBlock();
+      skipNewlines();
+      if (accept(Tok::Else)) {
+        if (takeThen) skipBlock(); else parseBlock();
+      }
+      return;
+    }
+  }
+  pos = conditionStart;
   pd::ValueId lhs = parseExpr();
   std::string cmpOp = "==";
   if (cur().kind == Tok::EqEq) { cmpOp = "=="; consume(); }
@@ -615,12 +697,16 @@ void Parser::parseIfStmt() {
   expect(Tok::RParen, "')'");
   pd::ValueId pred = b.cmp(cmpOp, lhs, rhs);
   pd::OpId ifId = b.beginIf(pred);
+  auto staticBefore=classicals;auto qBefore=qreg;auto cBefore=creg;
   parseBlock();
+  skipNewlines();
   if (cur().kind == Tok::Else) {
     consume();
     b.elseIf(ifId);
     parseBlock();
   }
+  if(classicals!=staticBefore||qreg.size()!=qBefore.size()||creg.size()!=cBefore.size())
+    err("runtime branches cannot declare registers or change compile-time scalar bindings");
   b.endIf(ifId);
   if (cur().kind == Tok::Newline) consume();
 }
@@ -633,19 +719,42 @@ void Parser::parseForStmt() {
   auto loOpt = foldExpr();
   if (!expect(Tok::DotDot, "'..'")) return;
   auto hiOpt = foldExpr();
-  if (!loOpt || !hiOpt) {
+  if (!loOpt || !hiOpt || !std::isfinite(*loOpt) || !std::isfinite(*hiOpt) ||
+      std::floor(*loOpt) != *loOpt || std::floor(*hiOpt) != *hiOpt ||
+      std::abs(*loOpt) > 9007199254740991.0 || std::abs(*hiOpt) > 9007199254740991.0) {
     err("for-loop bounds must be compile-time integers"); return;
   }
-  pd::ValueId loV = b.constInt(static_cast<int64_t>(*loOpt));
-  pd::ValueId hiV = b.constInt(static_cast<int64_t>(*hiOpt));
-  pd::OpId fid = b.beginFor(var, loV, hiV);
-  ctConst[var] = *loOpt;
-  classicals[var] = loV;
-  parseBlock();
-  ctConst.erase(var);
-  classicals.erase(var);
-  b.endFor(fid);
+  skipNewlines();
+  const auto bodyStart = pos;
+  skipBlock();
+  const auto afterBody = pos;
+  if (diag.hasErrors()) return;
+  const auto oldConst = ctConst.find(var) == ctConst.end() ? std::optional<double>{} : ctConst[var];
+  const auto oldValue = classicals.find(var) == classicals.end() ? std::optional<pd::ValueId>{} : classicals[var];
+  for (auto value = static_cast<std::int64_t>(*loOpt);
+       value < static_cast<std::int64_t>(*hiOpt) && !diag.hasErrors(); ++value) {
+    if (++expandedIterations > 100000) { err("static loop expansion exceeds 100000 iterations"); break; }
+    ctConst[var] = static_cast<double>(value);
+    classicals[var] = b.constInt(value);
+    pos = bodyStart;
+    parseBlock();
+  }
+  pos = afterBody;
+  if (oldConst) ctConst[var] = *oldConst; else ctConst.erase(var);
+  if (oldValue) classicals[var] = *oldValue; else classicals.erase(var);
   if (cur().kind == Tok::Newline) consume();
+}
+
+void Parser::skipBlock() {
+  skipNewlines();
+  if (!expect(Tok::LBrace, "'{'") ) return;
+  std::size_t depth = 1;
+  while (depth && cur().kind != Tok::Eof) {
+    auto token = consume();
+    if (token.kind == Tok::LBrace) ++depth;
+    else if (token.kind == Tok::RBrace) --depth;
+  }
+  if (depth) err("unterminated block");
 }
 
 void Parser::parseWhileStmt() {
@@ -749,7 +858,12 @@ void Parser::parseCallStmt(const std::string& name) {
 
 void Parser::parseAssignStmt(const std::string& name) {
   expect(Tok::Equals, "'='");
+  const auto expressionStart = pos;
+  auto folded = foldExpr();
+  pos = expressionStart;
   pd::ValueId v = parseExpr();
+  if (folded && std::isfinite(*folded)) ctConst[name] = *folded;
+  else ctConst.erase(name);
   classicals[name] = v;
   b.assign(name, v);
   if (cur().kind == Tok::Newline) consume();
@@ -798,7 +912,10 @@ void Parser::parseStmt() {
         consume();
         auto idxOpt = foldExpr();
         if (!expect(Tok::RBracket, "']'")) return;
-        if (!idxOpt) { err("index must be compile-time integer"); return; }
+        if (!idxOpt || !std::isfinite(*idxOpt) || std::floor(*idxOpt) != *idxOpt ||
+            *idxOpt < 0 || *idxOpt > std::numeric_limits<int>::max()) {
+          err("index must be a non-negative compile-time integer"); return;
+        }
         if (cur().kind == Tok::Equals) {
           consume();
           if (cur().kind == Tok::Measure) {
@@ -873,11 +990,14 @@ void Parser::parseStmt() {
 }
 
 void Parser::parseBlock() {
+  skipNewlines();
   if (!expect(Tok::LBrace, "'{'")) return;
   skipNewlines();
   while (cur().kind != Tok::RBrace && cur().kind != Tok::Eof) {
     if (fatal) return;
+    const auto previous = pos;
     parseStmt();
+    if (pos == previous) { err("parser could not consume statement"); consume(); }
     skipNewlines();
   }
   expect(Tok::RBrace, "'}'");
@@ -886,7 +1006,9 @@ void Parser::parseBlock() {
 void Parser::parseProgram() {
   parseHeader();
   while (cur().kind != Tok::Eof && !fatal) {
+    const auto previous = pos;
     parseStmt();
+    if (pos == previous) { err("unexpected token outside a block"); consume(); }
     skipNewlines();
   }
 }
@@ -897,7 +1019,11 @@ ParseResult parse(std::string_view text, std::string_view filename) {
   Lexer lex(text);
   auto toks = lex.tokenize();
   Parser p(std::move(toks), std::string(filename));
-  p.parseProgram();
+  try {
+    p.parseProgram();
+  } catch (const std::exception& error) {
+    p.err(std::string("invalid source: ") + error.what());
+  }
   ParseResult r;
   r.diag = std::move(p.diag);
   if (!r.diag.hasErrors()) r.module = std::move(p.mod);

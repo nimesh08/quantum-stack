@@ -33,6 +33,8 @@ if(QSTACK_ENABLE_TESTS)
   add_subdirectory(tests/m8)
   add_subdirectory(tests/m9)
   add_subdirectory(tests/m10)
+  add_subdirectory(tests/owned)
+  add_subdirectory(tests/kak)
 endif()
 
 # Subsequent milestone subdirectories are wired here as their

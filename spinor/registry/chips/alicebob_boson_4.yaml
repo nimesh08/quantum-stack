@@ -2,12 +2,23 @@
 
 id: alicebob_boson_4
 provider: alicebob
-qubits: 4
-native_gates: [x, z, cx]
+
+schema_version: 2
+vendor: alicebob
+readiness: restricted
+readiness_reason: "One physical cat qubit; nonuniversal x/z gate subset. Select a discovered Boson backend."
+routes: [alicebob]
+formats: [qir]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
+qubits: 1
+native_gates: [x, z]
 
 coupling_map:
   topology: linear_n
-  size: 4
+  size: 1
 
 supports:
   mid_circuit_measure: true
@@ -26,16 +37,15 @@ decomposition:
     pi_2_gate: ""
   two_qubit:
     recipe: kak
-    entangler: cx
+    entangler: ""
     entangler_count_max: 3
 
 pricing:
   per_shot_usd: 0.0
 
 notes: |
-  Alice & Bob Boson 4: 4 logical cat-qubits with
-  bias-preserving X/Z/CX. Shipped via the Alice & Bob
-  cloud (preview) and a public emulator. Cassette-only
-  until the production submission URL is published.
-  source: https://alice-bob.com/products/cloud/
-  verified-upstream: 2026-06-16
+  Boson 4 is a device design, not a count of logical qubits. Felis exposes
+  one physical cat qubit per QPU:1Q:BOSON_4A/4B/4C backend. Only x/z gates
+  and supported preparation/measurement operations are available. Arbitrary
+  algorithms requiring h, continuous rotations or entanglement are rejected.
+  source: https://felis.alice-bob.com/docs/backends/backends_list/boson_4/

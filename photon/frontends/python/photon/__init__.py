@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 
-__version__ = "0.3.0+phasec.m3"
+__version__ = "0.6.0"
 
 if sys.version_info < (3, 12):
     raise ImportError(

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <set>
 #include <string>
 #include <string_view>
@@ -41,7 +42,11 @@ Sig sigFor(OpKind k) {
     case OpKind::Gpi2:
       return {1, 1, false, {"angle"}};
     case OpKind::Rzz:
+    case OpKind::Rxx:
       return {2, 2, false, {"angle"}};
+    case OpKind::PhasedXZ:return {1,1,false,{"x","z","axis_phase"}};
+    case OpKind::If:return {0,0,false,{"condition_clbit","condition_value"}};
+    case OpKind::GlobalPhase:return {0,0,false,{"angle"}};
     case OpKind::U1q:
       return {1, 1, false, {"theta", "phi"}};
     default:
@@ -71,6 +76,10 @@ void verify(const Module& m, Diagnostics& diag) {
     const Op& op = m.op(id);
     Sig s = sigFor(op.kind);
 
+    for(const auto& attr:op.attributes){
+      if(std::holds_alternative<double>(attr.value) && !std::isfinite(std::get<double>(attr.value)))
+        diag.error("nonfinite numeric attribute: "+attr.name,op.loc,id);
+    }
     // operand count
     if (s.qOperands >= 0 &&
         static_cast<int>(op.operands.size()) != s.qOperands) {

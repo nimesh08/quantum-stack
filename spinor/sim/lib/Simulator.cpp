@@ -4,7 +4,7 @@
 
 #include "spinor/sim/Simulator.h"
 
-#include "../../passes/lib/Complex2x2.h"
+#include "../../passes/lib/GateMatrices.h"
 
 #include <algorithm>
 #include <cmath>
@@ -101,131 +101,150 @@ double extractAngle(const Op& op) {
 
 }  // namespace
 
-StateVector simulate(const Module& m) {
-  StateVector sv;
-  // Count qubits = number of alloc_qubit ops; assign each its
-  // index by allocation order.
-  std::map<std::uint32_t, int> qubitOf;
-  int n = 0;
-  for (uint32_t i = 0; i < m.numOps(); ++i) {
-    const Op& op = m.op(OpId{i});
-    if (op.kind == OpKind::AllocQubit) {
-      qubitOf[op.results.front().v] = n++;
-    }
-  }
-  if (n > 24) {
-    throw std::runtime_error(
-        "simulate: refusing to allocate state vector for >24 qubits");
-  }
-  sv.qubits = static_cast<std::size_t>(n);
-  sv.amps.assign(std::size_t(1) << n, cdbl(0, 0));
-  if (n > 0) sv.amps[0] = cdbl(1, 0);
-
-  // Track per-value qubit index lineage.
-  std::map<std::uint32_t, int> lineage = qubitOf;
-
-  for (uint32_t i = 0; i < m.numOps(); ++i) {
-    const Op& op = m.op(OpId{i});
-    int nq = qubitArity(op.kind);
-    int qResults = nq;
-    if (op.kind == OpKind::Measure) qResults = 0;
-    // Early return for ops we don't simulate semantically:
-    if (op.kind == OpKind::AllocQubit || op.kind == OpKind::AllocBit ||
-        op.kind == OpKind::Measure || op.kind == OpKind::Barrier) {
-      // Propagate lineage if applicable.
-      if (op.kind == OpKind::Measure) {
-        // Measure consumes the qubit; for equivalence we don't
-        // collapse — treat as identity on the state vector.
-      }
-      continue;
-    }
-    if (op.kind == OpKind::Reset) {
-      // Reset to |0> — model as projecting and renormalising,
-      // but for equivalence checks we treat it as identity (the
-      // pre-measure state captures program meaning). Future:
-      // explicit reset handling. M8 baseline: skip.
-      if (qResults > 0) {
-        for (int k = 0; k < qResults; ++k) {
-          lineage[op.results[k].v] = lineage[op.operands[k].v];
-        }
-      }
-      continue;
-    }
-
-    // Recover physical qubit index of operand 0 (and 1 for 2q).
-    int q0 = (op.operands.size() > 0) ? lineage[op.operands[0].v] : -1;
-    int q1 = (op.operands.size() > 1) ? lineage[op.operands[1].v] : -1;
-
-    switch (op.kind) {
-      case OpKind::H:    apply1q(sv, q0, H()); break;
-      case OpKind::X:    apply1q(sv, q0, X()); break;
-      case OpKind::Y:    apply1q(sv, q0, Y()); break;
-      case OpKind::Z:    apply1q(sv, q0, Z()); break;
-      case OpKind::S:    apply1q(sv, q0, S()); break;
-      case OpKind::Sdg:  apply1q(sv, q0, Sdg()); break;
-      case OpKind::T:    apply1q(sv, q0, T()); break;
-      case OpKind::Tdg:  apply1q(sv, q0, Tdg()); break;
-      case OpKind::Rx:   apply1q(sv, q0, Rx(extractAngle(op))); break;
-      case OpKind::Ry:   apply1q(sv, q0, Ry(extractAngle(op))); break;
-      case OpKind::Rz:   apply1q(sv, q0, Rz(extractAngle(op))); break;
-      case OpKind::Sx:   apply1q(sv, q0, SX()); break;
-      case OpKind::Sxdg: apply1q(sv, q0, SXdg()); break;
-      case OpKind::Cx:   apply2q(sv, q0, q1, CX()); break;
-      case OpKind::Cz:   apply2q(sv, q0, q1, CZ()); break;
-      case OpKind::Swap: apply2q(sv, q0, q1, SWAP()); break;
-      case OpKind::Ecr:  apply2q(sv, q0, q1, ECR()); break;
-      case OpKind::Ms:   apply2q(sv, q0, q1, MS()); break;
-      case OpKind::Rzz:  apply2q(sv, q0, q1, RZZ(extractAngle(op))); break;
-      // Native 1q gates we don't model exactly; fall through to
-      // identity (these only appear in chip-specific paths and
-      // M8's baseline equivalence is gated to standard gates).
-      case OpKind::Gpi:
-      case OpKind::Gpi2:
-      case OpKind::U1q:
-        // Treat as identity for the baseline check lane.
-        break;
-      default:
-        break;
-    }
-
-    // Propagate lineage.
-    for (int k = 0; k < qResults && k < (int)op.results.size(); ++k) {
-      lineage[op.results[k].v] = lineage[op.operands[k].v];
-    }
-  }
+namespace {
+StateVector initial(std::size_t n) {
+  if (n > 24) throw std::runtime_error("local simulator supports at most 24 active qubits");
+  StateVector sv{n, std::vector<cdbl>(std::size_t(1) << n, cdbl{})};
+  sv.amps[0] = 1.0;
   return sv;
+}
+void gate(StateVector& sv, const WireOp& op) {
+  if (op.qubits.size() == 1) apply1q(sv, op.qubits[0], passes::matrix1(op));
+  else if (op.qubits.size() == 2) apply2q(sv, op.qubits[0], op.qubits[1], passes::matrix2(op));
+  else throw std::runtime_error("unsupported simulator operation");
+}
+bool measure(StateVector& sv, int q, std::mt19937_64& rng) {
+  const auto mask = std::size_t(1) << q;
+  double p1 = 0;
+  for (std::size_t i=0; i<sv.amps.size(); ++i) if(i&mask) p1 += std::norm(sv.amps[i]);
+  p1 = std::clamp(p1, 0.0, 1.0);
+  bool outcome = std::generate_canonical<double,53>(rng) < p1;
+  double p = outcome ? p1 : 1-p1;
+  if(p<=0) throw std::runtime_error("invalid zero-probability measurement");
+  for(std::size_t i=0;i<sv.amps.size();++i)
+    sv.amps[i] = bool(i&mask)==outcome ? sv.amps[i]/std::sqrt(p) : cdbl{};
+  return outcome;
+}
+}
+StateVector simulate(const Module& m) {
+  if(hasControlFlow(m))throw std::runtime_error("dynamic circuits require shot simulation");
+  auto circuit=flatten(m);
+  auto sv=initial(circuit.numQubits);
+  bool measured=false;
+  for(const auto& op:circuit.instructions) {
+    if(op.kind==OpKind::GlobalPhase){for(auto& a:sv.amps)a*=std::polar(1.0,parameter(op));continue;}
+    if(op.kind==OpKind::Barrier) continue;
+    if(op.kind==OpKind::Measure){measured=true;continue;}
+    if(op.kind==OpKind::Reset || measured)
+      throw std::runtime_error("statevector equivalence requires a unitary circuit with terminal measurements; use sample for reset or mid-circuit measurement");
+    gate(sv,op);
+  }
+  for(auto& a:sv.amps)a*=std::polar(1.0,circuit.globalPhase);
+  return sv;
+}
+std::map<std::string,std::size_t> sample(const Module& m,std::size_t shots,std::mt19937_64& rng) {
+  if(shots==0) throw std::runtime_error("shots must be positive");
+  auto circuit=flatten(m);
+  std::map<int,int> active;
+  for(const auto& op:circuit.instructions) if(op.kind!=OpKind::Barrier)
+    for(int q:op.qubits) if(!active.count(q)) active[q]=static_cast<int>(active.size());
+  for(auto& op:circuit.instructions) if(op.kind!=OpKind::Barrier)
+    for(auto& q:op.qubits) q=active.at(q);
+  // Validate the memory bound before allocating one trajectory per shot.
+  auto zero=initial(active.size());
+  std::map<std::string,std::size_t> counts;
+  for(std::size_t shot=0;shot<shots;++shot){
+    auto sv=zero;std::string bits(circuit.numClbits,'0');
+    struct Branch{bool parent,condition;};std::vector<Branch> branches;bool active=true;
+    for(const auto& op:circuit.instructions){
+      if(op.kind==OpKind::If){
+        bool condition=(bits.at(circuit.numClbits-1-static_cast<std::size_t>(parameter(op,"condition_clbit")))-'0')==parameter(op,"condition_value");
+        branches.push_back({active,condition});active=active&&condition;continue;
+      }
+      if(op.kind==OpKind::Else){if(branches.empty())throw std::runtime_error("unmatched else");active=branches.back().parent&&!branches.back().condition;continue;}
+      if(op.kind==OpKind::EndIf){if(branches.empty())throw std::runtime_error("unmatched endif");active=branches.back().parent;branches.pop_back();continue;}
+      if(!active)continue;
+      if(op.kind==OpKind::GlobalPhase){for(auto& a:sv.amps)a*=std::polar(1.0,parameter(op));continue;}
+      if(op.kind==OpKind::Barrier)continue;
+      if(op.kind==OpKind::Measure){
+        bits.at(circuit.numClbits-1-static_cast<std::size_t>(op.clbit))=measure(sv,op.qubits[0],rng)?'1':'0';
+      }else if(op.kind==OpKind::Reset){
+        if(measure(sv,op.qubits[0],rng))apply1q(sv,op.qubits[0],X());
+      }else gate(sv,op);
+    }
+    ++counts[bits];
+  }
+  return counts;
 }
 
 EquivResult equivalent(const Module& a, const Module& b, double tol) {
-  EquivResult r;
-  StateVector sa = simulate(a);
-  StateVector sb = simulate(b);
-  if (sa.qubits != sb.qubits) {
-    r.equivalent = false;
-    r.maxAbsDiff = std::numeric_limits<double>::infinity();
-    return r;
-  }
-  // Find phase factor: pick any non-zero amp in sa and divide.
-  cdbl phase{1, 0};
-  for (std::size_t i = 0; i < sa.amps.size(); ++i) {
-    if (std::abs(sb.amps[i]) > 1e-7) {
-      phase = sa.amps[i] / sb.amps[i];
-      break;
+  struct Prepared {
+    WireCircuit circuit;
+    std::vector<int> input, output;
+    std::vector<std::pair<int,int>> readout;
+    std::size_t active=0;
+  };
+  auto prepare=[](const Module& module) {
+    Prepared p;p.circuit=flatten(module);
+    auto& c=p.circuit;
+    if(hasControlFlow(module))throw std::runtime_error("exhaustive equivalence does not support dynamic circuits; use trajectory tests");
+    p.input=c.initialLayout;p.output=c.finalLayout;
+    if(p.input.empty()&&p.output.empty()) {
+      for(std::size_t q=0;q<c.numQubits;++q){p.input.push_back(int(q));p.output.push_back(int(q));}
     }
+    if(p.input.size()!=p.output.size())throw std::runtime_error("equivalence requires initial and final layouts of equal width");
+    if(p.input.size()>8)throw std::runtime_error("exhaustive equivalence is limited to 8 logical qubits");
+    std::map<int,int> compact;
+    auto add=[&](int q){if(q<0||std::size_t(q)>=c.numQubits)throw std::runtime_error("invalid equivalence layout");compact.emplace(q,0);};
+    for(int q:p.input)add(q);for(int q:p.output)add(q);
+    bool measured=false;
+    for(const auto& op:c.instructions){
+      if(op.kind==OpKind::Measure){
+        measured=true;auto it=std::find(p.output.begin(),p.output.end(),op.qubits.at(0));
+        if(it==p.output.end())throw std::runtime_error("readout measures a routing ancilla");
+        p.readout.emplace_back(int(it-p.output.begin()),op.clbit);
+      } else if(op.kind!=OpKind::Barrier&&op.kind!=OpKind::GlobalPhase && (measured||op.kind==OpKind::Reset))
+        throw std::runtime_error("exhaustive equivalence requires a unitary circuit with terminal measurements");
+      for(int q:op.qubits)add(q);
+    }
+    if(compact.size()>12)throw std::runtime_error("exhaustive equivalence is limited to 12 active physical qubits");
+    for(auto& [q,index]:compact)index=int(p.active++);
+    for(auto& q:p.input)q=compact.at(q);for(auto& q:p.output)q=compact.at(q);
+    for(auto& op:c.instructions)for(auto& q:op.qubits)q=compact.at(q);
+    return p;
+  };
+  auto pa=prepare(a),pb=prepare(b);EquivResult r;
+  if(pa.input.size()!=pb.input.size()||pa.readout!=pb.readout||pa.circuit.numClbits!=pb.circuit.numClbits){
+    r.maxAbsDiff=std::numeric_limits<double>::infinity();return r;
   }
-  if (std::abs(std::abs(phase) - 1.0) > tol) {
-    r.equivalent = false;
-    r.maxAbsDiff = std::abs(std::abs(phase) - 1.0);
-    return r;
+  auto column=[&](const Prepared& p,std::size_t basis) {
+    auto state=initial(p.active);state.amps[0]=0;
+    std::size_t input=0;for(std::size_t q=0;q<p.input.size();++q)if(basis&(std::size_t(1)<<q))input|=std::size_t(1)<<p.input[q];
+    state.amps[input]=std::polar(1.0,p.circuit.globalPhase);
+    for(const auto& op:p.circuit.instructions){
+      if(op.kind==OpKind::Barrier||op.kind==OpKind::Measure)continue;
+      if(op.kind==OpKind::GlobalPhase){for(auto& z:state.amps)z*=std::polar(1.0,parameter(op));continue;}
+      gate(state,op);
+    }
+    std::size_t mask=0;for(int q:p.output)mask|=std::size_t(1)<<q;
+    std::vector<cdbl> result(std::size_t(1)<<p.output.size());
+    for(std::size_t wire=0;wire<state.amps.size();++wire){
+      if(wire&~mask){r.maxAbsDiff=std::max(r.maxAbsDiff,std::abs(state.amps[wire]));continue;}
+      std::size_t logical=0;for(std::size_t q=0;q<p.output.size();++q)if(wire&(std::size_t(1)<<p.output[q]))logical|=std::size_t(1)<<q;
+      result[logical]=state.amps[wire];
+    }
+    return result;
+  };
+  for(std::size_t basis=0;basis<(std::size_t(1)<<pa.input.size());++basis){
+    auto ca=column(pa,basis),cb=column(pb,basis);
+    if(!r.phase)for(std::size_t row=0;row<cb.size();++row)if(std::abs(cb[row])>1e-10){
+      cdbl ratio=ca[row]/cb[row];
+      if(std::abs(std::abs(ratio)-1)>tol){r.maxAbsDiff=std::max(r.maxAbsDiff,std::abs(std::abs(ratio)-1));return r;}
+      r.phase=ratio/std::abs(ratio);break;
+    }
+    for(std::size_t row=0;row<ca.size();++row)r.maxAbsDiff=std::max(r.maxAbsDiff,std::abs(ca[row]-r.phase.value_or(cdbl{1,0})*cb[row]));
   }
-  r.phase = phase;
-  double m = 0.0;
-  for (std::size_t i = 0; i < sa.amps.size(); ++i) {
-    m = std::max(m, std::abs(sa.amps[i] - phase * sb.amps[i]));
-  }
-  r.maxAbsDiff = m;
-  r.equivalent = m <= tol;
-  return r;
+  r.equivalent=r.maxAbsDiff<=tol;return r;
 }
 
 ResourceEstimate estimate(const Module& m, const registry::ChipInfo* chip,
@@ -281,16 +300,28 @@ ResourceEstimate estimate(const Module& m, const registry::ChipInfo* chip,
   r.qubits = allocCount;
 
   if (chip) {
-    // Pessimistic per-2q-gate error of 1% on unknown chips; per-1q
-    // 0.1%. Calibration-driven fidelities will refine this in M8+.
-    double e2q = 0.01;
-    double e1q = 0.001;
+    // Independent-error approximation, only when every operation has a
+    // supplied calibration. Missing data must not become invented fidelity.
     double pNoErr = 1.0;
-    pNoErr *= std::pow(1.0 - e2q, static_cast<double>(r.twoQubitGates));
-    pNoErr *=
-        std::pow(1.0 - e1q, static_cast<double>(r.totalGates - r.twoQubitGates));
-    r.totalErrorEstimate = 1.0 - pNoErr;
-    r.shotCostUsd = chip->pricePerShotUsd * static_cast<double>(shots);
+    bool known=!hasControlFlow(m);
+    auto use=[&](const auto& errors,const auto& key){
+      auto it=errors.find(key);
+      if(it==errors.end()||!std::isfinite(it->second)||it->second<0||it->second>=1)known=false;
+      else pNoErr*=1-it->second;
+    };
+    for(const auto& op:flatten(m).instructions){
+      if(isControl(op.kind)||op.kind==OpKind::Barrier||op.kind==OpKind::GlobalPhase)continue;
+      if(op.kind==OpKind::Reset){known=false;continue;}
+      if(op.kind==OpKind::Measure)use(chip->calibrationReadoutError,op.qubits.at(0));
+      else if(op.qubits.size()==1)use(chip->calibrationOneQubitError,op.qubits[0]);
+      else if(op.qubits.size()==2){
+        auto edge=std::pair<int,int>{op.qubits[0],op.qubits[1]};
+        if(!chip->directedConnectivity&&!chip->calibrationTwoQubitError.count(edge))std::swap(edge.first,edge.second);
+        use(chip->calibrationTwoQubitError,edge);
+      }
+    }
+    if(known)r.totalErrorEstimate=1-pNoErr;
+    if(chip->pricePerShotUsd>0)r.shotCostUsd = chip->pricePerShotUsd * static_cast<double>(shots);
   }
   return r;
 }

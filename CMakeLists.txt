@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(quantum_stack
-  VERSION       0.5.0
+  VERSION       0.6.0
   DESCRIPTION   "Heisenberg Quantum Stack — Photon · Phonon · Spinor compiler"
   HOMEPAGE_URL  "https://nimesh08.github.io/quantum-stack/"
   LANGUAGES     C CXX
@@ -37,6 +37,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # All static libraries get -fPIC so they can be linked into the
 # photon._engine shared module (Phase C M3).
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(WIN32)
+  add_compile_definitions(_USE_MATH_DEFINES NOMINMAX)
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)

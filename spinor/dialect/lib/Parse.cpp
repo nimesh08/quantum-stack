@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -26,6 +27,8 @@ class Lexer {
   bool atEnd() const { return pos_ >= src_.size(); }
   char peek() const { return atEnd() ? '\0' : src_[pos_]; }
   char get() { return atEnd() ? '\0' : src_[pos_++]; }
+
+  void skipHorizontal() { while(peek()==' '||peek()=='\t'||peek()=='\r')get(); }
 
   void skipWS() {
     while (!atEnd()) {
@@ -151,7 +154,10 @@ OpKind opFromMnemonic(std::string_view mnemonic) {
       {OpKind::Cx, "spinor.cx"},   {OpKind::Cz, "spinor.cz"},
       {OpKind::Swap, "spinor.swap"},
       {OpKind::Ecr, "spinor.ecr"}, {OpKind::Ms, "spinor.ms"},
-      {OpKind::Rzz, "spinor.rzz"}, {OpKind::Sx, "spinor.sx"},
+      {OpKind::PhasedXZ,"spinor.phased_xz"}, {OpKind::SqrtISwap,"spinor.sqrt_iswap"}, {OpKind::SqrtISwapInv,"spinor.sqrt_iswap_inv"}, {OpKind::Syc,"spinor.syc"},
+      {OpKind::ISwap,"spinor.iswap"},
+      {OpKind::If,"spinor.if"}, {OpKind::Else,"spinor.else"}, {OpKind::EndIf,"spinor.endif"}, {OpKind::GlobalPhase,"spinor.gphase"},
+      {OpKind::Rxx, "spinor.rxx"}, {OpKind::Rzz, "spinor.rzz"}, {OpKind::Sx, "spinor.sx"},
       {OpKind::Sxdg, "spinor.sxdg"},
       {OpKind::Gpi, "spinor.gpi"}, {OpKind::Gpi2, "spinor.gpi2"},
       {OpKind::U1q, "spinor.u1q"},
@@ -232,6 +238,31 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
     return std::nullopt;
   }
   m.targetAttr = *qstr;
+  while (lx.consume(',')) {
+    lx.skipWS();
+    auto key = lx.readIdent();
+    if (!lx.consume('=')) { diag.error("expected module attribute value"); return std::nullopt; }
+    if (key == "final_layout" || key == "initial_layout") {
+      auto value=lx.readQuoted();
+      if(!value) {diag.error("expected quoted final layout");return std::nullopt;}
+      std::size_t start=0;
+      while(start<value->size()) {
+        auto end=value->find(',',start);if(end==std::string::npos)end=value->size();
+        int index=-1;auto parsed=std::from_chars(value->data()+start,value->data()+end,index);
+        if(parsed.ec!=std::errc{}||parsed.ptr!=value->data()+end||index<0) {
+          diag.error("invalid final layout index");return std::nullopt;
+        }
+        (key=="final_layout"?m.finalLayout:m.initialLayout).push_back(index);start=end+1;
+        if(start==value->size()){diag.error("trailing comma in final layout");return std::nullopt;}
+      }
+      continue;
+    }
+    auto value = lx.readDouble();
+    if (!value || !std::isfinite(*value)) { diag.error("expected finite numeric module attribute"); return std::nullopt; }
+    if (key == "global_phase") m.globalPhase = *value;
+    else if (key == "num_clbits" && *value >= 0 && *value <= 1000000 && *value == std::floor(*value)) m.numClbits = static_cast<std::size_t>(*value);
+    else { diag.error("unknown module attribute: " + key); return std::nullopt; }
+  }
   if (!lx.consume('}')) {
     diag.error("expected '}' to close attributes", {});
     return std::nullopt;
@@ -314,7 +345,7 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
     // Operands: zero or more %name, separated by ','. Stop at '{'
     // (attributes), ':' (type list), or newline.
     std::vector<std::string> operandNames;
-    lx.skipWS();
+    lx.skipHorizontal();
     while (lx.peek() == '%') {
       std::string n = lx.readValueName();
       if (n.empty()) {

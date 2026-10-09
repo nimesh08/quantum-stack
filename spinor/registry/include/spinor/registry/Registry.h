@@ -6,6 +6,7 @@
 #include "spinor/verify/TargetInfo.h"
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -36,6 +37,15 @@ struct CapabilityFlags {
 struct ChipInfo {
   std::string id;
   std::string provider;
+  std::string qirPlatform = "standard";
+  std::string vendor;
+  std::string readiness = "needs_refresh";
+  std::string readinessReason;
+  std::string capabilityProvenance;
+  bool capabilityVerified = false;
+  std::vector<std::string> routes;
+  std::vector<std::string> formats;
+  bool directedConnectivity = false;
   std::size_t qubits = 0;
   std::vector<std::string> nativeGates;
 
@@ -53,6 +63,11 @@ struct ChipInfo {
   std::string calibrationSource;
   std::string calibrationRefresh;
   std::filesystem::path calibrationStore;
+  // Error probabilities in the same physical indexing as coupling. Values
+  // are optional; missing calibration must never imply zero error.
+  std::map<int, double> calibrationOneQubitError;
+  std::map<int, double> calibrationReadoutError;
+  std::map<std::pair<int, int>, double> calibrationTwoQubitError;
 };
 
 class Registry {

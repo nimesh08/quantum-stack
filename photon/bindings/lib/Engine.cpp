@@ -49,11 +49,18 @@ CompiledProgram CompiledProgram::fromPhononModule(pd::Module mod,
 
   // Optimize-once pipeline (NullImpls for borrowed passes).
   phonon::optimizer::PipelineConfig cfg;
-  (void)phonon::optimizer::runPipeline(cp.phn_, std::move(cfg));
+  // Exact optimization runs after lowering in Spinor PassManager.
 
   // Lower to flat Spinor.
   auto lr = phonon::lower::lower(cp.phn_, /*target=*/nullptr);
-  if (lr.module) cp.spn_ = std::move(*lr.module);
+  if (!lr.module || lr.diag.hasErrors()) {
+    std::ostringstream os;
+    os << "lowering failed";
+    for (const auto& d : lr.diag.items()) os << "\n  " << d.message;
+    cp.error_ = os.str();
+    return cp;
+  }
+  cp.spn_ = std::move(*lr.module);
 
   cp.ok_ = true;
   return cp;
@@ -78,7 +85,7 @@ ResourceEstimate CompiledProgram::estimate() const {
     switch (k) {
       case OK::AllocQubit: ++r.num_qubits; break;
       case OK::Cx: case OK::Cz: case OK::Swap:
-      case OK::Ecr: case OK::Ms: case OK::Rzz:
+      case OK::Ecr: case OK::Ms: case OK::Rzz: case OK::Rxx:
         ++r.two_qubit_count; break;
       case OK::T: case OK::Tdg: ++r.t_count; break;
       default: break;

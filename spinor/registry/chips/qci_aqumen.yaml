@@ -2,6 +2,17 @@
 
 id: qci_aqumen
 provider: qci
+
+schema_version: 2
+vendor: qci
+readiness: unavailable
+readiness_reason: "No verified public cloud submission contract."
+routes: [qci]
+formats: [qcdl]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 8
 native_gates: [cz, rx, rz]
 

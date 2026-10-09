@@ -1,5 +1,12 @@
 # Integration contract
 
+The **0.6** compiler/submission contract is documented in [docs/qstack.md](docs/qstack.md).
+`qstack` is the main CLI. Its versioned artifacts, explicit execution mode and
+persistent receipts replace implicit cassette defaults and raw-QASM-only jobs.
+The `spinor_submit` facade remains available. See the migration/readiness section
+before updating a downstream compatibility window. The historical distribution
+overview below does not establish that a provider account or chip was tested.
+
 This repository is the **compiler half** of the Heisenberg Quantum
 Stack. The product layer (jobsvc, calibration, launcher, playground,
 npm SDK) lives at

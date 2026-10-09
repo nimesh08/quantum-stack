@@ -74,6 +74,7 @@ struct ParserImpl {
           return std::nullopt;
         }
         std::int64_t n = std::stoll(consume().text);
+        if (n <= 0 || n > 1000000) { err("QReg size must be between 1 and 1000000"); return std::nullopt; }
         if (!expect(Tok::RParen, "')'")) return std::nullopt;
         return qregType(static_cast<std::uint32_t>(n));
       }
@@ -307,8 +308,9 @@ struct ParserImpl {
           err("QReg constructor expects integer size");
           return nullptr;
         }
-        s->decl_type.qreg_size =
-            static_cast<std::uint32_t>(std::stoll(consume().text));
+        auto size = std::stoll(consume().text);
+        if (size <= 0 || size > 1000000) { err("QReg size must be between 1 and 1000000"); return nullptr; }
+        s->decl_type.qreg_size = static_cast<std::uint32_t>(size);
         expect(Tok::RParen, "')'");
       }
       if (accept(Tok::Equals)) {
@@ -485,7 +487,12 @@ ParseResult parse(std::string_view text, std::string_view filename) {
   Lexer lx(text);
   auto toks = lx.tokenize();
   ParserImpl p(std::move(toks), std::string(filename));
-  Module m = p.parseProgram();
+  Module m;
+  try {
+    m = p.parseProgram();
+  } catch (const std::exception& error) {
+    p.err(std::string("invalid source: ") + error.what());
+  }
   ParseResult r;
   r.diag = std::move(p.diag);
   bool ok = true;
