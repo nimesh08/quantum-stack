@@ -153,7 +153,8 @@ ValueId Builder::constAngle(double rad, Location loc) {
 ValueId Builder::binOp(std::string op, ValueId a, ValueId b, Location loc) {
   // Result type follows the operand type (int + int → int, angle + angle
   // → angle). We probe `a`'s type.
-  Type rt = m_.typeOf(a);
+  Type rt = m_.typeOf(a).kind == TypeKind::Angle || m_.typeOf(b).kind == TypeKind::Angle
+      ? angleType() : m_.typeOf(a);
   auto r = issue(m_, OpKind::BinOp, {a, b},
                  {Attribute{"op", std::move(op)}}, {rt},
                  std::move(loc));

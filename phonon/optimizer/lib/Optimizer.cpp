@@ -306,7 +306,7 @@ Stats mergeRotations(pd::Module& m) {
       auto it = prevOpForValue.find(op.operands[0].v);
       if (it != prevOpForValue.end() && !dead[it->second]) {
         const pd::Op& prev = m.op(pd::OpId{it->second});
-        if (prev.kind == op.kind) {
+        if (prev.kind == op.kind && prev.operands.size() == 1) {
           double pA = mergedAngles.count(it->second) ? mergedAngles[it->second]
                                                        : opAngle(prev);
           double cA = opAngle(op);

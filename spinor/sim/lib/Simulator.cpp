@@ -3,6 +3,7 @@
 // Statevector simulator + equivalence + resource estimator.
 
 #include "spinor/sim/Simulator.h"
+#include "spinor/dialect/Resonators.h"
 
 #include "../../passes/lib/GateMatrices.h"
 
@@ -109,7 +110,19 @@ StateVector initial(std::size_t n) {
   return sv;
 }
 void gate(StateVector& sv, const WireOp& op) {
-  if (op.qubits.size() == 1) apply1q(sv, op.qubits[0], passes::matrix1(op));
+  if(op.kind==OpKind::Move) {
+    // IQM only specifies MOVE on |00>, |01>, |10>. Choose a=i as a
+    // simulation gauge; balanced sandwiches cancel it exactly. Never assign
+    // SWAP semantics to the undefined |11> subspace.
+    const auto q=std::size_t(1)<<op.qubits.at(0),r=std::size_t(1)<<op.qubits.at(1);
+    for(std::size_t i=0;i<sv.amps.size();++i)if(!(i&q)&&!(i&r)) {
+      if(std::abs(sv.amps[i|q|r])>1e-10)throw std::runtime_error("MOVE encountered population in its undefined |11> subspace");
+      auto resonator=sv.amps[i|r],qubit=sv.amps[i|q];
+      sv.amps[i|q]=cdbl(0,1)*resonator;
+      sv.amps[i|r]=cdbl(0,-1)*qubit;
+    }
+  }
+  else if (op.qubits.size() == 1) apply1q(sv, op.qubits[0], passes::matrix1(op));
   else if (op.qubits.size() == 2) apply2q(sv, op.qubits[0], op.qubits[1], passes::matrix2(op));
   else throw std::runtime_error("unsupported simulator operation");
 }
@@ -129,6 +142,7 @@ bool measure(StateVector& sv, int q, std::mt19937_64& rng) {
 StateVector simulate(const Module& m) {
   if(hasControlFlow(m))throw std::runtime_error("dynamic circuits require shot simulation");
   auto circuit=flatten(m);
+  validateResonatorCircuit(circuit);
   auto sv=initial(circuit.numQubits);
   bool measured=false;
   for(const auto& op:circuit.instructions) {
@@ -145,6 +159,7 @@ StateVector simulate(const Module& m) {
 std::map<std::string,std::size_t> sample(const Module& m,std::size_t shots,std::mt19937_64& rng) {
   if(shots==0) throw std::runtime_error("shots must be positive");
   auto circuit=flatten(m);
+  validateResonatorCircuit(circuit);
   std::map<int,int> active;
   for(const auto& op:circuit.instructions) if(op.kind!=OpKind::Barrier)
     for(int q:op.qubits) if(!active.count(q)) active[q]=static_cast<int>(active.size());
@@ -185,12 +200,15 @@ EquivResult equivalent(const Module& a, const Module& b, double tol) {
     std::size_t active=0;
   };
   auto prepare=[](const Module& module) {
-    Prepared p;p.circuit=flatten(module);
+    Prepared p;p.circuit=flatten(module);validateResonatorCircuit(p.circuit);
     auto& c=p.circuit;
     if(hasControlFlow(module))throw std::runtime_error("exhaustive equivalence does not support dynamic circuits; use trajectory tests");
     p.input=c.initialLayout;p.output=c.finalLayout;
     if(p.input.empty()&&p.output.empty()) {
-      for(std::size_t q=0;q<c.numQubits;++q){p.input.push_back(int(q));p.output.push_back(int(q));}
+      for(std::size_t q=0;q<c.numQubits;++q)
+        if(std::find(c.resonatorQubits.begin(),c.resonatorQubits.end(),int(q))==c.resonatorQubits.end()){
+          p.input.push_back(int(q));p.output.push_back(int(q));
+        }
     }
     if(p.input.size()!=p.output.size())throw std::runtime_error("equivalence requires initial and final layouts of equal width");
     if(p.input.size()>8)throw std::runtime_error("exhaustive equivalence is limited to 8 logical qubits");

@@ -83,6 +83,11 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
             "decomposition": {"one_qubit": {"recipe": "euler_zyz", "rotation_gate": "rz",
                 "pi_2_gate": "sx" if "sx" in gates else "gpi2" if "gpi2" in gates else "rx" if "rx" in gates else ""},
                 "two_qubit": {"recipe": "kak", "entangler": entangler, "entangler_count_max": 3}}}
+    if record.get("resonator_qubits"):
+        chip.update(computational_qubits=record["computational_qubits"],
+                    resonator_qubits=record["resonator_qubits"],
+                    move_loci=record.get("gate_loci", {}).get("move", []),
+                    cz_loci=record.get("gate_loci", {}).get("cz", []))
     # The small C++ reader accepts block maps and flow lists, not flow maps.
     # Timing objects belong in the Python scheduling report; only numeric error
     # pairs/triples are passed to the native placement engine.
@@ -232,11 +237,18 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         raise QStackError("Submission route differs from the compiled artifact; recompile for that route")
     validate_physical(artifact.physical_ir, artifact.target_snapshot, config)
     if dry_run:
+        if options.mode == "live":
+            from .providers import validate_serialization
+            validate_format(artifact.route, artifact.format, artifact.target_snapshot)
+            serialization = validate_serialization(artifact, {**config, "shots": options.shots})
+        else:
+            serialization = {"serializer": "owned-physical-ir", "validated": True, "network_used": False}
         return {"mode": options.mode, "dry_run": True, "route": artifact.route, "target": artifact.target,
-                "format": artifact.format, "shots": options.shots, "artifact_hash": artifact_hash(artifact)}
+                "format": artifact.format, "shots": options.shots, "artifact_hash": artifact_hash(artifact),
+                "serialization": serialization}
     if options.mode == "local":
         receipt, result = _execute_local(artifact, options, config)
-        save_job(receipt, result)
+        save_job(receipt, result, config)
         return result if wait else receipt
     if options.mode == "cassette":
         from importlib.resources import files
@@ -250,7 +262,7 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         receipt = JobReceipt(artifact.route, artifact.target, "cassette-" + uuid.uuid4().hex,
                              metadata=dict(metadata), artifact_hash=metadata["artifact_hash"], mode="cassette")
         result = ExecutionResult(artifact.route, artifact.target, receipt.job_id, None, raw, metadata)
-        save_job(receipt, result)
+        save_job(receipt, result, config)
         return result if wait else receipt
     ensure_live_target(artifact.target_snapshot)
     config.setdefault("device", artifact.target_snapshot["device"])
@@ -282,17 +294,17 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
     receipt.artifact_hash = artifact_hash(artifact)
     receipt.metadata["context"] = {k: v for k, v in config.items() if k not in SECRET_FIELDS and k in {
         "device", "project", "workspace", "workspace_resource_id", "resource", "region", "instance_crn", "url", "host", "user", "realm",
-        "sdk_profile", "sdk_config_file", "tokens_file", "credentials_file", "qibolab_bridge", "capability_snapshot", "device_config_name",
+        "sdk_profile", "sdk_config_file", "tokens_file", "credentials_file", "qibolab_bridge", "qibolab_platform", "platform", "platform_path", "capability_snapshot", "device_config_name",
         "run_name", "snapshot_id", "calibration_set_id", "quantum_computer", "s3_uri"}}
     receipt.metadata["provider_processing"] = {k: v for k, v in adapter.capabilities.items() if "translation" in k or "transpilation" in k}
-    save_job(receipt)
+    save_job(receipt, config=config)
     if not wait:
         return receipt
     if not adapter.capabilities.get("status", False):
         result = read_with_retry(lambda: adapter.results(receipt))
-        save_job(receipt, result)
+        save_job(receipt, result, config)
         return result
-    return wait_for_result(adapter, receipt, timeout=config.get("timeout", 600), poll_interval=config.get("poll_interval", 2))
+    return wait_for_result(adapter, receipt, timeout=config.get("timeout", 600), poll_interval=config.get("poll_interval", 2), config=config)
 
 
 def run_source(source: str, *, language: str = "phonon", target: str, mode: str,

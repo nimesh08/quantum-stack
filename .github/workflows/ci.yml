@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [ibm, google, aws, azure, quantinuum, rigetti, iqm, oqc, aqt]
+        provider: [ibm, google, aws, azure, quantinuum, rigetti, iqm, oqc, aqt, qibolab]
     env:
       QSTACK_TEST_SDK: ${{ matrix.provider }}
       AWS_EC2_METADATA_DISABLED: "true"
@@ -71,7 +71,9 @@ jobs:
           python -m pytest -q -ra
           spinor/submit/python/tests/test_sdk_contracts.py
           spinor/submit/python/tests/test_sdk_specialized_contracts.py
+          spinor/submit/python/tests/test_sdk_qibolab_contracts.py
           spinor/submit/python/tests/test_provider_contracts.py
+          spinor/submit/python/tests/test_provider_serialization.py
 
   package:
     name: Isolated provider package install

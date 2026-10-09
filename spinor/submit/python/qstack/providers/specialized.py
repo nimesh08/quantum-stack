@@ -102,14 +102,19 @@ class IQMAdapter(Adapter):
         client = self.client()
         dqa = client.get_dynamic_quantum_architecture()
         raw = plain(dqa)
-        labels = list(dqa.qubits)
+        computational = list(dqa.qubits)
         resonators = list(dqa.computational_resonators)
+        labels = computational + resonators
+        if len(set(labels)) != len(labels):
+            raise QStackError("IQM architecture repeats a component label", "INVALID_RESPONSE")
         gates, coupling, gate_loci = [], [], {}
         for name, info in dqa.gates.items():
-            # Reserve no logical qubit on a resonator. A device with direct CZ
-            # loci remains usable even when it also offers MOVE-based paths.
+            if name not in {"prx", "cz", "move", "measure", "reset"}:
+                continue
             loci = [locus for locus in info.loci if all(q in labels for q in locus)]
-            if not loci or name == "move":
+            if name == "move" and any(len(locus) != 2 or locus[0] not in computational or locus[1] not in resonators for locus in loci):
+                raise QStackError("IQM MOVE loci must be ordered (qubit, resonator)", "INVALID_RESPONSE")
+            if not loci:
                 continue
             native_name = {"prx": "u1q"}.get(name, name)
             gates.append(native_name)
@@ -117,15 +122,17 @@ class IQMAdapter(Adapter):
             for locus in loci:
                 if len(locus) == 2:
                     coupling.append([labels.index(q) for q in locus])
-        resonator_only = bool(resonators and len(labels) > 1 and not gate_loci.get("cz"))
-        return [{"route": self.route, "device": client.quantum_computer_name, "qubits": len(dqa.qubits),
+        return [{"route": self.route, "vendor": "iqm", "device": client.quantum_computer_name, "qubits": len(labels),
                  "qubit_labels": labels, "native_gates": gates, "gate_loci": gate_loci,
+                 "computational_qubits": list(range(len(computational))),
+                 "resonator_qubits": list(range(len(computational), len(labels))),
                  "computational_resonators": resonators, "coupling": coupling, "all_to_all": False,
                  "directed_connectivity": False, "formats": ["iqm-json"], "parameter_units": "radians",
                  "supports": {"reset": "reset" in gates, "mid_circuit_measure": False, "feedforward": False},
-                 "capability_verified": bool(gates) and not resonator_only,
-                 "readiness_reason": "Compiler does not yet route MOVE operations through reserved resonator slots; select a device with direct computational-qubit CZ loci" if resonator_only else None,
-                 "calibration_set_id": str(dqa.calibration_set_id), "raw": raw}]
+                 "capability_verified": bool(computational and "u1q" in gates and "measure" in gates),
+                 "calibration_set_id": str(dqa.calibration_set_id), "raw": raw,
+                 "capability_sources": ["https://docs.iqm.tech/iqm-client/integration_guide.html",
+                                        "https://docs.iqm.tech/iqm-client/iqm.iqm_client.transpile.html"]}]
 
     def submit(self, artifact, options):
         self.validate(artifact, options, {"iqm-json", "iqm-circuit-json", "native-json"})
@@ -141,7 +148,10 @@ class IQMAdapter(Adapter):
         if calibration:
             kwargs["calibration_set_id"] = UUID(calibration)
         job = self.client().submit_circuits([circuit], **kwargs)
-        return self.receipt(artifact, job.job_id, calibration_set_id=calibration)
+        physical_measurements = [i for i in artifact.physical_ir.get("instructions", []) if i.get("op") == "measure"]
+        keys = [i["args"]["key"] for i in circuit_data["instructions"] if i["name"] == "measure"]
+        key_mapping = [{"key": key, "clbit": inst["clbits"][0]} for key, inst in zip(keys, physical_measurements)]
+        return self.receipt(artifact, job.job_id, calibration_set_id=calibration, measurement_keys=key_mapping)
 
     def status(self, receipt):
         job = self.client().get_job(UUID(receipt.job_id))
@@ -152,7 +162,8 @@ class IQMAdapter(Adapter):
         state = plain(job.update())
         if state != "completed":
             raise QStackError(f"IQM job has no completed result (status {state})", "RESULT_NOT_READY")
-        return self.result(receipt, job.result(), result_kind="measurement-registers")
+        return self.result(receipt, job.result(), result_kind="measurement-registers",
+                           measurement_keys=receipt.metadata.get("measurement_keys", []))
 
     def cancel(self, receipt):
         self.client().get_job(UUID(receipt.job_id)).cancel()
@@ -177,20 +188,36 @@ class OQCAdapter(Adapter):
         if self.config.get("capability_snapshot") and not target:
             raise QStackError("An OQC capability_snapshot requires an explicit device QPU ID", "INVALID_CONFIG")
         qpus = client.get_qpus()
+        if qpus is None:
+            raise QStackError("OQC client did not initialize or return its active QPUs", "AUTHENTICATION_FAILED")
         if target and target not in {row["id"] for row in qpus}:
             raise QStackError("Configured OQC QPU ID is absent from this account's active QPUs", "TARGET_UNAVAILABLE")
         records = []
         for qpu in qpus:
             if target and qpu["id"] != target:
                 continue
-            calibration = plain(client.get_calibration(qpu_id=qpu["id"]))
-            record = {"route": self.route, "device": qpu["id"], "name": qpu.get("name"),
+            calibration_unavailable = False
+            try:
+                calibration = plain(client.get_calibration(qpu_id=qpu["id"]))
+            except Exception as error:
+                # The documented Fermioniq emulator route has no calibration
+                # endpoint. One emulator must not hide the account's real QPUs.
+                if getattr(error, "server_error_code", None) != 405:
+                    raise
+                calibration, calibration_unavailable = None, True
+            record = {"route": self.route, "vendor": "oqc", "device": qpu["id"], "name": qpu.get("name"),
                 "formats": ["openqasm2", "openqasm3", "qir-text", "qir-bitcode"],
-                "capability_verified": False, "calibration_sha256": calibration_digest(calibration),
+                "capability_verified": False, "calibration_sha256": None if calibration_unavailable else calibration_digest(calibration),
+                "readiness_reason": "This OQC endpoint does not expose calibration data" if calibration_unavailable else
+                    "OQC publishes benchmarking data without a native gate/locus schema; supply the calibration-bound account capability contract",
+                "capability_sources": ["https://docs.oqc.app/system_information.html", "https://docs.oqc.app/task_management.html"],
                 "raw": {"qpu": {key: qpu[key] for key in ("id", "name", "active") if key in qpu}, "calibration": calibration}}
             if self.config.get("capability_snapshot") and target:
+                if calibration_unavailable:
+                    raise QStackError("Cannot verify a calibration-bound contract for an endpoint without calibration data", "TARGET_INCOMPATIBLE")
                 record.update(account_capability(self.config["capability_snapshot"], route=self.route,
                                                  device=qpu["id"], calibration=calibration))
+                record["readiness_reason"] = None
             records.append(record)
         return records
 

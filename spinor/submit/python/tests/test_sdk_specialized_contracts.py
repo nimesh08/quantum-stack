@@ -98,6 +98,37 @@ def test_iqm_actual_circuit_objects_validate_native_adapter_output():
     assert receipt.job_id == str(UUID(int=2))
 
 
+def test_iqm_owned_move_sandwich_passes_real_sdk_architecture_validation(monkeypatch):
+    sdk("iqm", "iqm.iqm_client")
+    models = importlib.import_module("iqm.station_control.interface.models")
+    validation = importlib.import_module("iqm.iqm_client.validation")
+    transpilation = importlib.import_module("iqm.iqm_client.transpile")
+    monkeypatch.setattr(transpilation, "transpile_insert_moves", lambda *a, **k: pytest.fail("Vendor MOVE router was called"))
+    def gate(loci):
+        return models.GateInfo(implementations={"calibrated": models.GateImplementationInfo(loci=tuple(loci))},
+            default_implementation="calibrated", override_default_implementation={})
+    dqa = models.DynamicQuantumArchitecture(calibration_set_id=UUID(int=1),
+        qubits=["QB1", "QB2"], computational_resonators=["CR1"], gates={
+            "prx": gate([("QB1",), ("QB2",)]), "measure": gate([("QB1",), ("QB2",)]),
+            "move": gate([("QB1", "CR1")]), "cz": gate([("QB2", "CR1")])})
+    received = []
+    def submit(circuits, **kwargs):
+        validation.validate_circuit_instructions(dqa, circuits, must_close_sandwiches=True)
+        received.extend(circuits)
+        return NS(job_id=UUID(int=2))
+    adapter = get_adapter("iqm", {"_client": NS(quantum_computer_name="star", submit_circuits=submit,
+        get_dynamic_quantum_architecture=lambda: dqa)})
+    snapshot = adapter.discover()[0]
+    value = artifact("iqm", "iqm-json", "", [
+        {"op": "move", "qubits": [0, 2]}, {"op": "cz", "qubits": [1, 2]}, {"op": "move", "qubits": [0, 2]},
+        {"op": "measure", "qubits": [0], "clbits": [0]}, {"op": "measure", "qubits": [1], "clbits": [1]}], snapshot)
+    value.physical_ir["num_qubits"] = 3
+    value.format, value.payload = serialize_native("iqm", value.physical_ir, snapshot)
+    adapter.submit(value, SubmissionOptions(mode="live", shots=3))
+    assert [op.name for op in received[0].instructions] == ["move", "cz", "move", "measure", "measure"]
+    assert snapshot["computational_qubits"] == [0, 1] and snapshot["resonator_qubits"] == [2]
+
+
 def test_oqc_actual_task_serialization_disables_tket_and_requests_counts():
     client = sdk("oqc", "qcaas_client.client")
     importlib.import_module("compiler_config.config")

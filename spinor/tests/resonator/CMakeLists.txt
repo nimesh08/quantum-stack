@@ -1,0 +1,10 @@
+if(NOT QSTACK_ENABLE_TESTS)
+  return()
+endif()
+add_executable(spinor_resonator_test resonator_test.cpp)
+target_link_libraries(spinor_resonator_test PRIVATE spinor::passes spinor::sim spinor::emit)
+target_include_directories(spinor_resonator_test PRIVATE ${CMAKE_SOURCE_DIR}/spinor/tests/support)
+target_compile_features(spinor_resonator_test PRIVATE cxx_std_20)
+target_compile_definitions(spinor_resonator_test PRIVATE
+  RESONATOR_REGISTRY="${CMAKE_CURRENT_SOURCE_DIR}/registry")
+add_test(NAME spinor_resonator_test COMMAND spinor_resonator_test)

@@ -38,6 +38,13 @@ std::string emitPhysicalJson(const dialect::Module& m){
   for(std::size_t i=0;i<c.initialLayout.size();++i){if(i)out<<',';out<<c.initialLayout[i];}
   out<<"],\"measurement_mapping\":[";first=true;
   for(const auto& op:c.instructions)if(op.kind==OpKind::Measure){if(!first)out<<',';first=false;out<<"{\"qubit\":"<<op.qubits.at(0)<<",\"clbit\":"<<op.clbit<<'}';}
+  out<<"],\"resonator_qubits\":[";
+  for(std::size_t i=0;i<c.resonatorQubits.size();++i){if(i)out<<',';out<<c.resonatorQubits[i];}
+  out<<"],\"computational_qubits\":[";first=true;
+  for(std::size_t q=0;q<c.numQubits;++q)
+    if(std::find(c.resonatorQubits.begin(),c.resonatorQubits.end(),int(q))==c.resonatorQubits.end()){
+      if(!first)out<<',';first=false;out<<q;
+    }
   out<<"]}\n";return out.str();
 }
 } // namespace spinor::emit

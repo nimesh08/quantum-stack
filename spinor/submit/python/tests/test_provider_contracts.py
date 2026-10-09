@@ -578,6 +578,20 @@ def test_oqc_account_contract_is_bound_to_exact_active_qpu_and_calibration(tmp_p
         get_adapter("oqc", {"_client": client, "capability_snapshot": str(path)}).discover()
 
 
+def test_oqc_unsupported_emulator_calibration_does_not_hide_hardware():
+    class UnsupportedEndpoint(Exception):
+        server_error_code = 405
+    def calibration(*, qpu_id):
+        if qpu_id == "emulator":
+            raise UnsupportedEndpoint()
+        return {"timestamp": "calibration-id"}
+    client = NS(get_qpus=lambda: [{"id": "emulator"}, {"id": "hardware"}], get_calibration=calibration)
+    records = get_adapter("oqc", {"_client": client}).discover()
+    assert [row["device"] for row in records] == ["emulator", "hardware"]
+    assert records[0]["calibration_sha256"] is None and records[1]["calibration_sha256"]
+    assert not any(row["capability_verified"] for row in records)
+
+
 @pytest.mark.parametrize("patch", [{"device": "wrong"}, {"qubits": True}, {"coupling": [[0, 9]]},
     {"parameter_units": "turns"}, {"supports": {}}, {"attestation": "inferred"}])
 def test_oqc_account_contract_rejects_invalid_attestations(tmp_path, patch):
@@ -694,20 +708,22 @@ def test_real_qcs_results_preserve_memory_and_complex_readout(monkeypatch):
     assert response.counts is None
 
 
-def test_iqm_excludes_resonator_slots_but_keeps_direct_computational_cz():
+def test_iqm_preserves_reserved_resonator_slots_and_actual_gate_loci():
     dqa = NS(qubits=["QB1", "QB2"], computational_resonators=["CR1"], calibration_set_id=UUID(int=1),
         gates={"prx": NS(loci=[("QB1",), ("QB2",)]), "measure": NS(loci=[("QB1",), ("QB2",)]),
                "move": NS(loci=[("QB1", "CR1")]), "cz": NS(loci=[("QB2", "CR1")])})
     client = NS(quantum_computer_name="star", get_dynamic_quantum_architecture=lambda: dqa)
     adapter = get_adapter("iqm", {"_client": client})
     record = adapter.discover()[0]
-    assert record["qubit_labels"] == ["QB1", "QB2"] and record["computational_resonators"] == ["CR1"]
-    assert not record["capability_verified"] and "reserved resonator" in record["readiness_reason"]
-    assert record["coupling"] == [] and "move" not in record["native_gates"]
+    assert record["qubit_labels"] == ["QB1", "QB2", "CR1"] and record["computational_resonators"] == ["CR1"]
+    assert record["computational_qubits"] == [0, 1] and record["resonator_qubits"] == [2]
+    assert record["capability_verified"] and record["qubits"] == 3
+    assert record["gate_loci"]["move"] == [[0, 2]] and "move" in record["native_gates"]
+    assert record["coupling"] == [[0, 2], [1, 2]]
     dqa.gates["cz"].loci.append(("QB1", "QB2"))
     record = adapter.discover()[0]
-    assert record["capability_verified"] and record["coupling"] == [[0, 1]]
-    assert record["gate_loci"]["cz"] == [[0, 1]]
+    assert record["capability_verified"] and record["coupling"] == [[0, 2], [1, 2], [0, 1]]
+    assert record["gate_loci"]["cz"] == [[1, 2], [0, 1]]
 
 
 def test_oqc_reports_pinned_python_requirement_before_import(monkeypatch):

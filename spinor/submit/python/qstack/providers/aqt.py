@@ -76,32 +76,7 @@ class AQTAdapter(RestAdapter):
         self.validate(artifact, options)
         if options.shots > 2000:
             raise QStackError("AQT cloud supports at most 2000 shots per circuit")
-        operations, measured = [], False
-        for item in instructions(artifact.physical_ir):
-            op, q, p = item["op"].lower(), item.get("qubits", []), item.get("params", [])
-            if op == "barrier":
-                continue
-            if op == "measure":
-                measured = True
-                continue
-            if measured:
-                raise QStackError("AQT only supports terminal measurements", "UNSUPPORTED_CAPABILITY")
-            if op in {"u1q", "r"} and len(q) == 1 and len(p) == 2:
-                theta, phi = p[0] / pi, p[1] / pi
-                if not (0 <= theta <= 1 and 0 <= phi <= 2):
-                    raise QStackError("AQT R requires compiler-lowered theta in [0,pi], phi in [0,2pi]")
-                operations.append({"operation": "R", "qubit": q[0], "theta": theta, "phi": phi})
-            elif op == "rz" and len(q) == len(p) == 1:
-                operations.append({"operation": "RZ", "qubit": q[0], "phi": p[0] / pi})
-            elif op == "rxx" and len(q) == 2 and len(p) == 1:
-                if not 0 <= p[0] / pi <= 0.5:
-                    raise QStackError("AQT RXX requires compiler-lowered theta in [0,pi/2]")
-                operations.append({"operation": "RXX", "qubits": q, "theta": p[0] / pi})
-            else:
-                raise QStackError(f"AQT cannot serialize physical gate '{op}'", "UNSUPPORTED_GATE")
-        if not measured:
-            raise QStackError("AQT circuit requires a terminal measurement")
-        operations.append({"operation": "MEASURE"})
+        operations = aqt_operations(artifact.physical_ir)
         body = {"job_type": "quantum_circuit", "label": options.name,
                 "payload": {"circuits": [{"repetitions": options.shots, "quantum_circuit": operations,
                                            "number_of_qubits": artifact.physical_ir["num_qubits"]}]}}
@@ -133,3 +108,34 @@ class AQTAdapter(RestAdapter):
 
     def cancel(self, receipt):
         self.unsupported("cancel", "AQT connector 0.4 exposes no public cancellation method")
+
+
+def aqt_operations(ir):
+    """Serialize native gates without authentication or SDK-side config loading."""
+    operations, measured = [], False
+    for item in instructions(ir):
+        op, q, p = item["op"].lower(), item.get("qubits", []), item.get("params", [])
+        if op == "barrier":
+            continue
+        if op == "measure":
+            measured = True
+            continue
+        if measured:
+            raise QStackError("AQT only supports terminal measurements", "UNSUPPORTED_CAPABILITY")
+        if op in {"u1q", "r"} and len(q) == 1 and len(p) == 2:
+            theta, phi = p[0] / pi, p[1] / pi
+            if not (0 <= theta <= 1 and 0 <= phi <= 2):
+                raise QStackError("AQT R requires compiler-lowered theta in [0,pi], phi in [0,2pi]")
+            operations.append({"operation": "R", "qubit": q[0], "theta": theta, "phi": phi})
+        elif op == "rz" and len(q) == len(p) == 1:
+            operations.append({"operation": "RZ", "qubit": q[0], "phi": p[0] / pi})
+        elif op == "rxx" and len(q) == 2 and len(p) == 1:
+            if not 0 <= p[0] / pi <= 0.5:
+                raise QStackError("AQT RXX requires compiler-lowered theta in [0,pi/2]")
+            operations.append({"operation": "RXX", "qubits": q, "theta": p[0] / pi})
+        else:
+            raise QStackError(f"AQT cannot serialize physical gate '{op}'", "UNSUPPORTED_GATE")
+    if not measured:
+        raise QStackError("AQT circuit requires a terminal measurement")
+    operations.append({"operation": "MEASURE"})
+    return operations

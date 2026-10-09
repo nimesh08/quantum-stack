@@ -20,14 +20,16 @@ _LIB_ROUTINES = {"bell_pair", "ghz", "qft", "iqft",
 _MEASURE_METHODS = {"measure", "measure_int"}
 
 
-def _const_value(node: ast.AST) -> Optional[Any]:
+def _const_value(node: ast.AST, values: Optional[dict[str, Any]] = None) -> Optional[Any]:
     if isinstance(node, ast.Constant):
         return node.value
+    if isinstance(node, ast.Name):
+        return (values or {}).get(node.id)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        v = _const_value(node.operand)
-        return -v if v is not None else None
+        v = _const_value(node.operand, values)
+        return -v if type(v) in (int, float) else None
     if isinstance(node, ast.BinOp):
-        lhs, rhs = _const_value(node.left), _const_value(node.right)
+        lhs, rhs = _const_value(node.left, values), _const_value(node.right, values)
         if not isinstance(lhs, (int, float)) or not isinstance(rhs, (int, float)):
             return None
         if isinstance(node.op, ast.Add): return lhs + rhs
@@ -75,6 +77,12 @@ class Translator(ast.NodeVisitor):
         self.qregs: dict[str, int] = {}
         self.measured_bits: dict[str, str] = {}  # python var -> phonon ref
         self.func_name: str = ""
+        self.constants: dict[str, Any] = {}
+        self.expanded_iterations = 0
+        self.runtime_depth = 0
+
+    def _value(self, node: ast.AST) -> Optional[Any]:
+        return _const_value(node, self.constants)
 
     # ----- output helpers -------------------------------------------------
     def _emit(self, s: str) -> None:
@@ -206,14 +214,18 @@ class Translator(ast.NodeVisitor):
         raise self._err(f"statement of kind {type(node).__name__}", node)
 
     def _visit_assign(self, node: ast.Assign) -> None:
+        if self.runtime_depth:
+            raise self._err("runtime branches cannot change classical bindings", node)
         if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             target = node.targets[0].id
             # QReg declaration already handled; skip.
             if (isinstance(node.value, ast.Call) and
                     self._is_qreg_call(node.value)):
-                if target not in self.qregs:
+                if target not in self.qregs or self.indent:
                     raise self._err("QReg must have a positive static size and be declared at kernel scope", node)
                 return
+            if target in self.qregs:
+                raise self._err("quantum registers cannot be rebound to classical values", node)
             # measure() returning a bit list is recorded so future
             # `if c == 1:` can resolve to a phonon bit reference.
             if (isinstance(node.value, ast.Call) and
@@ -229,13 +241,18 @@ class Translator(ast.NodeVisitor):
                     self._emit(
                         f"__c_{qname}[{i}] = measure {qname}[{i}]")
                 self.measured_bits[target] = f"__c_{qname}"
+                self.constants.pop(target, None)
                 return
             # Plain int/float assignment becomes a Phonon `int` decl.
-            v = _const_value(node.value)
-            if isinstance(v, int):
+            v = self._value(node.value)
+            if type(v) is int:
+                self.measured_bits.pop(target, None)
+                self.constants[target] = v
                 self._emit(f"int {target} = {v}")
                 return
-            if isinstance(v, float):
+            if type(v) is float and math.isfinite(v):
+                self.measured_bits.pop(target, None)
+                self.constants[target] = v
                 self._emit(f"angle {target} = {v}")
                 return
             raise self._err("assignment of unsupported value", node)
@@ -268,7 +285,8 @@ class Translator(ast.NodeVisitor):
         args_text = []
         for a in call.args:
             try:
-                args_text.append(_expr_text(a))
+                value = self._value(a)
+                args_text.append(repr(value) if type(value) in (int, float) else _expr_text(a))
             except UnsupportedConstructError as e:
                 raise self._err(f"call argument: {e}", call)
         if method in _GATE_METHODS:
@@ -327,7 +345,7 @@ class Translator(ast.NodeVisitor):
 
         def constant(arg):
             try:
-                return _const_value(arg)
+                return self._value(arg)
             except (TypeError, ValueError, ArithmeticError):
                 return None
 
@@ -415,59 +433,77 @@ class Translator(ast.NodeVisitor):
                 isinstance(node.iter.func, ast.Name) and
                 node.iter.func.id == "range"):
             raise self._err("for-loop iterable must be `range(...)`", node)
-        args = node.iter.args
-        if len(args) == 1:
-            lo, hi = 0, _const_value(args[0])
-        elif len(args) == 2:
-            lo = _const_value(args[0])
-            hi = _const_value(args[1])
-        else:
-            raise self._err("range with step is not supported", node)
-        if not (isinstance(lo, int) and isinstance(hi, int)):
-            raise self._err("range bounds must be integer literals", node)
-        var = node.target.id
-        self._emit(f"for {var} in {lo}..{hi} {{")
-        self.indent += 1
-        for s in node.body:
-            self._visit_stmt(s)
-        self.indent -= 1
-        self._emit("}")
+        if node.iter.keywords or not 1 <= len(node.iter.args) <= 3:
+            raise self._err("range expects one, two, or three positional integers", node)
+        args = [self._value(arg) for arg in node.iter.args]
+        if any(type(arg) is not int for arg in args):
+            raise self._err("range bounds and step must be compile-time integers", node)
+        if len(args) == 3 and args[2] == 0:
+            raise self._err("range step must be nonzero", node)
         if node.orelse:
             raise self._err("for/else clause", node)
+        var = node.target.id
+        # Bind each Python induction value before visiting its body. This keeps
+        # descending/strided/nested ranges and library index arguments exact.
+        for value in range(*args):
+            self.expanded_iterations += 1
+            if self.expanded_iterations > 100000:
+                raise self._err("static loop expansion exceeds 100000 iterations", node)
+            self.constants[var] = value
+            self.indent += 1
+            for statement in node.body:
+                self._visit_stmt(statement)
+            self.indent -= 1
 
     def _visit_if(self, node: ast.If) -> None:
-        # Only `<measured_bit_var> == 1` shape is supported in M4.
         cmp_ = node.test
+        operators = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<",
+                     ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">="}
         if not (isinstance(cmp_, ast.Compare) and
-                len(cmp_.ops) == 1 and isinstance(cmp_.ops[0], ast.Eq)):
-            raise self._err(
-                "if-predicate must be `<measured_bit> == <int>`", node)
-        lhs = cmp_.left
-        rhs = _const_value(cmp_.comparators[0])
-        if not isinstance(rhs, int):
-            raise self._err("if-predicate rhs must be a literal int", node)
-        if isinstance(lhs, ast.Subscript) and isinstance(lhs.value, ast.Name):
-            var = lhs.value.id
-            index = _const_value(lhs.slice)
-            if var not in self.measured_bits or not isinstance(index, int) or index < 0:
-                raise self._err("condition requires a measured bit with a static index", node)
-            bit_ref = f"{self.measured_bits[var]}[{index}]"
-        elif isinstance(lhs, ast.Name):
-            var = lhs.id
-            bit_ref = self.measured_bits.get(var, var)
-            if var in self.measured_bits:
-                qname = bit_ref.removeprefix("__c_")
-                if self.qregs[qname] != 1:
+                len(cmp_.ops) == 1 and type(cmp_.ops[0]) in operators):
+            raise self._err("if-predicate requires one numeric or measured-bit comparison", node)
+        left, right = cmp_.left, cmp_.comparators[0]
+        lhs, rhs = self._value(left), self._value(right)
+        operator = operators[type(cmp_.ops[0])]
+        if type(lhs) in (int, float) and type(rhs) in (int, float):
+            take = {"==": lhs == rhs, "!=": lhs != rhs, "<": lhs < rhs,
+                    "<=": lhs <= rhs, ">": lhs > rhs, ">=": lhs >= rhs}[operator]
+            self.indent += 1
+            for statement in node.body if take else node.orelse:
+                self._visit_stmt(statement)
+            self.indent -= 1
+            return
+
+        def operand(expression, value):
+            if type(value) in (int, float) and math.isfinite(value):
+                return repr(value)
+            if isinstance(expression, ast.Subscript) and isinstance(expression.value, ast.Name):
+                var, index = expression.value.id, self._value(expression.slice)
+                if var not in self.measured_bits or type(index) is not int:
+                    raise self._err("condition requires a measured bit with a static index", node)
+                register = self.measured_bits[var]
+                width = self.qregs[register.removeprefix("__c_")]
+                if not 0 <= index < width:
+                    raise self._err("measured bit index out of range", node)
+                return f"{register}[{index}]"
+            if isinstance(expression, ast.Name) and expression.id in self.measured_bits:
+                register = self.measured_bits[expression.id]
+                if self.qregs[register.removeprefix("__c_")] != 1:
                     raise self._err("comparison of a measured register requires an explicit bit index", node)
-                bit_ref += "[0]"
-        else:
-            raise self._err("if-predicate lhs must be a scalar or indexed measured bit", node)
-        self._emit(f"if ({bit_ref} == {rhs}) {{")
+                return f"{register}[0]"
+            raise self._err("condition requires a measured bit and a compile-time numeric value", node)
+
+        if type(lhs) not in (int, float) and type(rhs) not in (int, float):
+            raise self._err("runtime comparison requires one measured bit and one constant", node)
+        self._emit(f"if ({operand(left, lhs)} {operator} {operand(right, rhs)}) {{")
+        constants_before = self.constants.copy()
+        self.runtime_depth += 1
         self.indent += 1
         for s in node.body:
             self._visit_stmt(s)
         self.indent -= 1
         self._emit("}")
+        self.constants = constants_before.copy()
         if node.orelse:
             self._emit("else {")
             self.indent += 1
@@ -475,6 +511,8 @@ class Translator(ast.NodeVisitor):
                 self._visit_stmt(s)
             self.indent -= 1
             self._emit("}")
+        self.runtime_depth -= 1
+        self.constants = constants_before
 
     def _visit_return(self, node: ast.Return) -> None:
         if self.indent:

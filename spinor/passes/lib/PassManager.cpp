@@ -20,6 +20,9 @@
 #include "spinor/passes/Routing.h"
 #include "spinor/passes/SynthesisTraits.h"
 #include "spinor/passes/VF2PostLayout.h"
+#include "spinor/passes/ResonatorRouting.h"
+#include "spinor/dialect/Resonators.h"
+#include "spinor/registry/ComponentTopology.h"
 
 namespace spinor::passes {
 namespace {
@@ -111,6 +114,11 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
   try{
     dialect::verify(module,diag);if(diag.hasErrors())return false;
     auto c=dialect::flatten(module);checkCapabilities(c,chip);
+    auto computers=registry::computationalComponents(chip);
+    auto actualResonators=c.resonatorQubits,expectedResonators=chip.resonatorQubits;
+    std::sort(actualResonators.begin(),actualResonators.end());std::sort(expectedResonators.begin(),expectedResonators.end());
+    if(actualResonators!=expectedResonators)throw std::runtime_error("physical IR resonator metadata does not match target");
+    dialect::validateResonatorCircuit(c);
     if(!std::isfinite(c.globalPhase))throw std::runtime_error("nonfinite global phase");
     std::set<int> layoutWires;
     for(int p:c.finalLayout)if(p<0||std::size_t(p)>=c.numQubits||!layoutWires.insert(p).second)
@@ -125,6 +133,16 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
       if(op.kind==dialect::OpKind::Measure||op.kind==dialect::OpKind::Reset||op.kind==dialect::OpKind::Barrier)continue;
       auto name=std::string(dialect::opMnemonic(op.kind)).substr(7);
       if(std::find(chip.nativeGates.begin(),chip.nativeGates.end(),name)==chip.nativeGates.end())throw std::runtime_error("non-native gate in compiled circuit: "+name);
+      if(op.kind==dialect::OpKind::Move) {
+        if(std::find(chip.moveLoci.begin(),chip.moveLoci.end(),std::pair{op.qubits[0],op.qubits[1]})==chip.moveLoci.end())
+          throw std::runtime_error("MOVE is not calibrated on the ordered (qubit, resonator) locus");
+        continue;
+      }
+      if(op.kind==dialect::OpKind::Cz&&!chip.resonatorQubits.empty()) {
+        if(std::find(chip.czLoci.begin(),chip.czLoci.end(),std::pair{op.qubits[0],op.qubits[1]})==chip.czLoci.end())
+          throw std::runtime_error("CZ operand order is not a calibrated physical locus");
+        continue;
+      }
       if(op.kind==dialect::OpKind::Rx&&chip.decompose.oneQubitPi2Gate=="rx"){
         double angle=dialect::parameter(op),steps=angle/(M_PI/2);
         if(std::abs(angle)<1e-13||std::abs(angle)>M_PI+1e-10||std::abs(steps-std::round(steps))>1e-10)
@@ -148,6 +166,7 @@ dialect::Module PassManager::compile(const dialect::Module& module,
   dialect::verify(module,diag);
   if(diag.hasErrors())return module;
   checkCapabilities(dialect::flatten(module),chip);
+  if(!chip.resonatorQubits.empty())return compileResonatorCircuit(module,chip,level,diag);
   // Stage 1: Placement (always run; chip-agnostic — only reads
   // the coupling map).
   CouplingGraph g(chip.qubits, chip.coupling, chip.allToAll);

@@ -6,6 +6,7 @@
 #include "phonon/dialect/Phonon.h"
 
 #include <string>
+#include <cmath>
 #include <vector>
 
 namespace phonon::dialect {
@@ -128,8 +129,9 @@ void verify(const Module& m, Diagnostics& diag) {
         }
         Type ta = m.typeOf(op.operands[0]);
         Type tb = m.typeOf(op.operands[1]);
-        if (ta != tb || !isClassicalScalar(ta) || ta.kind == TypeKind::Bit) {
-          diag.error("phonon.binop operands must be matching int/angle",
+        if (!isClassicalScalar(ta) || !isClassicalScalar(tb) ||
+            ta.kind == TypeKind::Bit || tb.kind == TypeKind::Bit) {
+          diag.error("phonon.binop operands must be numeric int/angle",
                      loc, id);
         }
         break;
@@ -154,15 +156,33 @@ void verify(const Module& m, Diagnostics& diag) {
       default: {
         if (!isSpinorKind(op.kind)) break;  // already covered above
         int arity = qubitArity(op.kind);
-        if (arity >= 0 &&
-            static_cast<int>(op.operands.size()) != arity) {
+        int qubitCount = 0;
+        for (auto operand : op.operands) if (isQuantumType(m.typeOf(operand))) ++qubitCount;
+        if (arity >= 0 && qubitCount != arity) {
           diag.error(std::string("op '") +
                      std::string(opMnemonic(op.kind)) +
                      "' has wrong qubit-operand count",
                      loc, id);
         }
-        for (ValueId v : op.operands) {
-          (void)v;  // type-checking handled by isQuantumType where it matters
+        std::vector<bool> parameterOperands(op.operands.size(), false);
+        for (const auto& attribute : op.attributes) {
+          if (attribute.name != "angle_operand" && attribute.name != "theta_operand" &&
+              attribute.name != "phi_operand") continue;
+          const auto* index = std::get_if<double>(&attribute.value);
+          if (!index || !std::isfinite(*index) || *index < 0 ||
+              std::floor(*index) != *index || *index >= op.operands.size()) {
+            diag.error("symbolic gate parameter references an invalid operand", loc, id);
+            continue;
+          }
+          const auto position = static_cast<std::size_t>(*index);
+          const auto type = m.typeOf(op.operands[position]).kind;
+          if (parameterOperands[position] || (type != TypeKind::Int && type != TypeKind::Angle))
+            diag.error("symbolic gate parameter must reference one numeric operand", loc, id);
+          parameterOperands[position] = true;
+        }
+        for (std::size_t position = 0; position < op.operands.size(); ++position) {
+          if (!isQuantumType(m.typeOf(op.operands[position])) && !parameterOperands[position])
+            diag.error("gate has an unreferenced non-qubit operand", loc, id);
         }
         break;
       }

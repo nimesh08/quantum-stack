@@ -34,6 +34,10 @@ set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS         OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Sources use conventional headers, with no C++ module units. Avoid unnecessary
+# module dependency scanning; the Clang/Ninja Windows scan path can otherwise
+# archive stale objects before their replacements have finished compiling.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # All static libraries get -fPIC so they can be linked into the
 # photon._engine shared module (Phase C M3).
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -71,10 +75,10 @@ if(LLVM_FOUND AND MLIR_FOUND)
   add_definitions(${LLVM_DEFINITIONS})
   set(QSTACK_HAVE_LLVM ON)
 else()
-  message(WARNING
+  message(STATUS
     "LLVM/MLIR ${QSTACK_LLVM_VERSION} not found. "
-    "Skeleton will configure but cannot build C++ engine targets. "
-    "Pass -DLLVM_DIR=<...>/lib/cmake/llvm and -DMLIR_DIR=<...>/lib/cmake/mlir.")
+    "Building the standalone C++ compiler; the optional LLVM/MLIR bridge is disabled. "
+    "To enable that bridge, pass -DLLVM_DIR=<...>/lib/cmake/llvm and -DMLIR_DIR=<...>/lib/cmake/mlir.")
   set(QSTACK_HAVE_LLVM OFF)
 endif()
 

@@ -48,7 +48,98 @@ class M4Translator(unittest.TestCase):
             for i in range(0, 4):
                 q.h(0)
         text = translate(f)
-        self.assertIn("for i in 0..4 {", text)
+        self.assertEqual(text.count("h q[0]"), 4)
+
+    def test_nested_strided_ranges_bind_indices_and_angles(self) -> None:
+        from photon._translator import translate
+        def sample():
+            q = photon.QReg(6)
+            stop = 6
+            for i in range(5, -1, -2):
+                for j in range(i, i + 1):
+                    q.rx(j / stop, j)
+        text = translate(sample)
+        self.assertIn("rx(0.8333333333333334) q[5]", text)
+        self.assertIn("rx(0.5) q[3]", text)
+        self.assertIn("rx(0.16666666666666666) q[1]", text)
+        self.assertEqual(text.count("rx("), 3)
+
+    def test_range_induction_and_scalar_updates_match_python(self) -> None:
+        from photon._translator import translate
+        def sample():
+            q = photon.QReg(4)
+            count = 0
+            for i in range(0, 4, 2):
+                count = count + 1
+                q.x(i)
+            if count >= 2:
+                q.h(i)
+            else:
+                q.z(1)
+        text = translate(sample)
+        self.assertIn("x q[0]", text)
+        self.assertIn("x q[2]", text)
+        self.assertIn("h q[2]", text)
+        self.assertNotIn("z q[1]", text)
+
+    def test_measured_comparisons_and_loop_indices_are_preserved(self) -> None:
+        from photon._translator import translate
+        def sample():
+            q = photon.QReg(2)
+            output = photon.QReg(2)
+            c = q.measure()
+            for i in range(2):
+                if c[i] != 0:
+                    output.x(1 - i)
+                if 0 < c[i]:
+                    output.z(1 - i)
+        text = translate(sample)
+        self.assertIn("if (__c_q[0] != 0)", text)
+        self.assertIn("if (__c_q[1] != 0)", text)
+        self.assertIn("if (0 < __c_q[0])", text)
+        self.assertIn("if (0 < __c_q[1])", text)
+
+    def test_measurement_rebinding_does_not_reuse_stale_constant(self) -> None:
+        from photon._translator import translate
+        def sample():
+            q = photon.QReg(1)
+            c = 0
+            c = q.measure()
+            if c == 1:
+                q.x(0)
+        self.assertIn("if (__c_q[0] == 1)", translate(sample))
+
+    def test_invalid_and_unbounded_ranges_are_rejected(self) -> None:
+        def zero():
+            q = photon.QReg(1)
+            for i in range(0, 3, 0):
+                q.h(0)
+        def fractional():
+            q = photon.QReg(1)
+            for i in range(0, 3, 0.5):
+                q.h(0)
+        def excessive():
+            q = photon.QReg(1)
+            for i in range(100001):
+                pass
+        from photon._translator import translate
+        from photon._errors import UnsupportedConstructError
+        for sample, message in ((zero, "nonzero"), (fractional, "compile-time integers"), (excessive, "100000")):
+            with self.assertRaisesRegex(UnsupportedConstructError, message):
+                translate(sample)
+
+    def test_runtime_scalar_assignment_cannot_change_following_gate(self) -> None:
+        def sample():
+            q = photon.QReg(1)
+            c = q.measure()
+            theta = 0.5
+            if c[0] == 1:
+                theta = 1.0
+            q.rx(theta, 0)
+        from photon._translator import translate
+        from photon._errors import UnsupportedConstructError
+        with self.assertRaisesRegex(UnsupportedConstructError, "runtime branches cannot change classical bindings"):
+            translate(sample)
 
     def test_target_propagated(self) -> None:
         from photon._translator import translate
@@ -257,6 +348,12 @@ class M4TranslatorRejection(unittest.TestCase):
             if c[0] == 1:
                 return q.measure_int()
         self._assert_rejects(conditional, "conditional")
+        def static_conditional():
+            q = photon.QReg(1)
+            if 1 == 1:
+                return q.measure_int()
+            q.x(0)
+        self._assert_rejects(static_conditional, "conditional")
 
 
 if __name__ == "__main__":

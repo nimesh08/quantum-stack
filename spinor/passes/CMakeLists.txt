@@ -4,6 +4,7 @@ add_library(spinor_passes STATIC
   lib/CouplingGraph.cpp
   lib/Placement.cpp
   lib/Routing.cpp
+  lib/ResonatorRouting.cpp
   lib/Decomposition.cpp
   lib/Cleanup.cpp
   lib/OptimizationLevel.cpp

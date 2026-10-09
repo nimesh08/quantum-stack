@@ -9,6 +9,8 @@ namespace spinor::emit {
 using namespace dialect;
 std::string emitQir(const Module& m,const registry::ChipInfo* chip) {
   auto c=flatten(m);std::ostringstream body,os;
+  for(const auto& op:c.instructions)if(op.kind==OpKind::Move)
+    throw std::runtime_error("MOVE requires IQM native JSON; this QIR profile has no MOVE intrinsic");
   body<<std::scientific<<std::setprecision(17);
   const std::string platform=chip?chip->qirPlatform:"standard";
   const bool quantinuum=platform=="quantinuum-h2"||platform=="quantinuum-helios";

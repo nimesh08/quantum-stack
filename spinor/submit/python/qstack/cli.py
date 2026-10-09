@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from .artifacts import load_artifact
-from .config import FIELDS, SECRET_FIELDS, ResolvedConfig, config_path, resolve_config, state_path
+from .config import FIELD_SPECS, SECRET_FIELDS, ResolvedConfig, config_path, redact_data, resolve_config, state_path
 from .jobs import load_job, read_with_retry, save_job
 from .models import QStackError, SubmissionOptions
 from .registry import cache_targets, get_target, profiles
@@ -19,18 +19,28 @@ from .registry import cache_targets, get_target, profiles
 def parser() -> argparse.ArgumentParser:
     from .providers import ADAPTERS, UNAVAILABLE
     shared = argparse.ArgumentParser(add_help=False)
-    for field in sorted(FIELDS - {"provider", "target", "optimization_level", "instance_crn"}):
-        shared.add_argument("--" + field.replace("_", "-"), default=argparse.SUPPRESS)
-    shared.add_argument("--provider", choices=[*ADAPTERS, *UNAVAILABLE, "local"], default=argparse.SUPPRESS)
-    shared.add_argument("--target", "--chip", "-t", default=argparse.SUPPRESS)
-    shared.add_argument("--instance-crn", "--instance", default=argparse.SUPPRESS)
-    shared.add_argument("-O", "--optimization-level", type=int, default=argparse.SUPPRESS)
+    for name, spec in sorted(FIELD_SPECS.items()):
+        flags = spec.flags or ("--" + name.replace("_", "-"),)
+        aliases = [f"{route}: {', '.join(names)}" for route, names in spec.aliases.items()]
+        help_text = (spec.description + f". Environment: QSTACK_<ROUTE>_{name.upper()}" +
+                     ("; " + "; ".join(aliases) if aliases else ""))
+        kwargs = {"dest": name, "default": argparse.SUPPRESS, "help": help_text}
+        if name == "provider":
+            kwargs["choices"] = [*ADAPTERS, *UNAVAILABLE, "local"]
+        elif spec.choices:
+            # Values are parsed by the same typed resolver for CLI, env and TOML.
+            kwargs["metavar"] = "{" + ",".join(map(str, spec.choices)) + "}"
+        shared.add_argument(*flags, **kwargs)
+        if spec.secret:
+            flag = "--" + name.replace("_", "-")
+            shared.add_argument(flag + "-file", default=argparse.SUPPRESS, metavar="PATH",
+                                help=f"Read {name} from this exact UTF-8 secret file")
+            shared.add_argument(flag + "-stdin", action="store_true", default=argparse.SUPPRESS,
+                                help=f"Read {name} from stdin (one credential per command)")
     shared.add_argument("--config", "--config-file", default=argparse.SUPPRESS)
     shared.add_argument("--profile", default=argparse.SUPPRESS)
     shared.add_argument("--env-file", "--env-path", action="append", default=argparse.SUPPRESS)
     shared.add_argument("--no-env-file", action="store_true", default=argparse.SUPPRESS)
-    shared.add_argument("--api-key-file", default=argparse.SUPPRESS)
-    shared.add_argument("--api-key-stdin", action="store_true", default=argparse.SUPPRESS)
     shared.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     shared.add_argument("--verbose", "-v", action="store_true", default=argparse.SUPPRESS)
     shared.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS)
@@ -90,7 +100,8 @@ def _resolve(args: dict, route: str | None = None) -> ResolvedConfig:
         args["allow_new_profile"] = True
     if route or args.get("provider"):
         return resolve_config(route or args["provider"], args)
-    bootstrap = {k: v for k, v in args.items() if k not in {"api_key_file", "api_key_stdin"}}
+    secret_inputs = {field + suffix for field in SECRET_FIELDS for suffix in ("_file", "_stdin")}
+    bootstrap = {k: v for k, v in args.items() if k not in secret_inputs}
     initial = resolve_config(route, bootstrap)
     route = route or initial.values.get("provider")
     if not route and initial.values.get("target"):
@@ -167,7 +178,8 @@ def execute(args: dict, resolved: ResolvedConfig):
             return {"profiles": profiles(config), "discovered": cached}
         if not config.get("provider"):
             raise QStackError("targets refresh requires --provider or a configured profile")
-        return cache_targets(config["provider"], read_with_retry(get_adapter(config["provider"], config).discover))
+        records = read_with_retry(get_adapter(config["provider"], config).discover)
+        return cache_targets(config["provider"], redact_data(records, config))
     if command == "auth":
         if not config.get("provider"):
             raise QStackError("Authentication commands require --provider or a configured profile")
@@ -201,7 +213,7 @@ def execute(args: dict, resolved: ResolvedConfig):
         if args["action"] == "cancel":
             return adapter.cancel(receipt)
         result = read_with_retry(lambda: adapter.results(receipt))
-        save_job(receipt, result)
+        save_job(receipt, result, context)
         return result
     source = args.get("input") or args.get("qasm_file")
     if command == "compile" and not args.get("out"):
@@ -249,13 +261,17 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(result, "to_dict"):
             result = result.to_dict()
         if not args.get("quiet"):
-            print(json.dumps(result, indent=None if args.get("json") else 2, allow_nan=False))
+            # Keep source labels for config show while redacting values in all
+            # provider responses, including successful responses that echo tokens.
+            if args.get("command") != "config":
+                result = redact_data(result, resolved.values)
+            print(resolved.redact_text(json.dumps(result, indent=None if args.get("json") else 2, allow_nan=False)))
         return 0
     except QStackError as exc:
         error = {"error": exc.code, "message": resolved.redact_text(str(exc))}
         if exc.details:
             error["details"] = exc.details
-        print(resolved.redact_text(json.dumps(error)), file=sys.stderr)
+        print(resolved.redact_text(json.dumps(redact_data(error, resolved.values))), file=sys.stderr)
         return 2
     except (OSError, ValueError, TypeError, KeyError) as exc:
         print(json.dumps({"error": "INVALID_REQUEST", "message": f"Invalid input or provider response ({type(exc).__name__}); check configuration, source and artifact format"}), file=sys.stderr)

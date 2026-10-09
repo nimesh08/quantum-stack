@@ -179,7 +179,7 @@ OpKind fromSpinorKind(spinor::dialect::OpKind k) {
     case SK::Barrier:    return OpKind::Barrier;
     case SK::GlobalPhase:return OpKind::GlobalPhase;
     case SK::If:case SK::Else:case SK::EndIf:
-    case SK::PhasedXZ:case SK::SqrtISwap:case SK::SqrtISwapInv:case SK::Syc:case SK::ISwap:
+    case SK::PhasedXZ:case SK::SqrtISwap:case SK::SqrtISwapInv:case SK::Syc:case SK::ISwap:case SK::Move:
       throw std::logic_error("physical/control Spinor operation cannot be imported as a Phonon gate");
   }
   throw std::logic_error("unknown spinor::OpKind in fromSpinorKind");

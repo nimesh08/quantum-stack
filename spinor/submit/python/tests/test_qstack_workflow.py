@@ -66,11 +66,66 @@ def test_jobs_survive_restart_and_strip_secrets(tmp_path, monkeypatch):
     assert counts.counts == {"101": 16}
 
 
+def test_job_records_redact_credential_values_inside_raw_provider_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("QSTACK_STATE_DIR", str(tmp_path))
+    receipt = JobReceipt("ionq", "device", "echo-job")
+    result = ExecutionResult("ionq", "device", receipt.job_id, raw={
+        "probabilities": {"0": 0.25, "1": 0.75}, "debug": "token echo: private/token",
+        "request": "https://example.invalid/?key=private%2Ftoken", "apiKey": "another-secret",
+        "details": "another-secret was accepted"})
+    reference = save_job(receipt, result, {"api_key": "private/token"})
+    stored = Path(reference).read_text()
+    assert "private/token" not in stored and "private%2Ftoken" not in stored and "another-secret" not in stored
+    recovered = load_job(reference)[1]
+    assert recovered.raw["probabilities"] == {"0": 0.25, "1": 0.75}
+    assert recovered.counts is None
+
+
+def test_sdk_managed_oauth_response_secrets_are_never_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("QSTACK_STATE_DIR", str(tmp_path))
+    receipt = JobReceipt("google", "device", "oauth-job")
+    result = ExecutionResult("google", "device", receipt.job_id, raw={
+        "refresh_token": "sdk-refresh-credential", "idToken": "sdk-identity-credential",
+        "message": "sdk-refresh-credential and sdk-identity-credential were refreshed",
+        "samples": [0, 1, 1]})
+    reference = save_job(receipt, result)
+    stored = Path(reference).read_text()
+    assert "sdk-refresh-credential" not in stored and "sdk-identity-credential" not in stored
+    assert load_job(reference)[1].raw == {"message": "<redacted> and <redacted> were refreshed", "samples": [0, 1, 1]}
+
+
 def test_dry_run_is_offline_even_with_live_mode(monkeypatch):
     import qstack.providers
     monkeypatch.setattr(qstack.providers, "get_adapter", lambda *args: pytest.fail("dry-run must not construct a live client"))
+    checked = []
+    def validate(artifact, config):
+        checked.append((artifact.route, config["shots"]))
+        return {"serializer": "test-value-object", "network_used": False}
+    monkeypatch.setattr(qstack.providers, "validate_serialization", validate)
     summary = submit_artifact(bell_artifact(), SubmissionOptions(mode="live"), dry_run=True)
     assert summary["dry_run"]
+    assert summary["serialization"]["network_used"] is False
+    assert checked == [("ibm", 1024)]
+
+
+def test_dry_run_local_needs_no_provider_sdk(monkeypatch):
+    monkeypatch.setattr("qstack.providers.validate_serialization", lambda *args: pytest.fail("local dry-run needs no provider SDK"))
+    assert submit_artifact(bell_artifact(), SubmissionOptions(mode="local"), dry_run=True)["serialization"]["validated"]
+
+
+def test_dry_run_rejects_native_payload_ir_mismatch_without_network(monkeypatch):
+    from qstack.providers.native import serialize_native
+    monkeypatch.setattr("qstack.providers.get_adapter", lambda *args: pytest.fail("offline serialization must not authenticate"))
+    artifact = bell_artifact()
+    artifact.route = "ionq"
+    artifact.target_snapshot.update(route="ionq", native_gates=["gpi2", "ms"], formats=["ionq-native-json"])
+    artifact.physical_ir["instructions"][0].update(op="gpi2", params=[0.0])
+    artifact.physical_ir["instructions"][1].update(op="ms", params=[0.0, 0.0])
+    artifact.format, artifact.payload = serialize_native("ionq", artifact.physical_ir, artifact.target_snapshot)
+    assert submit_artifact(artifact, SubmissionOptions(mode="live"), dry_run=True)["serialization"]["validated"]
+    artifact.payload = '{}'
+    with pytest.raises(QStackError, match="differs from serialization"):
+        submit_artifact(artifact, SubmissionOptions(mode="live"), dry_run=True)
 
 
 def test_cost_cap_unknown_blocks_submission(monkeypatch):
@@ -133,6 +188,31 @@ def test_schedule_uses_calibration_resources_and_never_guesses_missing_times():
     assert report["depth"] == 3 and report["duration_seconds"] == pytest.approx(90e-9)
     target["calibration"]["instruction_durations"].pop()
     assert optimization_report(ir, target)["duration_seconds"] is None
+
+
+def test_schedule_waits_for_predicate_before_first_use_of_branch_qubit():
+    from qstack.scheduling import optimization_report
+    ir = {"instructions": [{"op": "measure", "qubits": [0], "clbits": [0]},
+        {"op": "if", "clbits": [0], "condition_value": 1}, {"op": "x", "qubits": [1]},
+        {"op": "else"}, {"op": "x", "qubits": [2]}, {"op": "endif"},
+        {"op": "x", "qubits": [3]}]}
+    target = {"calibration": {"instruction_durations": [
+        {"op": "measure", "qubits": [0], "duration_ns": 100},
+        *[{"op": "x", "qubits": [q], "duration_ns": duration} for q, duration in [(1, 20), (2, 40), (3, 10)]]]}}
+    report = optimization_report(ir, target)
+    assert [(entry["instruction"], entry["start_ns"]) for entry in report["schedule"]] == [(0, 0), (2, 100), (4, 100), (6, 140)]
+    assert report["depth"] == 3
+    assert report["duration_seconds"] == pytest.approx(150e-9)
+
+
+def test_global_barrier_fences_qubits_not_used_before_barrier():
+    from qstack.scheduling import optimization_report
+    ir = {"instructions": [{"op": "x", "qubits": [0]}, {"op": "barrier"}, {"op": "x", "qubits": [1]}]}
+    target = {"calibration": {"instruction_durations": [
+        {"op": "x", "qubits": [0], "duration_ns": 20}, {"op": "x", "qubits": [1], "duration_ns": 30}]}}
+    report = optimization_report(ir, target)
+    assert report["schedule"][-1]["start_ns"] == 20
+    assert report["duration_seconds"] == pytest.approx(50e-9)
 
 
 def test_artifact_native_source_and_optimization_report_are_hashed(tmp_path):
@@ -231,6 +311,56 @@ def test_photon_to_artifact_to_real_simulator(tmp_path, monkeypatch):
     assert sum(result.counts.values()) == 256
 
 
+def test_cli_receipt_and_results_survive_separate_processes(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import qstack
+    try:
+        binaries = {name: find_binary(name) for name in ("photonc", "phononc", "spinorc")}
+    except QStackError:
+        pytest.skip("C++ compiler binaries are not installed")
+    workspace = tmp_path / "project with spaces"
+    workspace.mkdir()
+    source = workspace / "bell.pho"
+    source.write_text("target generic\nkernel bell() -> int {\nQReg q(2)\nq.bell_pair(0, 1)\nreturn q.measure_int()\n}\n")
+    config = workspace / "empty.toml"
+    config.write_text("")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("QSTACK_")}
+    env.update({"QSTACK_" + name.upper(): path for name, path in binaries.items()})
+    env.update(QSTACK_STATE_DIR=str(workspace / "job state"), PYTHONPATH=str(Path(qstack.__file__).parent.parent))
+    def command(*args):
+        completed = subprocess.run([sys.executable, "-m", "qstack", *args, "--config", str(config), "--no-env-file"],
+            env=env, cwd=workspace, capture_output=True, text=True, check=False)
+        assert completed.returncode == 0, completed.stderr
+        return json.loads(completed.stdout)
+    output = workspace / "artifact with spaces"
+    compiled = command("compile", str(source), "--target", "ibm_fez", "--out", str(output))
+    assert compiled["artifact"] == str(output.resolve())
+    receipt = command("submit", str(output), "--mode", "local", "--shots", "32")
+    result = command("jobs", "results", receipt["job_id"])
+    assert set(result["counts"]) <= {"00", "11"}
+    assert sum(result["counts"].values()) == 32
+    assert result["metadata"]["artifact_hash"] == receipt["artifact_hash"]
+    assert result["metadata"]["measurement_mapping"] == receipt["metadata"]["measurement_mapping"]
+
+
+@pytest.mark.parametrize("level", ["bad", "5", "-1"])
+def test_native_cli_rejects_invalid_optimization_level(tmp_path, level):
+    import subprocess
+    try:
+        binary = find_binary("spinorc")
+    except QStackError:
+        pytest.skip("C++ compiler binaries are not installed")
+    source = tmp_path / "source.spn"
+    source.write_text("target generic\nqubit q[1]\nx q[0]\n")
+    result = subprocess.run([binary, "compile", "-t", "generic", "-O", level, str(source)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "optimization level must" in result.stderr
+    assert not result.stdout.strip()
+
+
 def test_python_api_requires_explicit_execution_mode():
     with pytest.raises(QStackError) as exc:
         SubmissionOptions()
@@ -242,3 +372,13 @@ def test_unknown_typed_contract_versions_are_rejected():
         CompiledArtifact("ibm", "device", "qasm3", "", {}, schema_version=2)
     with pytest.raises(QStackError, match="options version"):
         SubmissionOptions(mode="live", schema_version=2)
+    with pytest.raises(QStackError, match="receipt version"):
+        JobReceipt("ibm", "device", "job-id", schema_version=2)
+    with pytest.raises(QStackError, match="result version"):
+        ExecutionResult("ibm", "device", "job-id", schema_version=2)
+
+
+@pytest.mark.parametrize("counts", [{"0": .5, "1": .5}, {"0": True}, {"0": -1}, [10, 20]])
+def test_typed_results_never_accept_probabilities_or_invalid_histograms(counts):
+    with pytest.raises(QStackError, match="actual nonnegative integer"):
+        ExecutionResult("ionq", "device", "job-id", counts=counts)

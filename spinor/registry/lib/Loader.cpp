@@ -3,6 +3,7 @@
 // Validates and assembles ChipInfo records from YAML files.
 
 #include "spinor/registry/Registry.h"
+#include "spinor/registry/ComponentTopology.h"
 
 #include "Yaml.h"
 
@@ -30,7 +31,7 @@ const std::set<std::string>& knownNativeGates() {
   static const std::set<std::string> s = {
       "h",    "x",    "y",    "z",   "s",    "sdg",  "t",    "tdg",
       "rx",   "ry",   "rz",
-      "cx",   "cz",   "swap",
+      "cx",   "cz",   "swap", "move",
       "ecr",  "ms",   "rzz", "rxx", "sx",  "sxdg", "phased_xz", "sqrt_iswap", "sqrt_iswap_inv", "syc", "iswap",
       "gpi",  "gpi2", "u1q",
   };
@@ -152,6 +153,8 @@ ResolvedTopology resolveTopology(const fs::path& topologiesDir,
 bool validateChip(ChipInfo& chip, dialect::Diagnostics& diag,
                   const std::string& sourcePath) {
   bool ok = true;
+  try { (void)computationalComponents(chip); }
+  catch (const std::exception& error) { diag.error("chip " + chip.id + ": " + error.what()); ok=false; }
   if (chip.id.empty()) {
     diag.error("chip at " + sourcePath + ": missing 'id'");
     ok = false;
@@ -220,6 +223,36 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
     if (n.has("formats") && n.at("formats").isArray())
       for (const auto& value : n.at("formats").asArray()) out.formats.push_back(value.asString());
     if (n.has("qubits")) out.qubits = static_cast<std::size_t>(n.at("qubits").asInt());
+    auto componentIndex = [&](const Node& value) {
+      if (!value.isInt() || value.asInt() < 0 || static_cast<std::size_t>(value.asInt()) >= out.qubits)
+        throw std::runtime_error("physical component index must be an in-range integer");
+      return static_cast<int>(value.asInt());
+    };
+    auto indices = [&](const char* key, auto& destination) {
+      if (!n.has(key)) return;
+      std::set<int> unique;
+      for (const auto& value : n.at(key).asArray()) {
+        int index = componentIndex(value);
+        if (!unique.insert(index).second) throw std::runtime_error(std::string("duplicate component in ") + key);
+        destination.push_back(index);
+      }
+    };
+    indices("computational_qubits", out.computationalQubits);
+    indices("resonator_qubits", out.resonatorQubits);
+    auto operationLoci = [&](const char* key, auto& destination) {
+      if (!n.has(key)) return;
+      std::set<std::pair<int,int>> unique;
+      for (const auto& value : n.at(key).asArray()) {
+        const auto& row = value.asArray();
+        if (row.size() != 2) throw std::runtime_error(std::string(key) + " requires two-component loci");
+        auto pair = std::pair{componentIndex(row[0]), componentIndex(row[1])};
+        if (pair.first == pair.second || !unique.insert(pair).second)
+          throw std::runtime_error(std::string("duplicate or self locus in ") + key);
+        destination.push_back(pair);
+      }
+    };
+    operationLoci("move_loci", out.moveLoci);
+    operationLoci("cz_loci", out.czLoci);
     if (n.has("native_gates") && n.at("native_gates").isArray()) {
       for (const auto& g : n.at("native_gates").asArray()) {
         out.nativeGates.push_back(g.asString());

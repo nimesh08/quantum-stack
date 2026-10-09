@@ -53,10 +53,12 @@ No extra quantum operation is introduced by these wire encodings.
                 raise QStackError(f"IonQ cannot encode native gate '{op}'", "UNSUPPORTED_GATE")
         return "ionq-native-json", json.dumps({"qubits": ir["num_qubits"], "gateset": "native", "circuit": circuit}, allow_nan=False)
     if route == "iqm":
+        from .iqm_contract import validate_moves
+        validate_moves(ir, snapshot)
         labels = snapshot.get("qubit_labels") or snapshot.get("raw", {}).get("qubits")
         if not labels or len(labels) < ir["num_qubits"]:
             raise QStackError("IQM native serialization requires physical qubit_labels from the target snapshot", "MISSING_TARGET_SNAPSHOT")
-        operations = []
+        operations, measurement_keys = [], {}
         for item in instructions(ir):
             op, q, p = item["op"].lower(), item.get("qubits", []), item.get("params", [])
             if op == "barrier":
@@ -67,7 +69,10 @@ No extra quantum operation is introduced by these wire encodings.
             elif op in {"cz", "move"} and len(q) == 2 and not p:
                 pass
             elif op == "measure" and len(q) == len(item.get("clbits", [])) == 1:
-                args = {"key": f"c{item['clbits'][0]}"}
+                base_key = f"c{item['clbits'][0]}"
+                occurrence = measurement_keys.get(base_key, 0)
+                args = {"key": base_key + (f"__{occurrence}" if occurrence else "")}
+                measurement_keys[base_key] = occurrence + 1
             elif op == "reset" and len(q) == 1 and not p:
                 pass
             else:

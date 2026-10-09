@@ -59,9 +59,8 @@ EulerBasis classifyEulerBasis(const std::string& rotGate,
   if (rotGate == "rz" && pi2Gate == "rx") return EulerBasis::ZXZ;
   if (rotGate == "u1q") return EulerBasis::ZXZ;
   if (rotGate == "gpi" && pi2Gate == "gpi2") return EulerBasis::RR;
-  // Discrete / unknown — keep continuous synthesis as the safe
-  // default; cat-qubit chips must explicitly set
-  // continuousOneQubit=false in a future loader hook.
+  // Fallback parameterization only. computeTraits below derives continuous
+  // support from the advertised gates and selects Discrete when absent.
   return EulerBasis::ZYZ;
 }
 

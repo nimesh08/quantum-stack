@@ -162,6 +162,7 @@ OpKind opFromMnemonic(std::string_view mnemonic) {
       {OpKind::Ecr, "spinor.ecr"}, {OpKind::Ms, "spinor.ms"},
       {OpKind::PhasedXZ,"spinor.phased_xz"}, {OpKind::SqrtISwap,"spinor.sqrt_iswap"}, {OpKind::SqrtISwapInv,"spinor.sqrt_iswap_inv"}, {OpKind::Syc,"spinor.syc"},
       {OpKind::ISwap,"spinor.iswap"},
+      {OpKind::Move,"spinor.move"},
       {OpKind::If,"spinor.if"}, {OpKind::Else,"spinor.else"}, {OpKind::EndIf,"spinor.endif"}, {OpKind::GlobalPhase,"spinor.gphase"},
       {OpKind::Rxx, "spinor.rxx"}, {OpKind::Rzz, "spinor.rzz"}, {OpKind::Sx, "spinor.sx"},
       {OpKind::Sxdg, "spinor.sxdg"},
@@ -248,7 +249,7 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
     lx.skipWS();
     auto key = lx.readIdent();
     if (!lx.consume('=')) { diag.error("expected module attribute value"); return std::nullopt; }
-    if (key == "final_layout" || key == "initial_layout") {
+    if (key == "final_layout" || key == "initial_layout" || key == "resonator_qubits") {
       auto value=lx.readQuoted();
       if(!value) {diag.error("expected quoted final layout");return std::nullopt;}
       std::size_t start=0;
@@ -258,7 +259,8 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
         if(parsed.ec!=std::errc{}||parsed.ptr!=value->data()+end||index<0) {
           diag.error("invalid final layout index");return std::nullopt;
         }
-        (key=="final_layout"?m.finalLayout:m.initialLayout).push_back(index);start=end+1;
+        auto& indices = key=="resonator_qubits" ? m.resonatorQubits : key=="final_layout" ? m.finalLayout : m.initialLayout;
+        indices.push_back(index);start=end+1;
         if(start==value->size()){diag.error("trailing comma in final layout");return std::nullopt;}
       }
       continue;

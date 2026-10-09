@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import io
-import math
 import os
 import sys
 import tomllib
@@ -15,42 +14,47 @@ from platformdirs import user_config_path, user_state_path
 
 from .models import QStackError
 
-SECRET_FIELDS = frozenset({"api_key", "token", "password", "access_token", "client_secret",
-                           "access_key_id", "secret_access_key", "session_token", "connection_string"})
-FIELDS = {
-    "provider", "target", "device", "mode", "shots", "cost_cap_usd", "registry", "python",
-    "instance_crn", "project", "workspace", "workspace_resource_id", "resource", "region",
-    "url", "host", "user", "realm", "quantum_computer", "sdk_profile", "credentials_file",
-    "tokens_file", "sdk_config_file", "s3_uri", "client_id", "tenant_id", "subscription_id",
-    "resource_group", "location", "platform", "platform_path", "timeout", "poll_interval",
-    "optimization_level", "seed", "device_config_name", "run_name", "snapshot_id",
-    "qibolab_bridge", "capability_snapshot", "calibration_set_id", "qubit_labels", "input_params", "input_data_format", "entry_point", "max_cost_hqc", *SECRET_FIELDS,
-}
-ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
-    "ibm": {"api_key": ("IBM_API_KEY", "IBM_QUANTUM_TOKEN", "QISKIT_IBM_TOKEN"),
-            "instance_crn": ("IBM_INSTANCE_CRN", "IBM_QUANTUM_INSTANCE", "QISKIT_IBM_INSTANCE")},
-    "aws": {"access_key_id": ("AWS_ACCESS_KEY_ID",), "secret_access_key": ("AWS_SECRET_ACCESS_KEY",),
-            "session_token": ("AWS_SESSION_TOKEN",), "region": ("AWS_REGION", "AWS_DEFAULT_REGION"),
-            "sdk_profile": ("AWS_PROFILE",)},
-    "google": {"credentials_file": ("GOOGLE_APPLICATION_CREDENTIALS",),
-               "project": ("GOOGLE_CLOUD_PROJECT", "GOOGLE_PROJECT_ID"), "device": ("GOOGLE_PROCESSOR_ID",)},
-    "azure": {"tenant_id": ("AZURE_TENANT_ID",), "client_id": ("AZURE_CLIENT_ID",),
-              "client_secret": ("AZURE_CLIENT_SECRET",), "connection_string": ("AZURE_QUANTUM_CONNECTION_STRING",),
-              "workspace_resource_id": ("AZURE_QUANTUM_RESOURCE_ID",)},
-    "quantinuum": {"sdk_config_file": ("NEXUS_CONFIG_FILE",), "project": ("QUANTINUUM_PROJECT_ID",),
-                   "device": ("QUANTINUUM_DEVICE",), "region": ("QUANTINUUM_REGION",),
-                   "user": ("QUANTINUUM_USERNAME",), "password": ("QUANTINUUM_PASSWORD",)},
-    "ionq": {"api_key": ("IONQ_API_KEY",)},
-    "rigetti": {"sdk_profile": ("QCS_PROFILE_NAME",), "sdk_config_file": ("QCS_SETTINGS_FILE_PATH",),
-                "tokens_file": ("QCS_SECRETS_FILE_PATH",)},
-    "iqm": {"token": ("IQM_TOKEN",), "url": ("IQM_SERVER_URL",)},
-    "oqc": {"access_token": ("OQC_ACCESS_TOKEN",), "url": ("OQC_URL",)},
-    "aqt": {"token": ("AQT_TOKEN",), "workspace": ("AQT_WORKSPACE",), "resource": ("AQT_RESOURCE",),
-            "client_id": ("AQT_CLIENT_ID",), "client_secret": ("AQT_CLIENT_SECRET",)},
-    "anyon": {"access_token": ("ANYON_ACCESS_TOKEN", "ANYON_API_TOKEN"), "host": ("ANYON_HOST",),
-              "user": ("ANYON_USER",), "project": ("ANYON_PROJECT_ID",), "realm": ("ANYON_REALM",)},
-    "alicebob": {"api_key": ("FELIS_API_KEY", "ALICEBOB_API_KEY")},
-}
+from .fields import FIELD_SPECS, FIELDS, SECRET_FIELDS
+
+
+def redact_data(value: Any, credentials: Mapping[str, Any] | None = None):
+    """Remove credential fields and known secret values, including provider echoes."""
+    import json
+    from urllib.parse import quote
+    secret_keys = {key.replace("_", "") for key in SECRET_FIELDS} | {
+        "authorization", "credentials", "headers", "authenticationtoken",
+        # Provider-managed OAuth values can appear in responses even when no
+        # application credential was configured (SDK cache/managed identity).
+        "refreshtoken", "idtoken", "bearertoken", "apitoken", "authtoken",
+        "oauthtoken", "clientassertion"}
+    def is_secret(key):
+        return str(key).lower().replace("_", "").replace("-", "") in secret_keys
+    secrets = {str(item) for key, item in (credentials or {}).items() if is_secret(key) and isinstance(item, str) and item}
+    def collect(item):
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                if is_secret(key) and isinstance(nested, str) and nested:
+                    secrets.add(nested)
+                elif isinstance(nested, (dict, list, tuple)):
+                    collect(nested)
+        elif isinstance(item, (list, tuple)):
+            for nested in item:
+                collect(nested)
+    collect(value)
+    variants = set()
+    for secret in secrets:
+        variants.update((secret, repr(secret)[1:-1], json.dumps(secret)[1:-1], quote(secret, safe="")))
+    ordered = sorted(variants, key=len, reverse=True)
+    def clean(item):
+        if isinstance(item, dict):
+            return {clean(key): clean(nested) for key, nested in item.items() if not is_secret(key)}
+        if isinstance(item, (list, tuple)):
+            return [clean(nested) for nested in item]
+        if isinstance(item, str):
+            for secret in ordered:
+                item = item.replace(secret, "<redacted>")
+        return item
+    return clean(value)
 
 
 def config_path() -> Path:
@@ -64,7 +68,7 @@ def state_path() -> Path:
 def dotenv_values(path: Path) -> dict[str, str]:
     try:
         stream = io.StringIO(path.read_text(encoding="utf-8-sig"))
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise QStackError(f"Cannot read env file: {path}", "CONFIG_ERROR") from exc
     result = {}
     for binding in parse_stream(stream):
@@ -113,12 +117,12 @@ def resolve_config(route: str | None, cli: Mapping[str, Any] | None = None, *,
     if not files and not cli.get("no_env_file") and (cwd / ".env").is_file():
         files = [cwd / ".env"]
     dotenv: dict[str, str] = {}
-    dot_sources = {}
+    dotenv_layers = []
     for file in files:
         file = file if file.is_absolute() else cwd / file
         values = dotenv_values(file)
         dotenv.update(values)
-        dot_sources.update({key: f"env-file:{file}" for key in values})
+        dotenv_layers.append((values, f"env-file:{file}"))
     cfg_path = Path(cli.get("config") or env.get("QSTACK_CONFIG") or user_config_path("qstack") / "config.toml")
     data = {}
     if cfg_path.exists():
@@ -153,35 +157,42 @@ def resolve_config(route: str | None, cli: Mapping[str, Any] | None = None, *,
     for field in sorted(FIELDS):
         if field in defaults:
             values[field], sources[field] = defaults[field], f"profile:{profile}"
-        keys = ([f"QSTACK_{route.upper()}_{field.upper()}"] if route else [])
-        keys += [f"QSTACK_{field.upper()}"]
-        keys += list(ALIASES.get(route or "", {}).get(field, ()))
-        if field == "mode":
-            keys.append("SPINOR_SUBMIT_MODE")
-        for mapping, label in ((dotenv, "env-file"), (env, "environment")):
-            # Canonical names take priority over legacy aliases within one source.
+        keys = FIELD_SPECS[field].environment_keys(field, route)
+        for mapping, label in (*dotenv_layers, (env, "environment")):
+            # Canonical names win within one source. Resolve each file separately
+            # so a later file wins even when it uses a documented SDK alias.
             match = next((k for k in keys if k in mapping), None)
             if match is not None:
                 values[field] = mapping[match]
-                sources[field] = dot_sources[match] if label == "env-file" else f"environment:{match}"
+                sources[field] = f"environment:{match}" if label == "environment" else label
         if cli.get(field) is not None:
             values[field], sources[field] = cli[field], "argument"
     if route:
         values["provider"] = route
         sources.setdefault("provider", "target")
-    secret_inputs = [bool(cli.get("api_key_file")), bool(cli.get("api_key_stdin")), cli.get("api_key") is not None]
-    if sum(secret_inputs) > 1:
-        raise QStackError("Choose exactly one of --api-key, --api-key-file or --api-key-stdin", "CONFIG_ERROR")
-    if cli.get("api_key_file") or cli.get("api_key_stdin"):
+    stdin_fields = [field for field in SECRET_FIELDS if cli.get(field + "_stdin")]
+    if len(stdin_fields) > 1:
+        raise QStackError("Only one credential can read stdin in a command; use secret files for additional credentials", "CONFIG_ERROR")
+    for field in sorted(SECRET_FIELDS):
+        file_option, stdin_option = field + "_file", field + "_stdin"
+        supplied = [bool(cli.get(file_option)), bool(cli.get(stdin_option)), cli.get(field) is not None]
+        flag = field.replace("_", "-")
+        if sum(supplied) > 1:
+            raise QStackError(f"Choose exactly one of --{flag}, --{flag}-file or --{flag}-stdin", "CONFIG_ERROR")
+        if not (cli.get(file_option) or cli.get(stdin_option)):
+            continue
         try:
-            secret = (Path(cli["api_key_file"]).read_text(encoding="utf-8-sig")
-                      if cli.get("api_key_file") else (stdin or sys.stdin).read()).strip()
-        except OSError as exc:
-            raise QStackError("Cannot read API key file", "CONFIG_ERROR") from exc
+            secret_path = Path(cli[file_option]) if cli.get(file_option) else None
+            if secret_path is not None and not secret_path.is_absolute():
+                secret_path = cwd / secret_path
+            secret = (secret_path.read_text(encoding="utf-8-sig") if secret_path is not None
+                      else (stdin or sys.stdin).read()).strip()
+        except (OSError, UnicodeError) as exc:
+            raise QStackError(f"Cannot read {flag} input", "CONFIG_ERROR") from exc
         if not secret:
-            raise QStackError("API key input is empty", "CONFIG_ERROR")
+            raise QStackError(f"{flag} input is empty", "CONFIG_ERROR")
         # Compatibility with the former Spinor IBM JSON key file.
-        if route == "ibm" and secret.startswith("{"):
+        if route == "ibm" and field == "api_key" and secret.startswith("{"):
             import json
             try:
                 key_data = json.loads(secret)
@@ -190,39 +201,7 @@ def resolve_config(route: str | None, cli: Mapping[str, Any] | None = None, *,
                     values["instance_crn"], sources["instance_crn"] = key_data["instance"], "credential-file"
             except (ValueError, KeyError, TypeError) as exc:
                 raise QStackError("Invalid IBM credential file", "CONFIG_ERROR") from exc
-        values["api_key"], sources["api_key"] = secret, "credential-file" if cli.get("api_key_file") else "stdin"
-    for field in ("shots", "seed", "optimization_level"):
-        if field in values:
-            try:
-                if isinstance(values[field], bool):
-                    raise ValueError("boolean is not an integer option")
-                values[field] = int(values[field])
-            except (ValueError, TypeError) as exc:
-                raise QStackError(f"{field} must be an integer", "CONFIG_ERROR") from exc
-    for field in ("qubit_labels", "input_params"):
-        if isinstance(values.get(field), str):
-            import json
-            try:
-                values[field] = json.loads(values[field])
-            except ValueError as exc:
-                raise QStackError(f"{field} must contain JSON", "CONFIG_ERROR") from exc
-    for field in ("cost_cap_usd", "timeout", "poll_interval"):
-        if field in values:
-            try:
-                values[field] = float(values[field])
-                if not math.isfinite(values[field]):
-                    raise ValueError("value is not finite")
-            except (ValueError, TypeError) as exc:
-                raise QStackError(f"{field} must be numeric", "CONFIG_ERROR") from exc
-    if "shots" in values and values["shots"] <= 0:
-        raise QStackError("shots must be positive", "CONFIG_ERROR")
-    for field in ("timeout", "poll_interval"):
-        if field in values and values[field] <= 0:
-            raise QStackError(f"{field} must be positive", "CONFIG_ERROR")
-    if values.get("cost_cap_usd", 0) < 0:
-        raise QStackError("cost_cap_usd must be nonnegative", "CONFIG_ERROR")
-    if values.get("mode") not in {None, "live", "local", "cassette"}:
-        raise QStackError("mode must be live, local or cassette", "CONFIG_ERROR")
-    if "optimization_level" in values and values["optimization_level"] not in range(4):
-        raise QStackError("optimization level must be 0, 1, 2 or 3", "CONFIG_ERROR")
+        values[field], sources[field] = secret, "credential-file" if secret_path is not None else "stdin"
+    for field, value in list(values.items()):
+        values[field] = FIELD_SPECS[field].parse(field, value)
     return ResolvedConfig(values, sources, profile, cfg_path)

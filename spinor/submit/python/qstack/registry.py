@@ -172,7 +172,7 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
         arities = {**{g: (1, {0}) for g in ("id", "h", "x", "y", "z", "s", "sdg", "t", "tdg", "sx", "sxdg", "reset", "measure")},
                    **{g: (1, {1}) for g in ("rx", "ry", "rz", "gpi", "gpi2")},
                    "u1q": (1, {2}), "phased_xz": (1, {3}),
-                   **{g: (2, {0}) for g in ("cx", "cz", "ecr", "swap", "iswap", "sqrt_iswap", "sqrt_iswap_inv", "syc")},
+                   **{g: (2, {0}) for g in ("cx", "cz", "ecr", "swap", "iswap", "sqrt_iswap", "sqrt_iswap_inv", "syc", "move")},
                    "ms": (2, {0, 2, 3}), "rxx": (2, {1}), "rzz": (2, {1})}
         if op != "barrier" and (op not in arities or len(qs) != arities[op][0] or len(inst.get("params", [])) not in arities[op][1]):
             raise QStackError(f"Invalid operand/parameter arity for '{op}'", "ARTIFACT_INVALID")
@@ -188,7 +188,7 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
             raise QStackError("Target does not support operations after measurement", "TARGET_INCOMPATIBLE")
         if op == "reset" and not target.get("supports", {}).get("reset", False):
             raise QStackError("Target does not support reset", "TARGET_INCOMPATIBLE")
-        asymmetric = op in {"cx", "ecr"}
+        asymmetric = op in {"cx", "ecr", "move"}
         if len(qs) == 2 and not all_to_all and tuple(qs) not in edges and ((directed and asymmetric) or tuple(reversed(qs)) not in edges):
             raise QStackError(f"Gate uses disconnected physical qubits {qs}", "TARGET_INCOMPATIBLE")
         loci = target.get("gate_loci", {}).get(op)
@@ -202,6 +202,9 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
         mapping = ir.get(key, [])
         if len(set(mapping)) != len(mapping) or any(type(q) is not int or q < 0 or q >= nq for q in mapping):
             raise QStackError("Invalid logical to physical qubit mapping", "ARTIFACT_INVALID")
+    if target.get("resonator_qubits") or any(i.get("op") == "move" for i in ir.get("instructions", [])):
+        from .providers.iqm_contract import validate_moves
+        validate_moves(ir, target)
 
 
 def canonical_format(value: str) -> str:

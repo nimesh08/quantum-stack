@@ -140,11 +140,26 @@ struct Lowerer {
     sd::OpKind sk = pd::toSpinorKind(op.kind);
     sd::Op sop;
     sop.kind = sk;
-    for (pd::ValueId v : op.operands) sop.operands.push_back(mapValue(v));
+    for (pd::ValueId v : op.operands) {
+      const auto type = src.typeOf(v).kind;
+      if (type == pd::TypeKind::Qubit || type == pd::TypeKind::Bit)
+        sop.operands.push_back(mapValue(v));
+    }
     // Copy attributes: only "angle" / "theta" / "phi" carry to spinor.*
     for (const auto& a : op.attributes) {
       if (a.name == "angle" || a.name == "theta" || a.name == "phi" || a.name == "clbit") {
         sop.attributes.push_back(sd::Attribute{a.name, a.value});
+      } else if (a.name == "angle_operand" || a.name == "theta_operand" || a.name == "phi_operand") {
+        const auto* index = std::get_if<double>(&a.value);
+        if (!index || !std::isfinite(*index) || *index < 0 ||
+            std::floor(*index) != *index || *index >= op.operands.size()) {
+          diag.error("invalid symbolic gate parameter operand", op.loc); return;
+        }
+        const auto found = ctMap.find(op.operands[static_cast<std::size_t>(*index)].v);
+        if (found == ctMap.end() || !std::isfinite(found->second)) {
+          diag.error("unbound gate parameter: bind a finite angle before compiling", op.loc); return;
+        }
+        sop.attributes.push_back({a.name.substr(0, a.name.size() - 8), found->second});
       }
     }
     if (sk == sd::OpKind::Measure &&
@@ -246,6 +261,7 @@ struct Lowerer {
             else if (opn == "*") r = a->second * b_->second;
             else if (opn == "/" && b_->second != 0) r = a->second / b_->second;
             else { diag.error("unsupported or invalid compile-time arithmetic"); break; }
+            if (!std::isfinite(r)) { diag.error("compile-time arithmetic must remain finite", op.loc); return; }
             for (pd::ValueId rv : op.results) ctMap[rv.v] = r;
           }
           ++i; break;
@@ -323,6 +339,10 @@ struct Lowerer {
                 fr.paramTypes[k].kind == pd::TypeKind::Angle) {
               auto value = ctMap.find(op.operands[k].v);
               if (value == ctMap.end()) { diag.error("unbound classical function argument"); return; }
+              if (!std::isfinite(value->second) ||
+                  (fr.paramTypes[k].kind == pd::TypeKind::Int && std::floor(value->second) != value->second)) {
+                diag.error("function argument must match its finite numeric parameter type", op.loc); return;
+              }
               ctMap[pv] = value->second;
             } else {
               vmap[pv] = mapValue(op.operands[k]);

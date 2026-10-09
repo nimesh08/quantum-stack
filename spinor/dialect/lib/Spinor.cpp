@@ -77,6 +77,7 @@ constexpr OpSig kSigs[] = {
     {OpKind::ISwap,"spinor.iswap",2,2,false,kNoAttrs,false},
     {OpKind::SqrtISwapInv,"spinor.sqrt_iswap_inv",2,2,false,kNoAttrs,false},
     {OpKind::Syc,"spinor.syc",2,2,false,kNoAttrs,false},
+    {OpKind::Move,"spinor.move",2,2,false,kNoAttrs,false},
     {OpKind::If, "spinor.if", 0, 0, false, kIfAttrs, true},
     {OpKind::Else, "spinor.else", 0, 0, false, kNoAttrs, true},
     {OpKind::EndIf, "spinor.endif", 0, 0, false, kNoAttrs, true},

@@ -114,6 +114,8 @@ struct Stmt {
   std::string for_var;
   ExprPtr for_lo;
   ExprPtr for_hi;
+  ExprPtr for_step;              // absent means +1; C++ counted-loop increment.
+  std::string for_comparison = "<";
   std::vector<StmtPtr> body;
 
   // IfStmt: predicate, then-body, else-body.

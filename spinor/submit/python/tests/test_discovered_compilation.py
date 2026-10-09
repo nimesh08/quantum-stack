@@ -76,3 +76,43 @@ def test_discovered_calibration_reaches_owned_placement_and_timing(tmp_path, mon
     artifact = compile_file(source, target=snapshot["device"], config={"provider": "ibm"}, optimization_level=3)
     assert artifact.physical_ir["logical_to_physical"] == [2]
     assert artifact.manifest["statistics"]["duration_seconds"] == pytest.approx(120e-9)
+
+
+@pytest.mark.parametrize("optimization_level", range(4))
+@pytest.mark.parametrize("width", [2, 3])
+def test_discovered_iqm_resonators_compile_and_run_bell_ghz(width, optimization_level, tmp_path, monkeypatch):
+    import json
+    from qstack.artifacts import load_artifact
+    try:
+        find_binary("photonc")
+    except QStackError:
+        pytest.skip("C++ compilers not installed")
+    monkeypatch.setenv("QSTACK_STATE_DIR", str(tmp_path / "state"))
+    snapshot = {"route": "iqm", "vendor": "iqm", "device": "two-resonator-fixture", "qubits": 5,
+        "computational_qubits": [0, 2, 3], "resonator_qubits": [1, 4],
+        "qubit_labels": ["QB1", "CR1", "QB2", "QB3", "CR2"],
+        "native_gates": ["u1q", "cz", "move"], "formats": ["iqm-json"],
+        "gate_loci": {"u1q": [[0], [2], [3]], "measure": [[0], [2], [3]],
+            "move": [[0, 1], [2, 1], [2, 4], [3, 4]], "cz": [[0, 1], [2, 1], [2, 4], [3, 4]]},
+        "coupling": [[0, 1], [2, 1], [2, 4], [3, 4]], "all_to_all": False, "directed_connectivity": True,
+        "parameter_units": "radians", "capability_verified": True,
+        "supports": {"reset": False, "feedforward": False, "mid_circuit_measure": False},
+        "capability_sources": ["offline SDK-contract fixture, no hardware validation"]}
+    cache_targets("iqm", [snapshot])
+    source = tmp_path / "ghz.pho"
+    source.write_text("target generic\nkernel sample() -> int {\n QReg q(" + str(width) + ")\nq.h(0)\n" +
+        "\n".join(f"q.cx({q-1}, {q})" for q in range(1, width)) + "\nreturn q.measure_int()\n}\n")
+    artifact = compile_file(source, target=snapshot["device"], config={"provider": "iqm"},
+                            optimization_level=optimization_level, output=tmp_path / "artifact")
+    loaded = load_artifact(tmp_path / "artifact")
+    ir = loaded.physical_ir
+    assert ir["resonator_qubits"] == [1, 4]
+    assert ir["computational_qubits"] == [0, 2, 3]
+    assert set(ir["logical_to_physical"]) <= {0, 2, 3}
+    assert any(op["op"] == "move" for op in ir["instructions"])
+    native = json.loads(artifact.program_text())
+    assert any(op["name"] == "move" and op["locus"][1].startswith("CR") for op in native["instructions"])
+    result = submit_artifact(loaded, SubmissionOptions(mode="local", shots=128), wait=True)
+    assert set(result.counts) == {"0" * width, "1" * width}
+    assert sum(result.counts.values()) == 128
+    assert result.metadata["measurement_mapping"] == ir["measurement_mapping"]

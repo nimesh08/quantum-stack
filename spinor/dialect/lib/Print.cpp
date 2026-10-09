@@ -101,6 +101,14 @@ std::string print(const Module& m) {
     }
     os << '\"';
   }
+  if (!m.resonatorQubits.empty()) {
+    os << ", resonator_qubits = \"";
+    for (std::size_t i=0;i<m.resonatorQubits.size();++i) {
+      if(i) os << ',';
+      os << m.resonatorQubits[i];
+    }
+    os << '\"';
+  }
   os << "} {\n";
   for (std::uint32_t i = 0; i < m.numOps(); ++i) {
     OpId id{i};

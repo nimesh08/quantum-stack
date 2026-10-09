@@ -82,6 +82,7 @@ enum class OpKind : std::uint16_t {
   Gpi2,  // 1q with angle
   U1q,   // 1q with two angles (theta, phi)
   PhasedXZ, SqrtISwap, SqrtISwapInv, Syc, ISwap,
+  Move,  // IQM qubit-resonator transfer, defined only in its restricted subspace
   If, Else, EndIf, GlobalPhase,
   // measurement / reset / barrier
   Measure,
@@ -209,6 +210,8 @@ class Module {
   // Final physical wire for each original logical qubit, after routing/layout.
   std::vector<int> finalLayout;
   std::vector<int> initialLayout;
+  // Reserved, initially empty computational resonators, never logical inputs.
+  std::vector<int> resonatorQubits;
 
   // value table
   ValueId addValue(Type t, OpId producer);

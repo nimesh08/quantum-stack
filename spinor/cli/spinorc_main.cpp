@@ -107,27 +107,26 @@ void printHelp() {
     "\n"
     "optimization levels (compile/emit/check/run):\n"
     "  -O 0   no optimization (raw post-decomposition IR)\n"
-    "  -O 1   light: peephole cleanup (default)\n"
-    "  -O 2   medium: + commutative cancellation\n"
-    "  -O 3   heavy: + 2Q block KAK resynthesis (Cartan)\n"
+    "  -O 1   exact local simplification\n"
+    "  -O 2   commutation, block optimization and topology routing (default)\n"
+    "  -O 3   bounded layout alternatives and native resynthesis\n"
     "\n"
     "Native synthesis, routing, and optimization are performed by Spinor.\n";
 }
 
 // Parse -O <level> from CLI. Returns the default level if not
-// present. Emits a warning to stderr on invalid values.
+// present. Invalid requests fail rather than silently changing the level.
 spinor::passes::OptimizationLevel parseOLevel(int argc, char** argv) {
   auto v = argValue(argc, argv, "-O");
   if (!v) return spinor::passes::kDefaultOptimizationLevel;
   auto level = spinor::passes::parseOptimizationLevel(v->c_str());
-  // Validate: parser returns the default for invalid input; warn
-  // if the user passed a non-canonical value.
+  // The internal convenience parser defaults invalid strings; the public CLI
+  // must reject them so a successful compile reflects the requested level.
   const std::string& s = *v;
   bool ok = (s == "0" || s == "1" || s == "2" || s == "3" ||
              s == "O0" || s == "O1" || s == "O2" || s == "O3");
   if (!ok) {
-    std::cerr << "warning: -O '" << s
-              << "' is not 0/1/2/3; defaulting to -O1\n";
+    throw std::runtime_error("optimization level must be 0, 1, 2 or 3");
   }
   return level;
 }

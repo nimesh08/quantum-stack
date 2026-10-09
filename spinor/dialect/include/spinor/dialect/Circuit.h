@@ -54,6 +54,7 @@ struct WireCircuit {
   std::vector<WireOp> instructions;
   std::vector<int> finalLayout;
   std::vector<int> initialLayout;
+  std::vector<int> resonatorQubits;
 };
 
 inline double parameter(const WireOp& op, const std::string& key = "angle") {
@@ -66,6 +67,7 @@ inline WireCircuit flatten(const Module& m) {
   c.numClbits = m.numClbits; c.globalPhase = m.globalPhase;
   c.finalLayout = m.finalLayout;
   c.initialLayout = m.initialLayout;
+  c.resonatorQubits = m.resonatorQubits;
   std::vector<int> wire(m.numValues(), -1);
   std::size_t declaredBits = 0, ordinal = 0;
   for (const auto& op : m.ops()) {
@@ -106,6 +108,7 @@ inline Module rebuild(const WireCircuit& c) {
   m.globalPhase = c.globalPhase; m.numClbits = c.numClbits;
   m.finalLayout = c.finalLayout;
   m.initialLayout = c.initialLayout;
+  m.resonatorQubits = c.resonatorQubits;
   Builder b(m);
   std::vector<ValueId> live;
   for (std::size_t i = 0; i < c.numQubits; ++i) {

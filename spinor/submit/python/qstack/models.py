@@ -55,7 +55,8 @@ class SubmissionOptions:
             raise QStackError("shots must be a positive integer")
         if self.mode not in {"live", "local", "cassette"}:
             raise QStackError("Select an execution mode: live, local or cassette", "MODE_REQUIRED")
-        if self.cost_cap_usd is not None and (not isfinite(self.cost_cap_usd) or self.cost_cap_usd < 0):
+        if self.cost_cap_usd is not None and (isinstance(self.cost_cap_usd, bool) or
+                not isinstance(self.cost_cap_usd, (int, float)) or not isfinite(self.cost_cap_usd) or self.cost_cap_usd < 0):
             raise QStackError("cost cap must be nonnegative")
 
 
@@ -68,6 +69,14 @@ class JobReceipt:
     artifact_hash: str = ""
     mode: str = "live"
     schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self):
+        if self.schema_version != SCHEMA_VERSION:
+            raise QStackError("Unsupported job receipt version")
+        if self.mode not in {"live", "local", "cassette"}:
+            raise QStackError("Invalid job receipt execution mode", "ARTIFACT_INVALID")
+        if not isinstance(self.job_id, str) or not self.job_id:
+            raise QStackError("Job receipt requires a provider job identifier", "ARTIFACT_INVALID")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,6 +97,13 @@ class ExecutionResult:
     raw: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self):
+        if self.schema_version != SCHEMA_VERSION:
+            raise QStackError("Unsupported result version")
+        if self.counts is not None and (not isinstance(self.counts, dict) or any(
+                not isinstance(key, str) or type(value) is not int or value < 0 for key, value in self.counts.items())):
+            raise QStackError("Result counts must be actual nonnegative integer histograms; retain probabilities in raw", "INVALID_RESPONSE")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

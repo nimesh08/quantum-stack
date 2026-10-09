@@ -385,22 +385,53 @@ void Lowerer::lowerStmt(const Stmt& s) {
     }
     case StmtKind::ForLoop: {
       auto lo = foldInt(s.for_lo);
-      auto hi = foldInt(s.for_hi);
-      if (!lo || !hi) {
-        err("for-loop bounds must fold to literal ints", s.loc); return;
-      }
       auto save = intConsts.find(s.for_var) != intConsts.end()
                       ? std::make_optional(intConsts[s.for_var])
                       : std::nullopt;
+      if (s.for_step && lo) intConsts[s.for_var] = *lo;
+      auto hi = foldInt(s.for_hi);
+      auto step = s.for_step ? foldInt(s.for_step) : std::optional<std::int64_t>{1};
+      if (!lo || !hi || !step || *step == 0) {
+        err("for-loop bounds and nonzero step must fold to literal ints", s.loc); return;
+      }
+      const bool descending = s.for_comparison == ">" || s.for_comparison == ">=";
+      const bool inclusive = s.for_comparison == "<=" || s.for_comparison == ">=";
+      if ((descending && *step > 0) || (!descending && *step < 0)) {
+        err("for-loop step must progress toward its bound", s.loc); return;
+      }
+      auto continues = [&](std::int64_t value) {
+        return descending ? (inclusive ? value >= *hi : value > *hi)
+                          : (inclusive ? value <= *hi : value < *hi);
+      };
       // Expand before building SSA: every iteration resolves its own indices
       // and angles, and consumes the previous iteration's qubit values.
-      for (auto i = *lo; i < *hi && !fatal && !returned; ++i) {
+      for (auto i = *lo; !fatal && !returned;) {
+        intConsts[s.for_var] = i;
+        if (s.for_step) {
+          hi = foldInt(s.for_hi);
+          if (!hi) { err("for-loop continuation must remain compile-time integral", s.loc); break; }
+        }
+        if (!continues(i)) break;
         if (++expandedIterations > 100000) {
           err("static loop expansion exceeds 100000 iterations", s.loc);
           break;
         }
-        intConsts[s.for_var] = i;
         lowerBlock(s.body);
+        if (fatal || returned) break;
+        // The C++ counted-loop form may update its induction variable in the
+        // body; the increment applies to that current value.
+        const auto current = s.for_step ? intConsts.at(s.for_var) : i;
+        if (s.for_step) {
+          step = foldInt(s.for_step);
+          if (!step || *step == 0 || (descending ? *step > 0 : *step < 0)) {
+            err("for-loop increment must remain a nonzero progressing compile-time integer", s.loc); break;
+          }
+        }
+        if ((*step > 0 && current > std::numeric_limits<std::int64_t>::max() - *step) ||
+            (*step < 0 && current < std::numeric_limits<std::int64_t>::min() - *step)) {
+          err("for-loop induction variable overflow", s.loc); break;
+        }
+        i = current + *step;
       }
       if (save) intConsts[s.for_var] = *save;
       else intConsts.erase(s.for_var);

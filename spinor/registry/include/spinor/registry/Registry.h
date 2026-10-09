@@ -48,6 +48,12 @@ struct ChipInfo {
   bool directedConnectivity = false;
   std::size_t qubits = 0;
   std::vector<std::string> nativeGates;
+  // Physical component partition and exact operation loci for resonator QPUs.
+  // Empty partitions mean every physical slot is a computational qubit.
+  std::vector<int> computationalQubits;
+  std::vector<int> resonatorQubits;
+  std::vector<std::pair<int, int>> moveLoci;  // always (qubit, resonator)
+  std::vector<std::pair<int, int>> czLoci;    // preserve advertised operand order
 
   // Either an all-to-all chip OR an explicit edge list.
   bool allToAll = false;

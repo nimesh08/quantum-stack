@@ -15,9 +15,11 @@
 #include "Lexer.h"
 
 #include <cmath>
+#include <algorithm>
 #include <numbers>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -41,29 +43,90 @@ struct Parser {
   pd::Diagnostics diag;
   bool fatal = false;
 
-  // Quantum-register table: name -> vector of current ValueIds (one
-  // per slot). A scalar `qubit q[1]` produces a 1-element vector.
-  std::unordered_map<std::string, std::vector<pd::ValueId>> qreg;
-  std::unordered_map<std::string, std::vector<pd::ValueId>> creg;
+  // Captures and scalar register parameters refer to the same mutable SSA
+  // slot. Copying a scope keeps those references, while rebinding a local
+  // name creates a fresh register and cannot replace the caller's binding.
+  struct Slot {
+    std::shared_ptr<pd::ValueId> value;
+    explicit Slot(pd::ValueId v) : value(std::make_shared<pd::ValueId>(v)) {}
+    operator pd::ValueId() const { return *value; }
+    Slot& operator=(pd::ValueId v) { *value = v; return *this; }
+  };
+  struct Register {
+    std::vector<Slot> slots;
+    Register() = default;
+    Register(std::initializer_list<pd::ValueId> values) {
+      for (auto value : values) slots.emplace_back(value);
+    }
+    Register(std::vector<pd::ValueId> values) {
+      for (auto value : values) slots.emplace_back(value);
+    }
+    std::size_t size() const { return slots.size(); }
+    Slot& operator[](std::size_t i) { return slots[i]; }
+    pd::ValueId operator[](std::size_t i) const { return slots[i]; }
+    auto begin() const { return slots.begin(); }
+    auto end() const { return slots.end(); }
+    Register clone() const {
+      Register copy;
+      for (const auto& slot : slots) copy.slots.emplace_back(pd::ValueId(slot));
+      return copy;
+    }
+    static Register alias(const Register& source, std::size_t i) {
+      Register result;
+      result.slots.push_back(source.slots[i]);
+      return result;
+    }
+  };
+  using Registers = std::unordered_map<std::string, Register>;
+  Registers qreg;
+  Registers creg;
   std::unordered_map<std::string, pd::ValueId> classicals;  // int/angle
   // Classical scalars whose compile-time value is known (used for
   // for-loop bound resolution and qubit register sizes).
   std::unordered_map<std::string, double> ctConst;
+  struct ScalarBinding {
+    pd::ValueId value;
+    std::optional<double> constant;
+  };
+  using ScalarBindings = std::unordered_map<std::string, std::shared_ptr<ScalarBinding>>;
+  ScalarBindings scalarBindings;
+  void recordScalar(const std::string& name, bool declaration = false) {
+    if (!classicals.count(name)) { scalarBindings.erase(name); return; }
+    if (declaration || !scalarBindings.count(name))
+      scalarBindings[name] = std::make_shared<ScalarBinding>();
+    auto& binding = *scalarBindings.at(name);
+    binding.value = classicals.at(name);
+    binding.constant = ctConst.count(name) ? std::optional<double>{ctConst.at(name)} : std::nullopt;
+  }
   std::unordered_map<std::string, std::vector<std::size_t>> bitTargets;
   std::size_t nextBit = 0;
   std::size_t expandedIterations = 0;
+  std::size_t expandedCalls = 0;
+  std::size_t runtimeDepth = 0;
 
-  // Function templates, parser-side. body_start is index into the
-  // token stream (the '{' after the param list). Used by call sites
-  // to inline; the dialect-level `phonon.def`/`phonon.call` ops are
-  // emitted regardless so M4 has structure to walk.
+  // Numeric parameters must be bound before register indices and static
+  // loops are resolved. Retain these bodies as lexical source templates;
+  // qubit-only helpers without captures keep structured Def/Call IR.
   struct FuncDecl {
     std::string name;
     std::vector<pd::Builder::Param> params;
     std::size_t body_start = 0;  // index of `{`
     std::size_t body_end = 0;    // index of `}`
+    bool specialize = false;
+    Registers capturedQreg;
+    Registers capturedCreg;
+    ScalarBindings capturedScalars;
+    std::unordered_map<std::string, std::vector<std::size_t>> capturedBitTargets;
   };
   std::unordered_map<std::string, FuncDecl> funcs;
+  struct InlineFrame {
+    std::string name;
+    std::size_t runtimeDepth;
+    bool returned = false;
+    std::vector<pd::ValueId> values;
+  };
+  std::vector<InlineFrame> inlineFrames;
+  bool inlineReturned() const { return !inlineFrames.empty() && inlineFrames.back().returned; }
 
   Parser(std::vector<Token> ts, std::string fn)
       : toks(std::move(ts)), filename(std::move(fn)), b(mod) {}
@@ -267,6 +330,8 @@ pd::ValueId Parser::parseFactor() {
     if (qit != qreg.end() && qit->second.size() == 1) {
       return qit->second[0];
     }
+    auto cit = creg.find(name);
+    if (cit != creg.end() && cit->second.size() == 1) return cit->second[0];
     err("unknown identifier: " + name);
     return b.constInt(0);
   }
@@ -437,6 +502,7 @@ void Parser::parseDeclClassical(bool isAngle) {
     pd::ValueId v = parseExpr();
     classicals[name] = v;
   }
+  recordScalar(name, true);
 }
 
 // --- Qubit reference helper ----------------------------------------------
@@ -467,7 +533,7 @@ void Parser::parseGateStmt() {
   Token gateTok = consume();  // GateName
   std::string g = gateTok.text;
   // Optional angle list: "(angle expr [, angle expr])"
-  std::vector<pd::ValueId> angleVals;     // for parser-level expressions
+  std::vector<std::optional<pd::ValueId>> angleVals;
   std::vector<double>      angleConsts;   // resolved compile-time
   if (cur().kind == Tok::LParen) {
     consume();
@@ -476,11 +542,15 @@ void Parser::parseGateStmt() {
       auto folded = foldExpr();
       if (folded && (cur().kind == Tok::Comma || cur().kind == Tok::RParen)) {
         angleConsts.push_back(*folded);
+        angleVals.push_back(std::nullopt);
       } else {
         pos = save;
         pd::ValueId v = parseExpr();
         angleVals.push_back(v);
-        err("unbound gate parameter: bind a finite angle before compiling");
+        angleConsts.push_back(0.0);
+        const auto type = mod.typeOf(v).kind;
+        if (type != pd::TypeKind::Int && type != pd::TypeKind::Angle)
+          err("gate parameter must be a compile-time numeric expression");
       }
       if (!accept(Tok::Comma)) break;
     }
@@ -489,18 +559,28 @@ void Parser::parseGateStmt() {
   const std::size_t expectedAngles = g == "u1q" ? 2 :
       (g == "rx" || g == "ry" || g == "rz" || g == "gpi" ||
        g == "gpi2" || g == "rzz" || g == "rxx" || g == "gphase") ? 1 : 0;
-  if (angleConsts.size() != expectedAngles || !angleVals.empty()) {
+  if (angleConsts.size() != expectedAngles) {
     err("gate '" + g + "' has missing, extra, or unbound angle parameters");
     return;
   }
   for (double angle : angleConsts) if (!std::isfinite(angle)) {
     err("gate angle must be finite"); return;
   }
+  auto bindAngles = [&](pd::OpId id) {
+    auto& operation = mod.opMut(id);
+    for (std::size_t i = 0; i < angleVals.size(); ++i) if (angleVals[i]) {
+      const std::string name = g == "u1q" ? (i == 0 ? "theta" : "phi") : "angle";
+      std::erase_if(operation.attributes, [&](const auto& a) { return a.name == name; });
+      operation.attributes.push_back({name + "_operand", static_cast<double>(operation.operands.size())});
+      operation.operands.push_back(*angleVals[i]);
+    }
+  };
   if (g == "gphase") {
     if (cur().kind != Tok::Newline && cur().kind != Tok::Eof && cur().kind != Tok::RBrace) {
       err("gphase takes no qubit operands"); return;
     }
     b.globalPhase(angleConsts.at(0));
+    bindAngles(pd::OpId{static_cast<std::uint32_t>(mod.numOps() - 1)});
     return;
   }
   // Operands: 1 or 2 qubit references, comma-separated.
@@ -533,6 +613,7 @@ void Parser::parseGateStmt() {
     else if (g == "u1q") r = b.u1q(angleConsts.size()>0?angleConsts[0]:0.0,
                                    angleConsts.size()>1?angleConsts[1]:0.0, v);
     else { err("unknown 1q gate: " + g); r = v; }
+    if (!diag.hasErrors()) bindAngles(mod.producerOf(r));
     return r;
   };
 
@@ -571,6 +652,7 @@ void Parser::parseGateStmt() {
     else if (g == "rzz")  r = b.rzz(angleConsts[0], va, vb);
     else if (g == "rxx")  r = b.rxx(angleConsts[0], va, vb);
     else { err("unknown 2q gate: " + g); }
+    if (!diag.hasErrors()) bindAngles(mod.producerOf(r.first));
     setQubitSlot(ra, ia, r.first);
     setQubitSlot(rb, ib, r.second);
   } else {
@@ -626,6 +708,7 @@ void Parser::parseResetStmt() {
   if (!qref) return;
   auto& [reg, idx] = *qref;
   if (idx == -1) {
+    if (!qreg.count(reg)) { err("reset on unknown qubit register: " + reg); return; }
     auto& slots = qreg[reg];
     for (std::size_t i = 0; i < slots.size(); ++i) {
       slots[i] = b.reset(slots[i]);
@@ -645,6 +728,7 @@ void Parser::parseBarrierStmt() {
     if (!qref) return;
     auto& [reg, idx] = *qref;
     if (idx == -1) {
+      if (!qreg.count(reg)) { err("barrier on unknown qubit register: " + reg); return; }
       for (auto v : qreg[reg]) qs.push_back(v);
     } else {
       qs.push_back(getQubitSlot(reg, idx, cur()));
@@ -698,6 +782,7 @@ void Parser::parseIfStmt() {
   pd::ValueId pred = b.cmp(cmpOp, lhs, rhs);
   pd::OpId ifId = b.beginIf(pred);
   auto staticBefore=classicals;auto qBefore=qreg;auto cBefore=creg;
+  ++runtimeDepth;
   parseBlock();
   skipNewlines();
   if (cur().kind == Tok::Else) {
@@ -705,6 +790,7 @@ void Parser::parseIfStmt() {
     b.elseIf(ifId);
     parseBlock();
   }
+  --runtimeDepth;
   if(classicals!=staticBefore||qreg.size()!=qBefore.size()||creg.size()!=cBefore.size())
     err("runtime branches cannot declare registers or change compile-time scalar bindings");
   b.endIf(ifId);
@@ -732,16 +818,18 @@ void Parser::parseForStmt() {
   const auto oldConst = ctConst.find(var) == ctConst.end() ? std::optional<double>{} : ctConst[var];
   const auto oldValue = classicals.find(var) == classicals.end() ? std::optional<pd::ValueId>{} : classicals[var];
   for (auto value = static_cast<std::int64_t>(*loOpt);
-       value < static_cast<std::int64_t>(*hiOpt) && !diag.hasErrors(); ++value) {
+       value < static_cast<std::int64_t>(*hiOpt) && !diag.hasErrors() && !inlineReturned(); ++value) {
     if (++expandedIterations > 100000) { err("static loop expansion exceeds 100000 iterations"); break; }
     ctConst[var] = static_cast<double>(value);
     classicals[var] = b.constInt(value);
+    recordScalar(var);
     pos = bodyStart;
     parseBlock();
   }
   pos = afterBody;
   if (oldConst) ctConst[var] = *oldConst; else ctConst.erase(var);
   if (oldValue) classicals[var] = *oldValue; else classicals.erase(var);
+  recordScalar(var);
   if (cur().kind == Tok::Newline) consume();
 }
 
@@ -759,30 +847,60 @@ void Parser::skipBlock() {
 
 void Parser::parseWhileStmt() {
   consume();
-  expect(Tok::LParen, "'('");
-  pd::ValueId lhs = parseExpr();
-  std::string cmpOp = "==";
-  if (cur().kind == Tok::EqEq) { cmpOp = "=="; consume(); }
-  else if (cur().kind == Tok::NotEq) { cmpOp = "!="; consume(); }
-  else if (cur().kind == Tok::Lt) { cmpOp = "<"; consume(); }
-  else if (cur().kind == Tok::Gt) { cmpOp = ">"; consume(); }
-  else if (cur().kind == Tok::Le) { cmpOp = "<="; consume(); }
-  else if (cur().kind == Tok::Ge) { cmpOp = ">="; consume(); }
-  pd::ValueId rhs = parseExpr();
-  expect(Tok::RParen, "')'");
-  pd::ValueId pred = b.cmp(cmpOp, lhs, rhs);
-  pd::OpId wid = b.beginWhile(pred);
-  parseBlock();
-  b.endWhile(wid);
+  if (!expect(Tok::LParen, "'('")) return;
+  const auto conditionStart = pos;
+  auto condition = [&]() -> std::optional<bool> {
+    pos = conditionStart;
+    auto left = foldExpr();
+    const auto comparison = consume().kind;
+    auto right = foldExpr();
+    if (!left || !right || !std::isfinite(*left) || !std::isfinite(*right) ||
+        !accept(Tok::RParen)) {
+      err("while requires a finite compile-time condition; measured-bit while is unsupported");
+      return std::nullopt;
+    }
+    switch (comparison) {
+      case Tok::EqEq: return *left == *right;
+      case Tok::NotEq: return *left != *right;
+      case Tok::Lt: return *left < *right;
+      case Tok::Gt: return *left > *right;
+      case Tok::Le: return *left <= *right;
+      case Tok::Ge: return *left >= *right;
+      default: err("while requires a comparison predicate"); return std::nullopt;
+    }
+  };
+  auto take = condition();
+  if (!take) return;
+  skipNewlines();
+  const auto bodyStart = pos;
+  skipBlock();
+  const auto afterBody = pos;
+  while (*take && !diag.hasErrors() && !inlineReturned()) {
+    if (++expandedIterations > 100000) {
+      err("static loop expansion exceeds 100000 iterations; while termination was not established"); break;
+    }
+    pos = bodyStart;
+    parseBlock();
+    if (diag.hasErrors() || inlineReturned()) break;
+    take = condition();
+    if (!take) break;
+  }
+  pos = afterBody;
   if (cur().kind == Tok::Newline) consume();
 }
 
 // --- Function definition / call ------------------------------------------
 
 void Parser::parseDefStmt() {
+  if (!inlineFrames.empty()) {
+    err("nested function definitions are unsupported; define helpers at module scope");
+    fatal = true;
+    return;
+  }
   consume();
   if (cur().kind != Tok::Identifier) { err("expected function name"); return; }
   std::string name = consume().text;
+  if (funcs.count(name)) { err("function cannot be redefined: " + name); return; }
   if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::Builder::Param> params;
   while (cur().kind != Tok::RParen) {
@@ -794,64 +912,211 @@ void Parser::parseDefStmt() {
     else { err("expected parameter type (qubit/bit/int/angle)"); return; }
     if (cur().kind != Tok::Identifier) { err("expected parameter name"); return; }
     std::string pname = consume().text;
+    if (std::any_of(params.begin(), params.end(), [&](const auto& p) { return p.name == pname; })) {
+      err("duplicate function parameter: " + pname); return;
+    }
     params.push_back({ty, pname});
     if (!accept(Tok::Comma)) break;
   }
-  expect(Tok::RParen, "')'");
+  if (!expect(Tok::RParen, "')'")) return;
+  skipNewlines();
+  FuncDecl fd;
+  fd.name = name;
+  fd.params = params;
+  fd.body_start = pos;
+  fd.specialize = std::any_of(params.begin(), params.end(), [](const auto& p) {
+    return p.type.kind != pd::TypeKind::Qubit;
+  });
+  skipBlock();
+  fd.body_end = pos;
+  pos = fd.body_start;
+  // A wrapper around a template and a function using lexical variables
+  // also need call-time expansion. Pure qubit helpers retain Def/Call IR.
+  for (auto token = fd.body_start; token < fd.body_end; ++token) {
+    if (toks[token].kind != Tok::Identifier) continue;
+    const auto& symbol = toks[token].text;
+    const bool parameter = std::any_of(params.begin(), params.end(), [&](const auto& p) { return p.name == symbol; });
+    if (!parameter && (qreg.count(symbol) || creg.count(symbol) || scalarBindings.count(symbol)))
+      fd.specialize = true;
+    const auto helper = funcs.find(symbol);
+    if (helper != funcs.end() && helper->second.specialize && toks[token + 1].kind == Tok::LParen)
+      fd.specialize = true;
+  }
+  if (fd.specialize) {
+    fd.capturedQreg = qreg;
+    fd.capturedCreg = creg;
+    fd.capturedScalars = scalarBindings;
+    fd.capturedBitTargets = bitTargets;
+    pos = fd.body_end;
+    funcs.emplace(name, std::move(fd));
+    if (cur().kind == Tok::Newline) consume();
+    return;
+  }
+  const auto savedQreg = qreg;
+  const auto savedCreg = creg;
+  const auto savedClassicals = classicals;
+  const auto savedConstants = ctConst;
+  const auto savedScalars = scalarBindings;
+  const auto savedBitTargets = bitTargets;
+  // Merely defining a structured function must not update captured slots.
+  for (auto& [_, reg] : qreg) reg = reg.clone();
+  for (auto& [_, reg] : creg) reg = reg.clone();
+  for (auto& [_, binding] : scalarBindings) binding = std::make_shared<ScalarBinding>(*binding);
   pd::OpId defId = b.beginDef(name, std::span<const pd::Builder::Param>(params.data(), params.size()));
   for (std::size_t i = 0; i < params.size(); ++i) {
     pd::ValueId pv = b.paramValue(defId, i);
+    qreg.erase(params[i].name); creg.erase(params[i].name);
+    classicals.erase(params[i].name); ctConst.erase(params[i].name);
+    bitTargets.erase(params[i].name);
+    scalarBindings.erase(params[i].name);
     if (params[i].type.kind == pd::TypeKind::Qubit) qreg[params[i].name] = {pv};
     else if (params[i].type.kind == pd::TypeKind::Bit) creg[params[i].name] = {pv};
     else classicals[params[i].name] = pv;
   }
   parseBlock();
-  for (const auto& p : params) {
-    qreg.erase(p.name); creg.erase(p.name); classicals.erase(p.name);
-  }
+  qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
+  ctConst = savedConstants; bitTargets = savedBitTargets;
+  scalarBindings = savedScalars;
   b.endDef(defId);
-  FuncDecl fd; fd.name = name; fd.params = std::move(params);
+  fd.body_end = pos;
   funcs[fd.name] = std::move(fd);
   if (cur().kind == Tok::Newline) consume();
 }
 
 void Parser::parseCallStmt(const std::string& name) {
-  expect(Tok::LParen, "'('");
+  if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::ValueId> args;
-  std::vector<std::pair<std::string, int>> qrefs;
-  while (cur().kind != Tok::RParen) {
-    if (cur().kind == Tok::Identifier && qreg.count(cur().text)) {
-      auto qref = parseQubitRef();
-      if (!qref) return;
-      auto& [reg, idx] = *qref;
-      int realIdx = idx == -1 ? 0 : idx;
-      args.push_back(getQubitSlot(reg, realIdx, cur()));
-      qrefs.push_back({reg, realIdx});
-      if (!accept(Tok::Comma)) break;
-      continue;
+  std::vector<std::pair<std::string, int>> refs;
+  std::vector<std::optional<double>> constants;
+  while (cur().kind != Tok::RParen && cur().kind != Tok::Eof) {
+    if (cur().kind == Tok::Identifier &&
+        (qreg.count(cur().text) || creg.count(cur().text))) {
+      auto ref = parseQubitRef();
+      if (!ref) return;
+      auto& [reg, idx] = *ref;
+      const bool quantum = qreg.count(reg) != 0;
+      const auto& slots = quantum ? qreg.at(reg) : creg.at(reg);
+      if (idx == -1 && slots.size() != 1) {
+        err("scalar function argument requires one explicit register index"); return;
+      }
+      const int realIdx = idx == -1 ? 0 : idx;
+      args.push_back(quantum ? getQubitSlot(reg, realIdx, cur()) : getBitSlot(reg, realIdx, cur()));
+      refs.push_back({reg, realIdx});
+      constants.push_back(std::nullopt);
+    } else {
+      const auto expressionStart = pos;
+      auto value = foldExpr();
+      pos = expressionStart;
+      args.push_back(parseExpr());
+      refs.push_back({"", -1});
+      constants.push_back(value);
     }
-    pd::ValueId v = parseExpr();
-    args.push_back(v);
-    qrefs.push_back({"", -1});
     if (!accept(Tok::Comma)) break;
   }
-  expect(Tok::RParen, "')'");
-  auto fit = funcs.find(name);
-  std::vector<pd::Type> rts;
-  if (fit != funcs.end()) {
-    for (const auto& p : fit->second.params) {
-      if (p.type.kind == pd::TypeKind::Qubit) rts.push_back(pd::qubitType());
+  if (!expect(Tok::RParen, "')'") || diag.hasErrors()) return;
+  const auto fit = funcs.find(name);
+  if (fit != funcs.end() && fit->second.specialize) {
+    // Copy metadata because a body parse must not retain unordered_map iterators.
+    const auto function = fit->second;
+    if (args.size() != function.params.size()) {
+      err("argument count mismatch for function '" + name + "'"); return;
     }
-  }
-  std::vector<pd::ValueId> ret = b.call(name,
-      std::span<const pd::ValueId>(args.data(), args.size()),
-      std::span<const pd::Type>(rts.data(), rts.size()));
-  std::size_t k = 0;
-  for (std::size_t i = 0; i < qrefs.size() && k < ret.size(); ++i) {
-    if (!qrefs[i].first.empty()) {
-      setQubitSlot(qrefs[i].first, qrefs[i].second, ret[k]);
-      ++k;
+    if (std::any_of(inlineFrames.begin(), inlineFrames.end(), [&](const auto& frame) {
+          return frame.name == name;
+        })) {
+      err("recursive call to '" + name + "' is not supported"); return;
     }
+    if (inlineFrames.size() >= 128 || ++expandedCalls > 100000) {
+      err("function specialization exceeds 128 nested calls or 100000 expanded calls"); return;
+    }
+    std::vector<pd::ValueId> qubitArgs;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const auto type = function.params[i].type.kind;
+      const auto actual = mod.typeOf(args[i]).kind;
+      if (type == pd::TypeKind::Int || type == pd::TypeKind::Angle) {
+        if ((actual != pd::TypeKind::Int && actual != pd::TypeKind::Angle) ||
+            !constants[i] || !std::isfinite(*constants[i]) ||
+            (type == pd::TypeKind::Int && (std::floor(*constants[i]) != *constants[i] ||
+                                         std::abs(*constants[i]) > 9007199254740991.0))) {
+          err("function scalar argument must be bound to a finite value matching its parameter type"); return;
+        }
+      } else if (type != actual || refs[i].first.empty()) {
+        err("register argument type mismatch for function '" + name + "'"); return;
+      }
+      if (type == pd::TypeKind::Qubit) {
+        if (std::find(qubitArgs.begin(), qubitArgs.end(), args[i]) != qubitArgs.end()) {
+          err("function qubit arguments must refer to distinct slots"); return;
+        }
+        qubitArgs.push_back(args[i]);
+      }
+    }
+    const auto afterCall = pos;
+    const auto savedQreg = qreg;
+    const auto savedCreg = creg;
+    const auto savedClassicals = classicals;
+    const auto savedConstants = ctConst;
+    const auto savedScalars = scalarBindings;
+    const auto savedBitTargets = bitTargets;
+    qreg = function.capturedQreg;
+    creg = function.capturedCreg;
+    classicals.clear(); ctConst.clear(); scalarBindings.clear();
+    for (const auto& [symbol, binding] : function.capturedScalars) {
+      classicals[symbol] = binding->value;
+      if (binding->constant) ctConst[symbol] = *binding->constant;
+      scalarBindings[symbol] = std::make_shared<ScalarBinding>(*binding);
+    }
+    bitTargets = function.capturedBitTargets;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const auto& param = function.params[i];
+      qreg.erase(param.name); creg.erase(param.name);
+      classicals.erase(param.name); ctConst.erase(param.name); bitTargets.erase(param.name);
+      scalarBindings.erase(param.name);
+      if (param.type.kind == pd::TypeKind::Qubit) {
+        qreg[param.name] = Register::alias(savedQreg.at(refs[i].first), refs[i].second);
+      } else if (param.type.kind == pd::TypeKind::Bit) {
+        creg[param.name] = Register::alias(savedCreg.at(refs[i].first), refs[i].second);
+        const auto target = savedBitTargets.find(refs[i].first);
+        if (target != savedBitTargets.end()) bitTargets[param.name] = {target->second.at(refs[i].second)};
+      } else {
+        ctConst[param.name] = *constants[i];
+        classicals[param.name] = args[i];
+        recordScalar(param.name, true);
+      }
+    }
+    inlineFrames.push_back({name, runtimeDepth});
+    pos = function.body_start;
+    parseBlock();
+    auto frame = std::move(inlineFrames.back());
+    inlineFrames.pop_back();
+    std::vector<pd::ValueId> results = std::move(frame.values);
+    if (!frame.returned) {
+      for (const auto& param : function.params)
+        if (param.type.kind == pd::TypeKind::Qubit) results.push_back(qreg.at(param.name)[0]);
+    }
+    qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
+    ctConst = savedConstants; bitTargets = savedBitTargets;
+    scalarBindings = savedScalars;
+    pos = afterCall;
+    if (results.size() != qubitArgs.size() || std::any_of(results.begin(), results.end(), [&](auto value) {
+          return mod.typeOf(value).kind != pd::TypeKind::Qubit;
+        })) {
+      err("function must return one qubit value per qubit parameter: " + name);
+    } else {
+      std::size_t result = 0;
+      for (std::size_t i = 0; i < function.params.size(); ++i)
+        if (function.params[i].type.kind == pd::TypeKind::Qubit)
+          setQubitSlot(refs[i].first, refs[i].second, results[result++]);
+    }
+  } else {
+    std::vector<pd::Type> resultTypes;
+    if (fit != funcs.end())
+      for (const auto& param : fit->second.params)
+        if (param.type.kind == pd::TypeKind::Qubit) resultTypes.push_back(pd::qubitType());
+    auto results = b.call(name, args, resultTypes);
+    std::size_t result = 0;
+    for (std::size_t i = 0; i < refs.size() && result < results.size(); ++i)
+      if (!refs[i].first.empty() && qreg.count(refs[i].first))
+        setQubitSlot(refs[i].first, refs[i].second, results[result++]);
   }
   if (cur().kind == Tok::Newline) consume();
 }
@@ -865,6 +1130,7 @@ void Parser::parseAssignStmt(const std::string& name) {
   if (folded && std::isfinite(*folded)) ctConst[name] = *folded;
   else ctConst.erase(name);
   classicals[name] = v;
+  recordScalar(name);
   b.assign(name, v);
   if (cur().kind == Tok::Newline) consume();
 }
@@ -878,13 +1144,25 @@ void Parser::parseReturnStmt() {
       auto qref = parseQubitRef();
       if (!qref) return;
       auto& [reg, idx] = *qref;
+      if (idx == -1 && qreg.at(reg).size() != 1) {
+        err("function return requires one explicit qubit index per value"); return;
+      }
       vs.push_back(getQubitSlot(reg, idx == -1 ? 0 : idx, cur()));
     } else {
       vs.push_back(parseExpr());
     }
     if (!accept(Tok::Comma)) break;
   }
-  b.returnOp(std::span<const pd::ValueId>(vs.data(), vs.size()));
+  if (!inlineFrames.empty()) {
+    if (runtimeDepth != inlineFrames.back().runtimeDepth) {
+      err("conditional return requires explicit control-flow return lowering");
+    } else {
+      inlineFrames.back().returned = true;
+      inlineFrames.back().values = std::move(vs);
+    }
+  } else {
+    b.returnOp(std::span<const pd::ValueId>(vs.data(), vs.size()));
+  }
   if (cur().kind == Tok::Newline) consume();
 }
 
@@ -923,6 +1201,9 @@ void Parser::parseStmt() {
             auto qref = parseQubitRef();
             if (!qref) return;
             auto& [reg, idx2] = *qref;
+            if (idx2 == -1 && (!qreg.count(reg) || qreg.at(reg).size() != 1)) {
+              err("measurement into an indexed bit requires one explicit qubit"); return;
+            }
             pd::ValueId vq = getQubitSlot(reg, idx2 == -1 ? 0 : idx2, cur());
             pd::ValueId vbit = b.measure(vq);
             setBitSlot(name, static_cast<int>(*idxOpt), vbit);
@@ -955,7 +1236,7 @@ void Parser::parseStmt() {
               err("register size mismatch in 'measure' assignment"); return;
             }
             for (std::size_t i = 0; i < qit->second.size(); ++i) {
-              cit->second[i] = b.measure(qit->second[i]);
+              setBitSlot(name, static_cast<int>(i), b.measure(qit->second[i]));
             }
           } else {
             pd::ValueId vq = getQubitSlot(reg, idx, cur());
@@ -964,15 +1245,13 @@ void Parser::parseStmt() {
             if (cit == creg.end() || cit->second.size() != 1) {
               err("expected single-bit register on lhs"); return;
             }
-            cit->second[0] = vbit;
+            setBitSlot(name, 0, vbit);
           }
           if (cur().kind == Tok::Newline) consume();
           return;
         }
-        pd::ValueId v = parseExpr();
-        classicals[name] = v;
-        b.assign(name, v);
-        if (cur().kind == Tok::Newline) consume();
+        --pos;  // parseAssignStmt owns the '=' and compile-time rebinding.
+        parseAssignStmt(name);
         return;
       }
       err("unexpected statement starting with identifier '" + name + "'");
@@ -995,6 +1274,18 @@ void Parser::parseBlock() {
   skipNewlines();
   while (cur().kind != Tok::RBrace && cur().kind != Tok::Eof) {
     if (fatal) return;
+    if (inlineReturned()) {
+      // A static return exits this function, including all surrounding
+      // compile-time loops. Consume the rest without emitting operations.
+      std::size_t depth = 0;
+      while (cur().kind != Tok::Eof) {
+        if (cur().kind == Tok::RBrace && depth == 0) break;
+        const auto token = consume().kind;
+        if (token == Tok::LBrace) ++depth;
+        else if (token == Tok::RBrace) --depth;
+      }
+      break;
+    }
     const auto previous = pos;
     parseStmt();
     if (pos == previous) { err("parser could not consume statement"); consume(); }

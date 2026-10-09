@@ -9,6 +9,8 @@ namespace spinor::emit {
 using namespace dialect;
 std::string emitQuil(const Module& m) {
   auto c=flatten(m);std::ostringstream os;os<<std::setprecision(17);
+  for(const auto& op:c.instructions)if(op.kind==OpKind::Move)
+    throw std::runtime_error("MOVE requires IQM native JSON and has no full-unitary Quil definition");
   if(c.numClbits)os<<"DECLARE ro BIT["<<c.numClbits<<"]\n";
   // Matrix definitions retain exact phase for native gates absent from Quil's
   // standard library. Provider capability validation decides their admission.

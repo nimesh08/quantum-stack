@@ -56,6 +56,14 @@ O3 bounded layout/native-resynthesis searches. Compilation is deterministic.
 Approximate synthesis is not enabled; the recorded error budget is zero.
 Measurement, reset and classical conditions form optimization boundaries.
 Unsupported features, unbound parameters and missing native recipes are errors.
+Counted loops preserve their induction step and comparison. Phonon `while`
+loops are expanded only when their condition is known at compile time and they
+terminate within the compiler's expansion limit. Function specialization binds
+angles, register indices, allocation sizes and static loop bounds at each call.
+Lexical captures and parameter shadows preserve their separate bindings;
+qubit and readout arguments retain their original register slots. Expansion is
+bounded to 128 nested calls and 100000 expanded calls or loop iterations.
+Runtime unbounded loops and recursive calls are diagnosed explicitly.
 Provider serialization can impose numeric precision limits; Google's Engine
 protobuf stores numeric gate arguments as float32, which is recorded in its
 job receipt. This does not enable approximate synthesis in the compiler.
@@ -108,6 +116,12 @@ Provider OAuth caches remain SDK-managed. Use `--api-key-file` or
 `--api-key-stdin` when preferable to a literal `--api-key` argument. Source labels
 appear in `config show --resolved`; secret values are redacted. Do not put
 credentials into source code, target snapshots, or custom result payloads.
+Every credential field also has matching file and stdin options, such as
+`--token-file`, `--access-token-stdin` and `--client-secret-file`. Only one field
+may read stdin in a command; use separate files for additional credentials.
+Field definitions generate option help, environment aliases, validation and
+secret classification. Later dotenv files override earlier files even when
+they use different documented aliases for the same field.
 
 Canonical variables follow `QSTACK_<ROUTE>_<FIELD>`. Existing standard AWS,
 Azure and Google variables and SDK-specific aliases remain accepted. The
@@ -146,11 +160,21 @@ supplies an account-provided capability contract bound to the exact QPU and
 current calibration digest. See the provider reference for its schema. The CLI
 rejects unverified/changed contracts rather than inventing topology.
 
+IQM architectures with computational resonators use owned MOVE routing. The
+compiler derives computational interactions from calibrated, ordered MOVE/CZ
+loci, preserves reserved resonator slots, and emits balanced MOVE/CZ/MOVE
+sequences. Local simulation checks the allowed MOVE subspace and returns the
+resonators to their empty state. No SDK routing or transpilation is invoked.
+
 Aqumen/QCI and TII Falcon cloud submission remain unavailable until their
-vendor contracts are supplied. An optional `qibolab` route accepts an installed
-`module:factory` laboratory bridge providing a calibrated platform, snapshot
-and native pulse-sequence builder. It executes real configured instruments and
-is not a Falcon cloud service. OQC Lucy is not advertised as an AWS device.
+vendor contracts are supplied. The optional `qibolab` route accepts a configured
+platform with `--qibolab-platform NAME_OR_DIRECTORY` (`QIBOLAB_PLATFORM` is also
+accepted). Its built-in assembler uses the platform's calibrated native pulse
+definitions, resource layers and acquisition-to-classical mappings. An installed
+`--qibolab-bridge module:factory` remains available for custom laboratory setups.
+Dummy controllers cannot authorize live submission. This route executes real
+configured instruments and is not a Falcon cloud service. OQC Lucy is not
+advertised as an AWS device.
 
 ## Targets and persistent jobs
 
@@ -214,3 +238,6 @@ parameter/phase preservation, readout maps, small-circuit equivalence, directed
 and disconnected topology, and exact native matrices. Provider contract tests
 run offline; optional installed-SDK checks validate real schemas and bitcode.
 Hardware smoke tests must be separately configured with credentials and budget.
+
+The [acceptance checklist](implementation-status.md) maps the implementation to
+the requested plan and separates external verification from code delivery.

@@ -6,6 +6,7 @@ from .cloud import AWSAdapter, AzureAdapter, GoogleAdapter, IBMAdapter
 from .rest import AliceBobAdapter, AnyonAdapter, IonQAdapter
 from .qibolab import QibolabAdapter
 from .specialized import IQMAdapter, OQCAdapter, QuantinuumAdapter, RigettiAdapter
+from .serialization import validate_serialization
 
 ADAPTERS = {cls.route: cls for cls in (IBMAdapter, GoogleAdapter, QuantinuumAdapter, AzureAdapter,
     AWSAdapter, IonQAdapter, RigettiAdapter, IQMAdapter, OQCAdapter, AQTAdapter, AnyonAdapter, AliceBobAdapter, QibolabAdapter)}
@@ -30,4 +31,4 @@ def get_adapter(route: str, config: dict | None = None):
     raise QStackError(f"Unknown provider route '{route}'", "UNKNOWN_PROVIDER")
 
 
-__all__ = ["get_adapter", "ADAPTERS", "UNAVAILABLE"]
+__all__ = ["get_adapter", "ADAPTERS", "UNAVAILABLE", "validate_serialization"]
