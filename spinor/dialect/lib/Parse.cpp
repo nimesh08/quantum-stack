@@ -5,6 +5,8 @@
 // M2 (Lark prototype) and M7 (production C++).
 
 #include "spinor/dialect/Spinor.h"
+#include "spinor/dialect/ExactInteger.h"
+#include "spinor/dialect/Classical.h"
 
 #include <cctype>
 #include <charconv>
@@ -171,6 +173,24 @@ OpKind opFromMnemonic(std::string_view mnemonic) {
       {OpKind::Measure, "spinor.measure"},
       {OpKind::Reset,   "spinor.reset"},
       {OpKind::Barrier, "spinor.barrier"},
+      {OpKind::CConst, "spinor.c_const"},
+      {OpKind::CCopy, "spinor.c_copy"},
+      {OpKind::CNot, "spinor.c_not"},
+      {OpKind::CAnd, "spinor.c_and"},
+      {OpKind::COr, "spinor.c_or"},
+      {OpKind::CXor, "spinor.c_xor"},
+      {OpKind::CAdd, "spinor.c_add"},
+      {OpKind::CSub, "spinor.c_sub"},
+      {OpKind::CEq, "spinor.c_eq"},
+      {OpKind::CNe, "spinor.c_ne"},
+      {OpKind::CLt, "spinor.c_lt"},
+      {OpKind::CLe, "spinor.c_le"},
+      {OpKind::CGt, "spinor.c_gt"},
+      {OpKind::CGe, "spinor.c_ge"},
+      {OpKind::CShl, "spinor.c_shl"},
+      {OpKind::CShr, "spinor.c_shr"},
+      {OpKind::CCast, "spinor.c_cast"},
+      {OpKind::CSelect, "spinor.c_select"},
   };
   for (const auto& e : table) {
     if (mnemonic == e.name) return e.k;
@@ -249,6 +269,18 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
     lx.skipWS();
     auto key = lx.readIdent();
     if (!lx.consume('=')) { diag.error("expected module attribute value"); return std::nullopt; }
+    if(key=="classical_storage"||key=="classical_value"||key=="classical_output"||key=="exported_clbits"||key=="quantum_inputs"||key=="reserved_pool"){
+      auto value=lx.readQuoted();if(!value){diag.error("expected quoted classical metadata");return std::nullopt;}
+      try{
+        if(key=="classical_storage")m.classicalStorage.push_back(decodeClassicalStorage(*value));
+        else if(key=="quantum_inputs")m.quantumInputs=parseClassicalIndices(*value);
+        else if(key=="reserved_pool")m.reservedPool=parseClassicalIndices(*value);
+        else if(key=="classical_value")m.classicalValues.push_back(decodeClassicalValue(*value));
+        else if(key=="classical_output")m.classicalOutputs.push_back(decodeClassicalOutput(*value));
+        else m.exportedClbits=parseClassicalIndices(*value);
+      }catch(const std::exception& error){diag.error(error.what());return std::nullopt;}
+      continue;
+    }
     if (key == "final_layout" || key == "initial_layout" || key == "resonator_qubits") {
       auto value=lx.readQuoted();
       if(!value) {diag.error("expected quoted final layout");return std::nullopt;}
@@ -403,7 +435,16 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
         lx.skipWS();
         Attribute a;
         a.name = std::move(key);
-        if (lx.peek() == '"') {
+        if (lx.consumeKeyword("i64") || lx.consumeKeyword("u64")) {
+          const bool signedValue=text[lx.pos()-3]=='i';
+          if(!lx.consume('(')){diag.error("expected '(' in integer attribute");return std::nullopt;}
+          auto exact=lx.readQuoted();
+          if(!exact||!lx.consume(')')){diag.error("malformed exact integer attribute");return std::nullopt;}
+          try {
+            if(signedValue)a.value=parseExactInteger<std::int64_t>(*exact);
+            else a.value=parseExactInteger<std::uint64_t>(*exact);
+          }catch(const std::exception& error){diag.error(error.what());return std::nullopt;}
+        } else if (lx.peek() == '"') {
           auto s = lx.readQuoted();
           if (!s) {
             diag.error("malformed quoted attribute", {});

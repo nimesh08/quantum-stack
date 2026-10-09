@@ -9,6 +9,74 @@ import photon  # noqa: E402  (imported for the kernel bodies below)
 
 
 class M4Translator(unittest.TestCase):
+    def test_controller_snapshots_uint_and_branch_assignments(self):
+        from photon._translator import translate
+        def program():
+            q = photon.QReg(2)
+            measured = q.measure()
+            saved = measured[0]
+            counter = photon.uint(8, 250)
+            if saved:
+                counter = counter + 10
+            else:
+                counter = counter - 10
+            photon.output(counter)
+            return q.measure_int()
+        text = translate(program)
+        self.assertIn("bool saved = __c_q[0]",text)
+        self.assertIn("uint[8] counter = uint[8](250)",text)
+        self.assertIn("counter = (counter + 10)",text)
+        self.assertIn("output counter",text)
+
+    def test_bounded_device_while_keeps_measurement_and_counter_in_device_program(self):
+        from photon._translator import translate
+        def program():
+            q=photon.QReg(1)
+            measured=q.measure()
+            counter=photon.uint(8,0)
+            while photon.bounded(counter<3,max_iterations=4):
+                q.x(0)
+                measured=q.measure()
+                counter=counter+1
+            photon.output(counter)
+            return q.measure_int()
+        text=translate(program)
+        self.assertIn("while (counter < 3) max_iterations 4",text)
+        self.assertIn("counter = (counter + 1)",text)
+
+    def test_bounded_return_break_continue_and_unsigned_complement(self):
+        from photon._translator import translate
+        def program():
+            q=photon.QReg(1)
+            count=photon.uint(8,0)
+            while photon.bounded(count<4,max_iterations=4):
+                count=count+1
+                if count==1:
+                    continue
+                if count==2:
+                    return ~count
+                q.x(0)
+            return count
+        text=translate(program)
+        self.assertIn("continue",text)
+        self.assertIn("break",text)
+        self.assertIn("__qstack_return_value = ~(count)",text)
+        self.assertIn("output __qstack_return_value",text)
+
+    def test_same_width_return_registers_share_one_projection(self):
+        from photon._translator import Translator
+        def program():
+            q=photon.QReg(1)
+            r=photon.QReg(1)
+            flag=q.measure()
+            if flag[0]:
+                return r.measure_int()
+            return q.measure_int()
+        translator=Translator();text=translator.translate(program)
+        self.assertIn("__c_r[0] = measure r[0]",text)
+        self.assertIn("__c_r[0] = measure q[0]",text)
+        self.assertEqual(translator.return_bits,[1])
+
     def setUp(self) -> None:
         try:
             from photon._translator import translate  # noqa: F401
@@ -365,12 +433,13 @@ class M4TranslatorRejection(unittest.TestCase):
             return q.measure_int(1)
         self._assert_rejects(returned, "accepts no arguments")
 
-    def test_early_and_conditional_returns_are_rejected(self) -> None:
+    def test_early_returns_normalize_and_incompatible_implicit_returns_reject(self) -> None:
+        from photon._translator import translate
         def early():
             q = photon.QReg(1)
             return q.measure_int()
             q.x(0)
-        self._assert_rejects(early, "early return")
+        self.assertNotIn("x q[0]",translate(early))
         def conditional():
             q = photon.QReg(1)
             c = q.measure()
@@ -382,7 +451,17 @@ class M4TranslatorRejection(unittest.TestCase):
             if 1 == 1:
                 return q.measure_int()
             q.x(0)
-        self._assert_rejects(static_conditional, "conditional")
+        self.assertNotIn("x q[0]",translate(static_conditional))
+        def both_paths():
+            q=photon.QReg(1)
+            measured=q.measure()
+            if measured[0]==1:
+                return q.measure_int()
+            q.x(0)
+            return q.measure_int()
+        text=translate(both_paths)
+        self.assertIn("else {",text)
+        self.assertEqual(text.count("x q[0]"),1)
 
 
 if __name__ == "__main__":

@@ -56,12 +56,43 @@ def _write_job(receipt: JobReceipt, result: ExecutionResult | None = None, confi
         if "result" in previous:
             data["result"] = previous["result"]
     if result:
+        annotate_application_result(receipt, result)
         data["result"] = result.to_dict()
     data = redact_data(data, config)
     temporary = path.with_suffix(f".{os.getpid()}.tmp")
     temporary.write_bytes(canonical_json(data))
     temporary.replace(path)
     return str(path)
+
+
+def annotate_application_result(receipt: JobReceipt, result: ExecutionResult):
+    """Retain the complete histogram and raw data; never postselect or resubmit."""
+    flags = receipt.metadata.get("application_outputs", [])
+    if not flags:
+        return
+    all_bits = [bit for output in flags for bit in output.get("bits", [])]
+    counts = result.counts
+    observed = bool(counts) and sum(counts.values()) > 0
+    correlated = observed and bool(all_bits) and all(re.fullmatch(r"[01]+", key) and len(key) > max(all_bits) for key in counts)
+    if correlated:
+        histograms = {}
+        for output in flags:
+            histogram = {}
+            for key, count in counts.items():
+                value = str(sum(int(key[-1-bit]) << j for j, bit in enumerate(output["bits"])))
+                histogram[value] = histogram.get(value, 0) + count
+            histograms[output.get("name", "loop_exhausted")] = histogram
+        result.metadata["classical_counts"] = histograms
+    bits = [bit for output in flags if output.get("role") == "loop_exhausted" for bit in output.get("bits", [])]
+    if not bits:
+        return
+    if not observed or any(not re.fullmatch(r"[01]+", key) or len(key) <= max(bits) for key in counts):
+        result.metadata.update(application_status="not_checked", application_status_reason="Provider response lacks the required correlated per-shot exhaustion flags")
+        return
+    exhausted = sum(count for key, count in counts.items() if any(key[-1-bit] == "1" for bit in bits))
+    result.metadata.update(application_status="loop_exhausted" if exhausted else "completed",
+                           exhausted_shots=exhausted, successful_shots=sum(counts.values())-exhausted,
+                           application_outputs=flags, all_shots_preserved=True)
 
 
 def load_job(reference: str) -> tuple[JobReceipt, ExecutionResult | None]:

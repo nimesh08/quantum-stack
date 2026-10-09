@@ -88,6 +88,10 @@ enum class OpKind : std::uint16_t {
   Measure,
   Reset,
   Barrier,
+  // Typed immutable classical values. Their allocated bit storage and public
+  // outputs are module metadata; attributes name result/input value IDs.
+  CConst, CCopy, CNot, CAnd, COr, CXor, CAdd, CSub,
+  CEq, CNe, CLt, CLe, CGt, CGe, CShl, CShr, CCast, CSelect,
 };
 
 std::string_view opMnemonic(OpKind k);
@@ -130,7 +134,41 @@ struct Location {
 // U1q uses {"theta", double} and {"phi", double}.
 struct Attribute {
   std::string name;
-  std::variant<double, std::string> value;
+  std::variant<double, std::string, std::int64_t, std::uint64_t> value;
+};
+
+// Integer constants never pass through a floating representation. The textual
+// IR uses i64("decimal") / u64("decimal") for unambiguous exact roundtrips.
+inline Attribute namedInt(std::string name, std::int64_t value) {
+  return {std::move(name), value};
+}
+inline Attribute namedUInt(std::string name, std::uint64_t value) {
+  return {std::move(name), value};
+}
+
+struct ClassicalStorage {
+  std::string id;
+  std::uint32_t width = 1;
+  std::vector<int> bits; // least-significant bit first
+  std::string visibility = "private";
+  bool initialized = false;
+  std::string initialValue;
+};
+struct ClassicalValue {
+  std::string id;
+  std::string type = "bool";
+  std::uint32_t width = 1;
+  std::vector<int> storage; // least-significant bit first
+  std::string visibility = "private";
+  bool initialized = false;
+  std::string initialValue;
+};
+struct ClassicalOutput {
+  std::string name;
+  std::string value;
+  std::string type = "bool";
+  std::uint32_t width = 1;
+  std::string role = "value";
 };
 
 // Convenience constructors.
@@ -212,6 +250,14 @@ class Module {
   std::vector<int> initialLayout;
   // Reserved, initially empty computational resonators, never logical inputs.
   std::vector<int> resonatorQubits;
+  // Stable logical wire IDs. Reserved wires start in |0> and are traced out
+  // of the public quantum output; layouts map them to physical addresses.
+  std::vector<int> quantumInputs;
+  std::vector<int> reservedPool;
+  std::vector<ClassicalStorage> classicalStorage;
+  std::vector<ClassicalValue> classicalValues;
+  std::vector<ClassicalOutput> classicalOutputs;
+  std::vector<int> exportedClbits;
 
   // value table
   ValueId addValue(Type t, OpId producer);

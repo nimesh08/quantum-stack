@@ -66,6 +66,14 @@ Token Lexer::readWord() {
   else if (word == "bit")     t.kind = Tok::Bit;
   else if (word == "int")     t.kind = Tok::Int;
   else if (word == "angle")   t.kind = Tok::Angle;
+  else if (word == "bool")    t.kind = Tok::Bool;
+  else if (word == "uint")    t.kind = Tok::UInt;
+  else if (word == "output")  t.kind = Tok::Output;
+  else if (word == "bounded") t.kind = Tok::Bounded;
+  else if (word == "max_iterations") t.kind = Tok::MaxIterations;
+  else if (word == "break")   t.kind = Tok::Break;
+  else if (word == "continue") t.kind = Tok::Continue;
+  else if (word == "discard") t.kind = Tok::Discard;
   else if (word == "measure") t.kind = Tok::Measure;
   else if (word == "reset")   t.kind = Tok::Reset;
   else if (word == "barrier") t.kind = Tok::Barrier;
@@ -197,6 +205,10 @@ std::vector<Token> Lexer::tokenize() {
       t.line = line_; t.column = col_;
       get(); get(); out.push_back(std::move(t)); continue;
     }
+    if ((c == '<' || c == '>') && peek(1) == c) {
+      Token t; t.kind=c=='<'?Tok::Shl:Tok::Shr;t.text=std::string(2,c);t.line=line_;t.column=col_;
+      get();get();out.push_back(std::move(t));continue;
+    }
     Token t; t.line = line_; t.column = col_;
     t.text = std::string(1, c);
     switch (c) {
@@ -213,6 +225,11 @@ std::vector<Token> Lexer::tokenize() {
       case '+': t.kind = Tok::Plus;     break;
       case '*': t.kind = Tok::Star;     break;
       case '/': t.kind = Tok::Slash;    break;
+      case '&': t.kind = Tok::Amp;      break;
+      case '|': t.kind = Tok::Pipe;     break;
+      case '^': t.kind = Tok::Caret;    break;
+      case '!': t.kind = Tok::Bang;     break;
+      case '~': t.kind = Tok::Tilde;    break;
       default:  t.kind = Tok::Invalid;  break;
     }
     get();

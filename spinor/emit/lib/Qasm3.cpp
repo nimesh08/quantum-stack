@@ -1,5 +1,7 @@
 #include "spinor/emit/Emitters.h"
 #include "spinor/dialect/Circuit.h"
+#include "spinor/dialect/Classical.h"
+#include <map>
 #include <iomanip>
 #include <set>
 #include <sstream>
@@ -33,6 +35,17 @@ std::string emitQasm3(const Module& m,const registry::ChipInfo* chip,EmitOptions
     if(c.numQubits)os<<"qubit["<<c.numQubits<<"] q;\n";
   }
   if(c.numClbits)os<<"bit["<<c.numClbits<<"] c;\n";
+  std::map<std::string,const ClassicalValue*> values;
+  for(const auto& value:c.classicalValues){
+    values[value.id]=&value;
+    os<<"uint["<<value.width<<"] "<<value.id<<" = "<<(value.initialized?value.initialValue:"0")<<";\n";
+  }
+  auto store=[&](const std::string& id){
+    const auto& value=*values.at(id);
+    for(std::size_t bit=0;bit<value.storage.size();++bit)os<<"c["<<value.storage[bit]<<"] = bit(("<<id<<" >> "<<bit<<") & 1);\n";
+  };
+  if(!c.classicalValues.empty())for(std::size_t bit=0;bit<c.numClbits;++bit)os<<"c["<<bit<<"] = 0;\n";
+  for(const auto& value:c.classicalValues)if(value.initialized)store(value.id);
   auto qref=[&](int q){return opts.braketVerbatim?"$"+std::to_string(q):"q["+std::to_string(q)+"]";};
   if(opts.braketVerbatim)os<<"#pragma braket verbatim\nbox {\n";
   if(c.globalPhase!=0){
@@ -41,11 +54,28 @@ std::string emitQasm3(const Module& m,const registry::ChipInfo* chip,EmitOptions
   }
   bool measured=false;
   if(opts.braketVerbatim)for(const auto& op:c.instructions){
+    if(isClassical(op.kind))throw std::runtime_error("Braket verbatim output does not support controller operations");
     if(isControl(op.kind))throw std::runtime_error("Braket verbatim output does not support dynamic control flow");
     if(op.kind==OpKind::Measure)measured=true;
     else if(measured&&op.kind!=OpKind::Barrier&&op.kind!=OpKind::GlobalPhase)throw std::runtime_error("Braket verbatim output requires terminal measurements");
   }
   for(const auto& op:c.instructions){
+    if(isClassical(op.kind)){
+      const auto result=stringAttribute(op,"result"),width=std::to_string(values.at(result)->width);const auto inputs=classicalInputs(op);
+      if(op.kind==OpKind::CSelect)os<<"if ("<<inputs.at(0)<<" != 0) {\n"<<result<<" = "<<inputs.at(1)<<";\n} else {\n"<<result<<" = "<<inputs.at(2)<<";\n}\n";
+      else{
+        std::string expression;
+        if(op.kind==OpKind::CConst)expression=stringAttribute(op,"value");
+        else if(op.kind==OpKind::CCopy||op.kind==OpKind::CCast)expression=inputs.at(0);
+        else if(op.kind==OpKind::CNot)expression="~"+inputs.at(0);
+        else{
+          const std::map<OpKind,std::string> symbols={{OpKind::CAnd,"&"},{OpKind::COr,"|"},{OpKind::CXor,"^"},{OpKind::CAdd,"+"},{OpKind::CSub,"-"},{OpKind::CEq,"=="},{OpKind::CNe,"!="},{OpKind::CLt,"<"},{OpKind::CLe,"<="},{OpKind::CGt,">"},{OpKind::CGe,">="},{OpKind::CShl,"<<"},{OpKind::CShr,">>"}};
+          expression=inputs.at(0)+" "+symbols.at(op.kind)+" "+inputs.at(1);
+        }
+        os<<result<<" = uint["<<width<<"]("<<expression<<");\n";
+      }
+      store(result);continue;
+    }
     if(opts.braketVerbatim&&op.kind==OpKind::Measure)continue;
     if(op.kind==OpKind::If){os<<"if (c["<<op.clbit<<"] == "<<parameter(op,"condition_value")<<") {\n";continue;}
     if(op.kind==OpKind::Else){os<<"} else {\n";continue;}
@@ -54,7 +84,7 @@ std::string emitQasm3(const Module& m,const registry::ChipInfo* chip,EmitOptions
       if(opts.braketVerbatim)os<<"// Scalar global phase (radians): "<<parameter(op)<<"\n";
       else os<<"gphase("<<parameter(op)<<");\n";continue;
     }
-    if(op.kind==OpKind::Measure){os<<"c["<<op.clbit<<"] = measure "<<qref(op.qubits.at(0))<<";\n";continue;}
+    if(op.kind==OpKind::Measure){os<<"c["<<op.clbit<<"] = measure "<<qref(op.qubits.at(0))<<";\n";const auto result=stringAttribute(op,"result");if(!result.empty())os<<result<<" = uint[1](c["<<op.clbit<<"]);\n";continue;}
     if(op.kind==OpKind::Barrier){os<<"barrier";for(std::size_t i=0;i<op.qubits.size();++i)os<<(i?", ":" ")<<qref(op.qubits[i]);os<<";\n";continue;}
     auto name=std::string(opMnemonic(op.kind)).substr(7);
     if(op.kind!=OpKind::Reset && qubitArity(op.kind)<=0)throw std::runtime_error("OpenQASM cannot emit "+name);

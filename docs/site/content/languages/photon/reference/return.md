@@ -1,41 +1,34 @@
-# `return` — return from a kernel  *[control flow]*
+# `return` — kernel result
 
-Exit a `kernel` (or `def`) with a value.
+Photon and Python kernel returns keep one fixed result type and width across
+reachable paths. A return exits the kernel and suppresses later statements.
 
-## Synopsis
+Supported results are measured registers (`measure` or `measure_int`, with the
+same representation across paths), Boolean controller values, and explicit
+fixed-width unsigned controller values. Equal-width measurements from different
+registers share one return destination. Internal saved flags and compiler
+storage are excluded from the public kernel return.
 
-```photon
-return                       ; void return (def only)
-return <expression>          ; int / bit-array return
+```python
+@photon.kernel
+def choose():
+    q = photon.QReg(1)
+    measured = q.measure()
+    if measured[0] == 1:
+        return photon.uint(8, 7)
+    return photon.uint(8, 3)
 ```
 
-## Semantics
+Bounded-loop early returns clear active execution paths. A value-returning
+kernel must also provide a compatible result on paths that leave the loop
+without returning. Exhausted shots retain their status and data; Python
+`kernel.run()` raises `PhotonKernelError` with the saved full result in
+`error.result` rather than returning an apparently successful histogram.
 
-- Inside a `kernel`, the return value is the kernel's result — what
-  the platform stores in `Result.counts` (when packed via
-  `q.measure_int()`).
-- Inside a `def`, the return is what the call expression evaluates to.
-- Returning a `QReg` is rejected by the linear-type checker.
+The Python frontend does not execute arbitrary host helper calls during device
+control. Phonon source helpers and the C++ Builder support explicitly typed
+classical helper results and quantum ownership transfer; see
+[Phonon return](../../phonon/reference/return.md).
 
-## Examples
-
-```photon
-kernel bell() -> int {
-    QReg q(2)
-    q.h(0)
-    q.cx(0, 1)
-    return q.measure_int()
-}
-
-def parity(bit c[2]) -> int {
-    int p
-    p = 0
-    if (c[0] == 1) { p = p + 1 }
-    if (c[1] == 1) { p = p + 1 }
-    return p
-}
-```
-
-## See also
-
-[`kernel`](kernel.md), [Phonon `return`](../../phonon/reference/return.md)
+See the [finite controller language](../../../../../language/controller.md)
+for exact value and control-flow semantics.

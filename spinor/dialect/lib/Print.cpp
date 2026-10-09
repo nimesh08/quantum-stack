@@ -4,6 +4,7 @@
 // (paired with Parse.cpp). MLIR-style.
 
 #include "spinor/dialect/Spinor.h"
+#include "spinor/dialect/Classical.h"
 
 #include <cassert>
 #include <charconv>
@@ -29,6 +30,10 @@ void printAttr(std::ostream& os, const Attribute& a) {
   os << a.name << " = ";
   if (std::holds_alternative<double>(a.value)) {
     os << formatDouble(std::get<double>(a.value));
+  } else if (const auto* value=std::get_if<std::int64_t>(&a.value)) {
+    os << "i64(\"" << *value << "\")";
+  } else if (const auto* value=std::get_if<std::uint64_t>(&a.value)) {
+    os << "u64(\"" << *value << "\")";
   } else {
     os << '"' << std::get<std::string>(a.value) << '"';
   }
@@ -109,6 +114,11 @@ std::string print(const Module& m) {
     }
     os << '\"';
   }
+  for(const auto& item:m.classicalStorage)os<<", classical_storage = \""<<encodeClassicalStorage(item)<<'"';
+  if(!m.quantumInputs.empty()||!m.reservedPool.empty())os<<", quantum_inputs = \""<<classicalIndices(m.quantumInputs)<<"\", reserved_pool = \""<<classicalIndices(m.reservedPool)<<'"';
+  for(const auto& item:m.classicalValues)os<<", classical_value = \""<<encodeClassicalValue(item)<<'"';
+  for(const auto& item:m.classicalOutputs)os<<", classical_output = \""<<encodeClassicalOutput(item)<<'"';
+  if(!m.exportedClbits.empty())os<<", exported_clbits = \""<<classicalIndices(m.exportedClbits)<<'"';
   os << "} {\n";
   for (std::uint32_t i = 0; i < m.numOps(); ++i) {
     OpId id{i};

@@ -190,6 +190,10 @@ Flags parseArgv(int argc, const char* const* argv) {
 
     auto v = takeValue(it, "--target", f.errors);
     if (v) { f.target = std::move(*v); continue; }
+    v = takeValue(it, "--numerical-report", f.errors);
+    if (v) { f.numerical_report = std::move(*v); continue; }
+    v = takeValue(it, "--logical-ir-output", f.errors);
+    if (v) { f.logical_ir_output = std::move(*v); continue; }
     v = takeValue(it, "-O", f.errors);
     if (v) {
       if (v->size() != 1 || (*v)[0] < '0' || (*v)[0] > '3') f.errors.emplace_back("-O requires 0, 1, 2 or 3");
@@ -308,6 +312,8 @@ std::string renderHelp(std::string_view programName,
      << "      --emit <fmt>         Output format: qasm3 (default), qir, quil, phonon, spinor\n"
      << "  -o, --out <path>         Write artifact to <path> (default: stdout)\n"
      << "      --manifest           Also write <path>.manifest.json\n"
+     << "      --logical-ir-output <path>  Record the pre-optimization logical IR\n"
+     << "      --numerical-report <path>   Record numerical rewrite evidence\n"
      << "      --verbatim           Pass through to provider (default ON; Rule 5)\n"
      << "      --cost-cap-usd <X>   Refuse to submit above this dollar cost\n"
      << "      --config <path>      Application TOML configuration for execution\n"

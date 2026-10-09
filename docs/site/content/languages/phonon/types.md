@@ -1,72 +1,35 @@
-# Phonon — types
+# Phonon types
 
-Four types: `qubit`, `bit`, `int`, `angle`. Two are linear (qubit) /
-register-only (bit), two are ordinary copyable values.
-
-## `qubit`
-
-Same as in Spinor — a handle to a quantum value, declared as a
-fixed-size array. **Linear**: cannot be assigned, returned, or
-duplicated. See [Linear types](linear_types.md) for the full story.
-
-```phonon
-qubit q[2]
-qubit r[1] = q[0]            ; ERROR: cannot duplicate a qubit
-```
-
-## `bit`
-
-Same as in Spinor — a classical bit register, written by `measure`.
-Bits are copyable in principle but Phonon doesn't (yet) expose bit
-arithmetic; you can only read `c[k]` inside a `condition`.
+| Type | Meaning |
+|---|---|
+| `qubit` | A linear quantum wire; distinct handles cannot clone its state |
+| `bit` | A mutable measured-bit register |
+| `bool` | An immutable controller snapshot or Boolean expression value |
+| `int` | Exact signed 64-bit compile-time integer, or a saved measured bit (0/1) |
+| `uint[W]` | An explicit unsigned controller value of width 1 through 64 |
+| `angle` | A finite compile-time rotation parameter |
 
 ```phonon
-bit c[2]
-c = measure q
-if (c[0] == 1) { x q[1] }
+qubit q[1]
+bit c[1]
+c[0] = measure q[0]
+bool saved = c[0]
+uint[8] count = uint[8](saved)
+reset q[0]
+c[0] = measure q[0]
+output count
 ```
 
-## `int`
+The later write to `c[0]` cannot change `saved`. Source assignments create new
+SSA values; joins select only the taken arm. UInt arithmetic wraps modulo its
+width. Comparisons yield bool; widths change only through explicit casts.
+Runtime arithmetic on a plain `int` snapshot requires an explicit UInt cast.
 
-Loop variables and integer parameters. Plain arithmetic.
+Helpers can declare fixed classical result types and widths. Quantum helper
+returns transfer states under the input/output convention; they do not copy
+qubits. Runtime floating-point values and dynamic qubit indices remain
+unsupported. Static Builder `For` bounds retain exact signed 64-bit values,
+including values above the exact-integer range of binary64.
 
-```phonon
-def repeat(qubit qq, int rounds) {
-    for i in 0..rounds {
-        h qq
-    }
-}
-```
-
-`int` values can be assigned, passed, returned, used in expressions.
-The parser folds `int` expressions to a constant where possible
-(constant folding pass).
-
-## `angle`
-
-Gate parameter type. Same shapes as the literal angle in Spinor (`pi`,
-`pi/N`, `real`, `real*pi`), plus identifier references and integer-style
-expressions:
-
-```phonon
-def parameterised(qubit qq, angle theta) {
-    rx(theta)         qq
-    ry(theta * 2)     qq      ; OK — multiplied by integer literal
-    rz(theta + pi/2)  qq      ; OK — sum with another angle literal
-}
-```
-
-## Cross-reference
-
-| Type | Spinor | Phonon | Photon |
-|---|---|---|---|
-| `qubit` | yes | yes | as `QReg` (object wrapper) |
-| `bit` | yes (register) | yes (register) | implicit in `measure`/`measure_int` |
-| `int` | — | yes | yes (return type, parameters) |
-| `angle` | inline literal only | yes (parameter) | yes (parameter) |
-
-## See also
-
-- [Linear types](linear_types.md)
-- [Spinor types](../spinor/types.md) — the inherited base
-- [Reference: `def`](reference/def.md)
+See [def](reference/def.md), [return](reference/return.md), and the
+[finite controller language](../../../../language/controller.md).

@@ -1,9 +1,8 @@
-# `@photon.kernel` — Python frontend  *[frontend]*
+# `@photon.kernel` — Python frontend
 
-Python decorator. Reads the function's AST, maps it to Phonon, and
-compiles via `photon._engine`.
-
-## Synopsis
+The decorator translates supported Python source into Phonon. Its optional C++
+`compiled` handle is a **logical** program: `stage == "logical"` and
+`target_verified == False`. Target-native compilation and execution use qstack.
 
 ```python
 import photon
@@ -16,44 +15,21 @@ def bell():
     return q.measure_int()
 ```
 
-## What's accepted
+`bell.phonon_text` exposes translated source. `bell.compiled.estimate()` reports
+logical operation counts, including a depth proxy; it is not a physical schedule.
+The explicit `photon.compile_logical` name and compatibility `compile_phonon`
+name share that boundary.
 
-| Python | Maps to |
-|---|---|
-| `q = photon.QReg(N)` | `QReg q(N)` |
-| `q.h(0)`, `q.cx(0, 1)`, … | the matching method |
-| `q.bell_pair(0, 1)`, `q.ghz()`, … | photon.lib expansions |
-| `for i in range(lo, hi): …` | counted `for i in lo..hi { … }` |
-| `if cond == k: …` | `if (cond == k) { … }` |
-| `return q.measure_int()` | kernel return |
+`bell.run(shots=1000, target=DEVICE, provider=ROUTE, mode="local")` uses the real
+C++ local simulator through qstack. `mode="live"` requires an authenticated,
+compatible provider route. Numeric kernel parameters are bound before compilation.
+Returned counts project only the declared return register or typed value.
 
-## What's rejected (`UnsupportedConstructError`)
+The frontend also supports saved Boolean values, UInt1..64, branch joins,
+`while photon.bounded(..., max_iterations=N)`, break/continue, conditional returns,
+and scoped quantum allocation/discard. A loop exhaustion or unchecked loop
+completion raises `PhotonKernelError`; `error.result` retains the full saved
+execution result and all shots.
 
-`while`, `import`, `try`, `with`, recursion, free-function calls
-outside `photon.lib`, `print`, `assert`, list/dict/set literals,
-generators, comprehensions, `lambda`, `yield`, async — see
-[unsupported constructs](../../rules/unsupported_constructs.md).
-
-The error names the offending node and the line/column.
-
-## Decorator API
-
-```python
-bell.phonon_text                     # the lowered Phonon source as a string
-bell.compiled                        # photon._engine.CompiledProgram
-bell.compiled.estimate()             # ResourceEstimate
-bell.compiled.dump_spinor()          # Spinor IR text
-bell.compiled.error                  # diagnostic if ok=False
-bell.run(shots=1000, target="ibm_heron_r2")
-                                     # submit through the spinor_submit adapters
-```
-
-## Source
-
-[`photon/frontends/python/photon/_decorator.py`](https://github.com/nimesh08/quantum-stack/blob/main/photon/frontends/python/photon/_decorator.py),
-[`_translator.py`](https://github.com/nimesh08/quantum-stack/blob/main/photon/frontends/python/photon/_translator.py).
-
-## See also
-
-[`pho_file`](pho_file.md), [`cpp_attribute`](cpp_attribute.md),
-[Install: photon Python](../../../../languages/photon/install.md)
+See the [finite controller language](../../../../../../language/controller.md)
+and [unsupported constructs](../../rules/unsupported_constructs.md).

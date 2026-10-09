@@ -27,6 +27,7 @@
 #include "qs/common/cli/Submit.h"
 
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -135,8 +136,15 @@ std::string findSpinorc() {
       if (fs::exists(cand)) return cand.string();
     }
   }
-  fs::path here = "build/spinor/cli/spinorc";
-  if (fs::exists(here)) return fs::absolute(here).string();
+  for (const fs::path directory : {fs::path("build/spinor/cli"), fs::path("build/spinor/cli/Release")}) {
+    const auto here = directory /
+#ifdef _WIN32
+        "spinorc.exe";
+#else
+        "spinorc";
+#endif
+    if (fs::exists(here)) return fs::absolute(here).string();
+  }
   return "spinorc";  // hope for the best; shells out via PATH lookup
 }
 
@@ -224,6 +232,7 @@ std::string asPhononOrSpinorText(const fs::path& path, InputLang lang) {
 int cmdTargets(const Flags&) {
   // Defer to `spinorc registry list`.
   auto sc = findSpinorc();
+
   auto r = runProc({sc, "registry", "list"});
   std::cout << r.out;
   return r.rc;
@@ -300,7 +309,11 @@ int cmdCompile(const Flags& f) {
     else writeFile(outPath, body);
   } else if (f.emit == EmitFormat::Spinor) {
     // Run `spinorc compile -t <chip> <lowered>` to get spinor text.
-    auto r = runProc({sc, "compile", "-t", *f.target, "-O", std::to_string(f.optimization_level), lowered});
+    std::vector<std::string> command{sc,"compile","-t",*f.target,"-O",std::to_string(f.optimization_level)};
+    if(f.numerical_report)command.insert(command.end(),{"--numerical-report",*f.numerical_report});
+    if(f.logical_ir_output)command.insert(command.end(),{"--logical-ir-output",*f.logical_ir_output});
+    command.push_back(lowered);
+    auto r = runProc(command);
     if (r.rc != 0) { std::cerr << r.out; return r.rc; }
     if (outPath.empty()) std::cout << r.out;
     else writeFile(outPath, r.out);
@@ -309,9 +322,20 @@ int cmdCompile(const Flags& f) {
     std::string fmt = toString(f.emit);
     std::vector<std::string> argv =
         {sc, "emit", "-t", *f.target, "-f", fmt, "-O", std::to_string(f.optimization_level)};
+    std::string emittedInput=lowered;
+    if(f.numerical_report||f.logical_ir_output){
+      std::vector<std::string> command{sc,"compile","-t",*f.target,"-O",std::to_string(f.optimization_level)};
+      if(f.numerical_report)command.insert(command.end(),{"--numerical-report",*f.numerical_report});
+      if(f.logical_ir_output)command.insert(command.end(),{"--logical-ir-output",*f.logical_ir_output});
+      command.push_back(lowered);auto compiled=runProc(command);
+      if(compiled.rc!=0){std::cerr<<compiled.out;return compiled.rc;}
+      emittedInput=(fs::temp_directory_path()/("qstack-native-"+std::to_string(_qs_pid())+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".spinor")).string();
+      writeFile(emittedInput,compiled.out);argv.emplace_back("--compiled");
+    }
     if (f.verbatim) argv.emplace_back("--verbatim");
-    argv.emplace_back(lowered);
+    argv.emplace_back(emittedInput);
     auto r = runProc(argv);
+    if(emittedInput!=lowered){std::error_code ignored;fs::remove(emittedInput,ignored);}
     if (r.rc != 0) { std::cerr << r.out; return r.rc; }
     if (outPath.empty()) std::cout << r.out;
     else writeFile(outPath, r.out);

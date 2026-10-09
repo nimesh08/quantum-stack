@@ -4,6 +4,8 @@
 
 #include "spinor/sim/Simulator.h"
 #include "spinor/dialect/Resonators.h"
+#include "spinor/dialect/Classical.h"
+#include <unordered_set>
 
 #include "../../passes/lib/GateMatrices.h"
 
@@ -140,7 +142,7 @@ bool measure(StateVector& sv, int q, std::mt19937_64& rng) {
 }
 }
 StateVector simulate(const Module& m) {
-  if(hasControlFlow(m))throw std::runtime_error("dynamic circuits require shot simulation");
+  if(hasControlFlow(m)||hasClassicalOperations(m))throw std::runtime_error("dynamic circuits require shot simulation");
   auto circuit=flatten(m);
   validateResonatorCircuit(circuit);
   auto sv=initial(circuit.numQubits);
@@ -170,19 +172,44 @@ std::map<std::string,std::size_t> sample(const Module& m,std::size_t shots,std::
   std::map<std::string,std::size_t> counts;
   for(std::size_t shot=0;shot<shots;++shot){
     auto sv=zero;std::string bits(circuit.numClbits,'0');
+    std::unordered_map<std::string,const ClassicalValue*> definitions;
+    std::unordered_set<std::string> defined;
+    for(const auto& value:circuit.classicalValues){definitions[value.id]=&value;if(value.initialized)defined.insert(value.id);}
+    auto read=[&](const std::string& id){
+      if(!defined.count(id))throw std::runtime_error("classical value is unavailable on this execution path: "+id);
+      std::uint64_t value=0;const auto& storage=definitions.at(id)->storage;
+      for(std::size_t bit=0;bit<storage.size();++bit)if(bits.at(circuit.numClbits-1-storage[bit])=='1')value|=std::uint64_t(1)<<bit;
+      return value;
+    };
+    auto write=[&](const std::string& id,std::uint64_t value){
+      const auto& storage=definitions.at(id)->storage;
+      for(std::size_t bit=0;bit<storage.size();++bit)bits.at(circuit.numClbits-1-storage[bit])=(value&(std::uint64_t(1)<<bit))?'1':'0';
+      defined.insert(id);
+    };
+    for(const auto& value:circuit.classicalValues)if(value.initialized)write(value.id,parseExactInteger<std::uint64_t>(value.initialValue));
     struct Branch{bool parent,condition;};std::vector<Branch> branches;bool active=true;
     for(const auto& op:circuit.instructions){
       if(op.kind==OpKind::If){
-        bool condition=(bits.at(circuit.numClbits-1-static_cast<std::size_t>(parameter(op,"condition_clbit")))-'0')==parameter(op,"condition_value");
+        const auto captured=stringAttribute(op,"condition");
+        bool condition=active&&((captured.empty()?(bits.at(circuit.numClbits-1-static_cast<std::size_t>(parameter(op,"condition_clbit")))-'0'):read(captured))==parameter(op,"condition_value"));
         branches.push_back({active,condition});active=active&&condition;continue;
       }
       if(op.kind==OpKind::Else){if(branches.empty())throw std::runtime_error("unmatched else");active=branches.back().parent&&!branches.back().condition;continue;}
       if(op.kind==OpKind::EndIf){if(branches.empty())throw std::runtime_error("unmatched endif");active=branches.back().parent;branches.pop_back();continue;}
       if(!active)continue;
+      if(isClassical(op.kind)){
+        const auto result=stringAttribute(op,"result");const auto inputs=classicalInputs(op);const auto width=definitions.at(result)->width;
+        std::uint64_t value;
+        if(op.kind==OpKind::CConst)value=parseExactInteger<std::uint64_t>(stringAttribute(op,"value"));
+        else if(op.kind==OpKind::CSelect)value=read(inputs.at(read(inputs.at(0))?1:2));
+        else{std::vector<std::uint64_t> arguments;for(const auto& input:inputs)arguments.push_back(read(input));value=evaluateClassical(op.kind,arguments,width);}
+        write(result,value);continue;
+      }
       if(op.kind==OpKind::GlobalPhase){for(auto& a:sv.amps)a*=std::polar(1.0,parameter(op));continue;}
       if(op.kind==OpKind::Barrier)continue;
       if(op.kind==OpKind::Measure){
         bits.at(circuit.numClbits-1-static_cast<std::size_t>(op.clbit))=measure(sv,op.qubits[0],rng)?'1':'0';
+        const auto result=stringAttribute(op,"result");if(!result.empty())defined.insert(result);
       }else if(op.kind==OpKind::Reset){
         if(measure(sv,op.qubits[0],rng))apply1q(sv,op.qubits[0],X());
       }else gate(sv,op);

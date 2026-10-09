@@ -7,7 +7,8 @@ import re
 
 from qstack.models import QStackError
 from .base import optional
-from .native import cirq_circuit, instructions, qiskit_circuit, serialize_native
+from . import submission_objects
+from .native import instructions, serialize_native
 
 
 def validate_qir(artifact):
@@ -58,14 +59,13 @@ submission, transpilation and hardware connection are deliberately absent.
     if route == "local":
         summary["serializer"] = "owned-physical-ir"
     elif route == "ibm":
-        circuit = qiskit_circuit(artifact)
+        circuit = submission_objects.ibm_circuit(artifact)
         stream = io.BytesIO()
         optional("qiskit.qpy", "ibm").dump(circuit, stream)
         summary.update(serializer="qiskit-native-qpy", serialized_bytes=len(stream.getvalue()))
     elif route == "google":
-        circuit = cirq_circuit(artifact, config)
-        serializer = optional("cirq_google.serialization.circuit_serializer", "google").CircuitSerializer()
-        proto = serializer.serialize(circuit)
+        circuit = submission_objects.google_circuit(artifact, config)
+        proto = submission_objects.google_protobuf(circuit)
         summary.update(serializer="cirq-engine-protobuf", serialized_bytes=len(proto.SerializeToString()),
                        parameter_precision="float32")
     elif route in {"ionq", "iqm", "anyon"} or (route == "azure" and fmt in {"ionq-native-json", "ionq-json"}):
@@ -78,17 +78,12 @@ submission, transpilation and hardware connection are deliberately absent.
         except ValueError:
             raise QStackError("Native payload differs from serialization of the physical IR", "ARTIFACT_INVALID") from None
         if native_route == "iqm":
-            operation = optional("iqm.pulse.builder", "iqm")
-            circuit = optional("iqm.pulse.circuit_operations", "iqm").Circuit(name=actual.get("name", "qstack"),
-                instructions=tuple(operation.CircuitOperation(name=i["name"], locus=tuple(i["locus"]), args=i.get("args", {}))
-                                   for i in actual["instructions"]))
-            circuit.validate(operation.build_quantum_ops({}))
+            circuit = submission_objects.iqm_circuit(artifact)
+            circuit.validate(optional("iqm.pulse.builder", "iqm").build_quantum_ops({}))
         summary["serializer"] = native_route + "-native-json"
     elif route == "aqt":
-        from .aqt import aqt_operations
-        operations = aqt_operations(artifact.physical_ir)
-        if config.get("shots", 1) > 2000:
-            raise QStackError("AQT supports at most 2000 shots per circuit", "INVALID_OPTIONS")
+        body = submission_objects.aqt_body(artifact, shots=config.get("shots", 1))
+        operations = body["payload"]["circuits"][0]["quantum_circuit"]
         summary.update(serializer="arnica-native", operation_count=len(operations))
     elif route == "qibolab":
         # Reject extensions before importing or calling a factory: arbitrary
@@ -119,7 +114,7 @@ submission, transpilation and hardware connection are deliberately absent.
         text = artifact.program_text()
         if fmt not in {"qasm3", "openqasm3", "braket-openqasm3"} or not text.lstrip().startswith("OPENQASM 3") or "#pragma braket verbatim" not in text:
             raise QStackError("Braket requires owned native OpenQASM3 with a verbatim box", "UNSUPPORTED_FORMAT")
-        encoded = optional("braket.ir.openqasm", "aws").Program(source=text).json()
+        encoded = submission_objects.aws_program(artifact).json()
         summary.update(serializer="braket-openqasm-program", serialized_bytes=len(encoded.encode()))
     elif route == "rigetti" and fmt in {"quil", "native-quil"}:
         list(instructions(artifact.physical_ir))
@@ -132,12 +127,7 @@ submission, transpilation and hardware connection are deliberately absent.
         text = artifact.program_text()
         if not text.lstrip().startswith("OPENQASM " + ("2" if "2" in fmt else "3")):
             raise QStackError("OQC QASM payload has the wrong language version", "ARTIFACT_INVALID")
-        compiler = optional("compiler_config.config", "oqc")
-        optimizations = compiler.Tket()
-        optimizations.disable()
-        config_value = compiler.CompilerConfig(repeats=config.get("shots", 1), optimizations=optimizations,
-            results_format=compiler.QuantumResultsFormat().binary_count())
-        task = optional("qcaas_client.client", "oqc").QPUTask(program=text, qpu_id=artifact.target, config=config_value)
+        task = submission_objects.oqc_task(artifact, shots=config.get("shots", 1))
         task.to_json()
         summary.update(serializer="oqc-task-schema", server_language_validation=False)
     else:

@@ -11,6 +11,8 @@ namespace phonon::lower {
 
 std::string emitSpinorSource(const spinor::dialect::Module& m) {
   namespace sd = spinor::dialect;
+  if(!m.classicalValues.empty()||!m.classicalOutputs.empty()||!m.classicalStorage.empty()||!m.reservedPool.empty())
+    return sd::print(m);
   using K = sd::OpKind;
   std::map<sd::ValueId, std::size_t> slots;
   std::size_t qubits = 0, bits = m.numClbits, allocatedBits = 0, measurements = 0;

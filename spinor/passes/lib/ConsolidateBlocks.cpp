@@ -30,7 +30,7 @@ std::vector<ConsolidatedBlock> ConsolidateBlocks::run(
     for(auto id=block.ops.front().v;id<=block.ops.back().v;++id){
       if(members.contains(id)||indices[id]>=circuit.instructions.size())continue;
       const auto& op=circuit.instructions[indices[id]];
-      if(dialect::isControl(op.kind))throw std::invalid_argument("control flow inside a two-qubit block");
+      if(dialect::isControl(op.kind)||dialect::isClassical(op.kind))throw std::invalid_argument("classical/control fence inside a two-qubit block");
       for(int q:op.qubits)if(q==block.qa||q==block.qb)
         throw std::invalid_argument("two-qubit block crosses a dependent operation");
     }

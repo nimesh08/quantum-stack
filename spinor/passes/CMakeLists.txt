@@ -1,15 +1,18 @@
 # spinor/passes/CMakeLists.txt
 
 add_library(spinor_passes STATIC
+  lib/ClassicalStorageReuse.cpp
   lib/CouplingGraph.cpp
   lib/Placement.cpp
   lib/Routing.cpp
   lib/ResonatorRouting.cpp
   lib/AvailableRouting.cpp
+  lib/HeterogeneousRouting.cpp
   lib/Decomposition.cpp
   lib/Cleanup.cpp
   lib/OptimizationLevel.cpp
   lib/PassManager.cpp
+  lib/CompilationReport.cpp
   lib/SynthesisTraits.cpp
   lib/Collect2qBlocks.cpp
   lib/ConsolidateBlocks.cpp

@@ -1,0 +1,16 @@
+target generic
+qubit q[3]
+bit c[3]
+h q[0]
+cx q[0], q[1]
+c[2] = measure q[1]
+if (c[2] == 1) {
+  cx q[0], q[2]
+  reset q[1]
+  c[2] = measure q[2]
+} else {
+  cx q[1], q[2]
+  ry(0.43) q[0]
+}
+cx q[0], q[2]
+c[0] = measure q[0]

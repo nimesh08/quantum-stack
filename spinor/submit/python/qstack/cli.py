@@ -65,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
     config = commands.add_parser("config", parents=[shared]).add_subparsers(dest="action", required=True)
     sub = config.add_parser("show", parents=[shared])
     sub.add_argument("--resolved", action="store_true")
+    sub = commands.add_parser("verify", parents=[shared], help="Offline independent operator/instrument verification")
+    sub.add_argument("input", help="Compiled artifact directory")
     for name in ("compile", "estimate", "run", "submit"):
         sub = commands.add_parser(name, parents=[shared])
         sub.add_argument("input", nargs="?")
@@ -164,6 +166,10 @@ def execute(args: dict, resolved: ResolvedConfig):
     from .service import compile_file, submit_artifact
     config = resolved.values
     command = args["command"]
+    if command == "verify":
+        from .verification import verify_artifact
+        return verify_artifact(load_artifact(args["input"]), max_qubits=config.get("verify_max_qubits", 4),
+                               max_paths=config.get("verify_max_paths", 256))
     if command == "version":
         return {"version": __version__, "component": "qstack / spinor_submit"}
     if command == "providers":
@@ -266,6 +272,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.get("command") != "config":
                 result = redact_data(result, resolved.values)
             print(resolved.redact_text(json.dumps(result, indent=None if args.get("json") else 2, allow_nan=False)))
+        if args.get("command") == "verify":
+            return {"passed": 0, "failed": 1, "not_checked": 3}[result["status"]]
+        if isinstance(result, dict) and result.get("metadata", {}).get("application_status") == "loop_exhausted":
+            return 4
+        if isinstance(result, dict) and result.get("metadata", {}).get("application_status") == "not_checked":
+            return 5
         return 0
     except QStackError as exc:
         error = {"error": exc.code, "message": resolved.redact_text(str(exc))}

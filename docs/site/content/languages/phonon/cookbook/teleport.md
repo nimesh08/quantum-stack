@@ -64,8 +64,9 @@ kernel teleport_demo() -> int {
 ## Side effects on cost
 
 3 qubits, ~6 single-qubit gates, 2 CX, 2 measurements, 2 conditional X/Z.
-On `quantinuum_helios` (full feedforward): runs cleanly. On `ionq_forte`
-(no feedforward): post-selection, effective shots ~25%.
+The concrete target must support the required measurements and branches.
+Targets without those capabilities reject the program; shots are not discarded
+to imitate teleportation.
 
 ## Where to look
 

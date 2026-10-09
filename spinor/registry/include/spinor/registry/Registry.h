@@ -34,6 +34,17 @@ struct CapabilityFlags {
   bool reset = true;
 };
 
+// Count-bounded deterministic search. Zero limits select the per-level default;
+// maxSwaps is optional because it is a user constraint, not a timing heuristic.
+struct PlacementOptions {
+  std::string strategy = "auto";
+  std::size_t seed = 42;
+  std::size_t maxStates = 0;
+  std::size_t beamWidth = 0;
+  std::size_t maxLayouts = 0;
+  std::optional<std::size_t> maxSwaps;
+};
+
 struct ChipInfo {
   std::string id;
   std::string provider;
@@ -59,12 +70,18 @@ struct ChipInfo {
   std::optional<std::vector<int>> availableQubits;
   std::vector<int> unavailableQubits;
   std::map<std::string, std::vector<int>> singleQubitGateLoci;
+  std::map<std::string, std::vector<std::pair<int,int>>> twoQubitGateLoci;
+  PlacementOptions placement;
+  // Internal recursion guard; never loaded from a target snapshot.
+  bool placementPreparedUniform = false;
 
   // Either an all-to-all chip OR an explicit edge list.
   bool allToAll = false;
   std::vector<std::pair<int, int>> coupling;
 
   CapabilityFlags supports;
+  std::map<std::string,std::string> classicalFeatures;
+  std::vector<unsigned> classicalIntegerWidths;
   DecomposeRecipe decompose;
 
   double pricePerShotUsd = 0.0;

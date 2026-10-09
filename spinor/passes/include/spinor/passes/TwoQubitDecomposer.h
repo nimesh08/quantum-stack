@@ -15,6 +15,11 @@ struct KakResult {
   // Native operations on local wires 0 and 1. The complete matrix is
   // exp(i * globalPhase) times their time-ordered product.
   std::vector<dialect::WireOp> operations;
+  // Construction metadata describes synthesis trials, not accepted optimizer
+  // rewrites. Callers must keep it outside residual totals.
+  std::string construction = "generic";
+  bool analyticalAttempted = false;
+  std::string analyticalRejection;
 };
 
 class TwoQubitDecomposer {

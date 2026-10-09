@@ -22,6 +22,7 @@ std::string_view typeName(Type t) {
     case TypeKind::Int:   return "!phonon.int";
     case TypeKind::Angle: return "!phonon.angle";
     case TypeKind::Func:  return "!phonon.func";
+    case TypeKind::UInt:  return "!phonon.uint";
   }
   return "<invalid>";
 }
@@ -84,6 +85,14 @@ constexpr OpSig kSigs[] = {
     {OpKind::Call,       "phonon.call",        false, true,  0},
     {OpKind::Return,     "phonon.return",      false, true,  0},
     {OpKind::Assign,     "phonon.assign",      false, true,  0},
+    {OpKind::ConstUInt,  "phonon.const_uint",  false, true,  0},
+    {OpKind::Copy,       "phonon.copy",        false, true,  0},
+    {OpKind::Select,     "phonon.select",      false, true,  0},
+    {OpKind::Output,     "phonon.output",      false, true,  0},
+    {OpKind::LoopBody,   "phonon.loop_body",   false, true,  0},
+    {OpKind::EndLoopBody,"phonon.end_loop_body",false,true, 0},
+    {OpKind::Break,      "phonon.break",       false, true,  0},
+    {OpKind::Continue,   "phonon.continue",    false, true,  0},
 };
 
 const OpSig& sig(OpKind k) {
@@ -210,6 +219,9 @@ std::string Module::nameOf(ValueId v) const {
   return "%v" + std::to_string(v.v);
 }
 void Module::setName(ValueId v, std::string n) {
+  if(n=="v"+std::to_string(v.v)){values_.at(v.v).name.clear();return;}
+  if(n.size()>1&&n.front()=='v'&&n.find_first_not_of("0123456789",1)==std::string::npos)n="named_"+n;
+  for(std::size_t index=0;index<values_.size();++index)if(index!=v.v&&!n.empty()&&values_[index].name==n){n+="_"+std::to_string(v.v);index=static_cast<std::size_t>(-1);}
   values_.at(v.v).name = std::move(n);
 }
 

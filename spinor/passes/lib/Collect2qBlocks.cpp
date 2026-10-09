@@ -7,6 +7,7 @@
 // either qubit.
 
 #include "spinor/passes/Collect2qBlocks.h"
+#include "spinor/dialect/Circuit.h"
 
 #include <map>
 
@@ -44,7 +45,7 @@ VirtIndex buildVirtIndex(const Module& m) {
 
 bool isFence(OpKind k) {
   return k == OpKind::Measure || k == OpKind::Reset ||
-         k == OpKind::Barrier;
+         k == OpKind::Barrier || isClassical(k) || isControl(k) || k==OpKind::Move;
 }
 
 }  // namespace
@@ -77,7 +78,7 @@ std::vector<TwoQBlock> Collect2qBlocks::run(const Module& m) const {
 
     int nq = qubitArity(op.kind);
     if (isFence(op.kind)) {
-      if(op.kind==OpKind::Barrier&&op.operands.empty()){
+      if(op.operands.empty()||isClassical(op.kind)||isControl(op.kind)){
         for(auto& [qubit,index]:openIdx)index=-1;
         continue;
       }

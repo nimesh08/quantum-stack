@@ -12,6 +12,7 @@ import yaml
 
 from .config import state_path
 from .models import QStackError
+from .target_models import normalize_target_model, target_fingerprints, TARGET_SNAPSHOT_VERSION
 
 
 def canonical_json(value: Any) -> bytes:
@@ -57,7 +58,7 @@ def snapshot_path(route: str, device: str) -> Path:
 def cache_targets(route: str, records: list[dict]) -> list[dict]:
     saved = []
     for item in records:
-        item = dict(item)
+        item = normalize_target_model(item)
         calibration = dict(item.get("calibration", {}))
         for key in ("one_qubit_errors", "readout_errors", "two_qubit_errors", "instruction_durations"):
             if key in item:
@@ -67,12 +68,13 @@ def cache_targets(route: str, records: list[dict]) -> list[dict]:
         device = item.get("device") or item.get("id") or item.get("name")
         if not device:
             raise QStackError(f"{route} discovery omitted a device identifier", "PROVIDER_CONTRACT_ERROR")
-        item.update(device=str(device), route=route, schema_version=1,
+        item.update(device=str(device), route=route, schema_version=TARGET_SNAPSHOT_VERSION,
                     retrieved_at=datetime.now(timezone.utc).isoformat())
         item.setdefault("capability_verified", False)
         item.setdefault("readiness", "discovered" if item["capability_verified"] else "needs_refresh")
         if route not in {"aws", "azure"}:
             item.setdefault("vendor", route)
+        item.update(target_fingerprints(item))
         item["snapshot_hash"] = digest({k: v for k, v in item.items() if k not in {"retrieved_at", "snapshot_hash"}})
         path = snapshot_path(route, str(device))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +124,8 @@ def target_edges(record: dict, config: dict | None = None) -> tuple[bool, list[l
 
 
 def validate_physical(ir: dict, target: dict, config: dict | None = None) -> None:
+    from .classical import CLASSICAL_OPS, validate_classical, feature_support
+    validate_classical(ir)
     nq, nc = ir.get("num_qubits"), ir.get("num_clbits")
     if type(nq) is not int or type(nc) is not int or nq < 0 or nc < 0:
         raise QStackError("Invalid physical IR register sizes", "ARTIFACT_INVALID")
@@ -151,13 +155,15 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
             raise QStackError("Program uses an unavailable physical qubit", "TARGET_INCOMPATIBLE")
         if "available_qubits" in target and any(q not in target["available_qubits"] for q in qs):
             raise QStackError("Program uses a physical qubit absent from the available component list", "TARGET_INCOMPATIBLE")
+        if op in CLASSICAL_OPS:
+            continue  # Typed SSA validation above owns classical operands.
         if op in {"if", "else", "endif"}:
             if qs or inst.get("params", []) or (op != "if" and cs):
                 raise QStackError("Invalid operands on a control-flow marker", "ARTIFACT_INVALID")
-            if target.get("supports", {}).get("feedforward", "none") in {False, "none", None}:
-                raise QStackError("Target does not support classical feedforward", "TARGET_INCOMPATIBLE")
+            if feature_support(target, "branching.bit") != "supported":
+                raise QStackError("Target does not explicitly support classical feedforward", "TARGET_INCOMPATIBLE")
             if op == "if":
-                if len(cs) != 1 or inst.get("condition_value") not in {0, 1}:
+                if ("condition" not in inst and len(cs) != 1) or inst.get("condition_value", 1) not in {0, 1}:
                     raise QStackError("Invalid classical condition", "ARTIFACT_INVALID")
                 branches.append(False)
             elif not branches or (op == "else" and branches[-1]):
@@ -183,12 +189,14 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
         if op not in {"measure", "reset", "barrier"} and basis and op not in basis:
             raise QStackError(f"Gate '{op}' is not native to the target", "TARGET_INCOMPATIBLE")
         if op == "measure":
+            if feature_support(target, "measure") != "supported":
+                raise QStackError("Target does not support measurement", "TARGET_INCOMPATIBLE")
             if len(qs) != 1 or len(cs) != 1:
                 raise QStackError("Measurement requires one qubit and one destination bit", "ARTIFACT_INVALID")
             measured.update(qs)
         elif op != "barrier" and any(q in measured for q in qs) and not target.get("supports", {}).get("mid_circuit_measure", False):
             raise QStackError("Target does not support operations after measurement", "TARGET_INCOMPATIBLE")
-        if op == "reset" and not target.get("supports", {}).get("reset", False):
+        if op == "reset" and feature_support(target, "reset") != "supported":
             raise QStackError("Target does not support reset", "TARGET_INCOMPATIBLE")
         asymmetric = op in {"cx", "ecr", "move"}
         if len(qs) == 2 and not all_to_all and tuple(qs) not in edges and ((directed and asymmetric) or tuple(reversed(qs)) not in edges):

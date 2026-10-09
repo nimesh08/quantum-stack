@@ -26,6 +26,10 @@ void printAttr(std::ostream& os, const Attribute& a) {
   os << a.name << " = ";
   if (std::holds_alternative<double>(a.value)) {
     os << formatDouble(std::get<double>(a.value));
+  } else if (const auto* value=std::get_if<std::int64_t>(&a.value)) {
+    os << "i64(\"" << *value << "\")";
+  } else if (const auto* value=std::get_if<std::uint64_t>(&a.value)) {
+    os << "u64(\"" << *value << "\")";
   } else {
     os << '"' << std::get<std::string>(a.value) << '"';
   }
@@ -64,6 +68,7 @@ void printOp(std::ostream& os, const Module& m, OpId id) {
     for (std::size_t i = 0; i < op.results.size(); ++i) {
       if (i) os << ", ";
       os << typeName(m.typeOf(op.results[i]));
+      if(m.typeOf(op.results[i]).kind==TypeKind::UInt)os<<'<'<<m.typeOf(op.results[i]).width<<'>';
     }
   }
 }

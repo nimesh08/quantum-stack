@@ -83,6 +83,37 @@ def platform_snapshot(platform):
             "https://qibo.science/qibolab/stable/main-documentation/platform.html"]}
 
 
+def native_plan(artifact):
+    """Pure ordered input to the calibrated assembler, with physical identities.
+
+    This plan is inspectable offline. Its ideal gate semantics do not establish
+    the unitary or fidelity of any laboratory's pulse calibration.
+    """
+    ids = artifact.target_snapshot.get("qubit_ids")
+    if ids is None or len(ids) < artifact.physical_ir["num_qubits"]:
+        raise QStackError("Qibolab verification requires recorded qubit_ids; refresh and recompile", "MISSING_TARGET_SNAPSHOT")
+    plan, measured = [], False
+    arities = {"u1q": (1, 2), "rz": (1, 1), "cz": (2, 0), "cx": (2, 0),
+               "iswap": (2, 0), "measure": (1, 0), "gphase": (0, 1)}
+    for position, item in enumerate(instructions(artifact.physical_ir)):
+        op, qs, params = item["op"], item.get("qubits", []), item.get("params", [])
+        if op != "barrier" and (op not in arities or (len(qs), len(params)) != arities[op]):
+            raise QStackError(f"Built-in Qibolab assembler cannot encode '{op}'", "UNSUPPORTED_GATE")
+        if any(type(q) is not int or not 0 <= q < len(ids) for q in qs):
+            raise QStackError("Qibolab instruction refers to an unknown physical qubit", "ARTIFACT_INVALID")
+        if measured and op not in {"measure", "barrier", "gphase"}:
+            raise QStackError("Built-in Qibolab pulse assembly supports terminal readout only", "UNSUPPORTED_CAPABILITY")
+        bit = None
+        if op == "measure":
+            bits = item.get("clbits", [])
+            if len(bits) != 1 or type(bits[0]) is not int or not 0 <= bits[0] < artifact.physical_ir["num_clbits"]:
+                raise QStackError("Qibolab readout requires one valid classical destination", "ARTIFACT_INVALID")
+            bit, measured = bits[0], True
+        plan.append({"position": position, "operation": op, "physical_ids": [ids[q] for q in qs],
+                     "parameters": list(params), "readout": bit})
+    return plan
+
+
 def build_native_sequences(platform, artifact):
     sdk = optional("qibolab", "qibolab")
     current = platform_snapshot(platform)
@@ -99,8 +130,13 @@ def build_native_sequences(platform, artifact):
     sequence, parallel, previous_layer = sdk.PulseSequence(), sdk.PulseSequence(), None
     acquisitions = []
     measured = False
-    for position, inst in enumerate(instructions(artifact.physical_ir)):
-        op, qs, params = inst["op"], inst.get("qubits", []), inst.get("params", [])
+    # Supply the same concrete IDs to older artifacts that predate snapshots.
+    from dataclasses import replace
+    planned_artifact = replace(artifact, target_snapshot={**snapshot, "qubit_ids": ids})
+    for inst in native_plan(planned_artifact):
+        position, op, params = inst["position"], inst["operation"], inst["parameters"]
+        native_ids = inst["physical_ids"]
+        qs = [ids.index(identifier) for identifier in native_ids]
         if op == "gphase":
             continue  # scalar phase remains in the physical artifact
         if op == "barrier":
@@ -111,7 +147,6 @@ def build_native_sequences(platform, artifact):
             continue
         if measured and op != "measure":
             raise QStackError("Built-in Qibolab pulse assembly supports terminal readout only", "UNSUPPORTED_CAPABILITY")
-        native_ids = [ids[q] for q in qs]
         if op == "u1q":
             # R's documented input is [0,2*pi). Period reduction changes only
             # a scalar phase, which the physical artifact already preserves.
@@ -129,7 +164,7 @@ def build_native_sequences(platform, artifact):
             part = platform.natives.single_qubit[native_ids[0]].ensure("MZ").create_sequence()
             if len(part.acquisitions) != 1:
                 raise QStackError("Each calibrated MZ must expose one discriminated acquisition", "UNSUPPORTED_CAPABILITY")
-            acquisitions.append({"id": str(part.acquisitions[0][1].id), "qubit": qs[0], "clbit": inst["clbits"][0]})
+            acquisitions.append({"id": str(part.acquisitions[0][1].id), "qubit": qs[0], "clbit": inst["readout"]})
         else:
             raise QStackError(f"Built-in Qibolab assembler cannot encode '{op}'", "UNSUPPORTED_GATE")
         layer = layers.get(position, position)

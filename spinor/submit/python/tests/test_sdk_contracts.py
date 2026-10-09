@@ -159,6 +159,31 @@ def test_aws_real_openqasm_program_preserves_physical_verbatim_payload():
     inspect.signature(aws.AwsDevice.run).bind(None, program, shots=17, disable_qubit_rewiring=True)
 
 
+def test_aws_real_iqm_capability_model_keeps_controller_extensions_out_of_native_basis():
+    from qstack.providers.cloud import _aws_device_record
+    schema = sdk("aws", "braket.device_schema.iqm")
+    aws = sdk("aws", "braket.aws")
+    advertised = ["cz", "prx", "cc_prx", "measure_ff", "barrier"]
+    # A minimal valid real SDK model; the advertised operations match the
+    # current IQM Braket contract, including experimental feedback extensions.
+    properties = schema.IqmDeviceCapabilities(
+        service={"executionWindows": [], "shotsRange": [1, 20000]}, deviceParameters={},
+        action={"braket.ir.openqasm.program": {"actionType": "braket.ir.openqasm.program",
+            "version": ["1"], "supportedOperations": advertised, "supportedPragmas": ["verbatim"],
+            "supportPhysicalQubits": True, "disabledQubitRewiringSupported": True}},
+        paradigm={"qubitCount": 2, "nativeGateSet": advertised,
+            "connectivity": {"fullyConnected": False, "connectivityGraph": {"1": ["2"], "2": ["1"]}}})
+    record = _aws_device_record(NS(properties=properties, type=aws.AwsDeviceType.QPU,
+        provider_name="IQM", status="ONLINE", arn="arn:aws:braket:eu-north-1::device/qpu/iqm/model-contract"))
+    assert record["native_gates"] == ["cz", "u1q", "barrier"]
+    assert record["unsupported_native_operations"] == ["cc_prx", "measure_ff"]
+    assert record["advertised_native_operations"] == advertised
+    assert record["raw"] == json.loads(properties.json())
+    assert record["available_qubits"] == [1, 2] and record["qubits"] == 3
+    assert record["capability_verified"] is True and record["execution_kind"] == "hardware"
+    assert record["supports"] == {"reset": False, "mid_circuit_measure": False, "feedforward": False}
+
+
 @pytest.mark.parametrize("provider", ["ionq", "quantinuum"])
 def test_azure_real_target_encodes_payload_and_explicit_shots(provider, monkeypatch):
     target_sdk = sdk("azure", "qdk.azure.target")

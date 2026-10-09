@@ -1,39 +1,19 @@
-# Compile-time bounds for `for` and `while`
+# Compile-time and device loop bounds
 
-Phonon loops must terminate at compile time. The unroll happens
-before the optimizer runs.
+`for` bounds and static `while` conditions are compile-time values. Signed
+integer calculations preserve exact 64-bit values and diagnose overflow.
+Register sizes, qubit indices and gate angles remain compile-time expressions.
 
-## Why
+Measurement-dependent iteration requires the explicit syntax
+`while (predicate) max_iterations N { ... }`, where `N` is a positive
+compile-time integer. The compiler emits a finite sequence of guarded device
+operations, with a final exhaustion predicate. It never samples a condition on
+the host to decide what program to compile.
 
-The Phonon-to-Spinor lowering produces a flat gate list. There's no
-runtime "loop" instruction in Spinor. So every iteration count must
-be known at compile time.
+`QSTACK_EXPANDED_OPERATION_BUDGET` limits emitted expansion (default 100000).
+Changing this safety limit does not change a loop's semantic iteration bound.
+An oversized expansion fails compilation.
 
-For `for i in lo..hi { ... }`, the bounds are integer literals — easy
-to unroll.
-
-For `while (cond) { ... }`, the compiler has to prove termination by
-analysing the condition + the loop body. Conditions involving only
-`int` literals + loop indices can always be analysed; conditions that
-depend on a runtime `measure` are rejected.
-
-## Diagnostic
-
-```
-error: while loop bounds cannot be proven; condition reads
-       runtime measurement m_anc[0]
-help: use a `for` loop with a constant bound, or read the
-       measurement once into an `int` if the bound is small
-```
-
-## Fix
-
-Rewrite as `for`:
-
-```phonon
-for i in 0..3 { h q[0] }     ; unrolls to 3 hadamards
-```
-
-## See also
-
-[`for`](../reference/for.md), [`while`](../reference/while.md)
+All shots remain in results. Exhaustion is an application failure status, not a
+reason to discard or replace shots. See [while](../reference/while.md) and the
+[finite controller language](../../../../../language/controller.md).

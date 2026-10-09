@@ -30,6 +30,13 @@ struct WireOp {
 inline bool isControl(OpKind kind) {
   return kind==OpKind::If||kind==OpKind::Else||kind==OpKind::EndIf;
 }
+inline bool isClassical(OpKind kind) {
+  return kind >= OpKind::CConst && kind <= OpKind::CSelect;
+}
+inline bool hasClassicalOperations(const Module& m) {
+  for (const auto& op:m.ops()) if (isClassical(op.kind)) return true;
+  return false;
+}
 inline bool hasControlFlow(const Module& m) {
   for(const auto& op:m.ops())if(isControl(op.kind))return true;
   return false;
@@ -55,6 +62,12 @@ struct WireCircuit {
   std::vector<int> finalLayout;
   std::vector<int> initialLayout;
   std::vector<int> resonatorQubits;
+  std::vector<int> quantumInputs;
+  std::vector<int> reservedPool;
+  std::vector<ClassicalStorage> classicalStorage;
+  std::vector<ClassicalValue> classicalValues;
+  std::vector<ClassicalOutput> classicalOutputs;
+  std::vector<int> exportedClbits;
 };
 
 inline double parameter(const WireOp& op, const std::string& key = "angle") {
@@ -68,6 +81,11 @@ inline WireCircuit flatten(const Module& m) {
   c.finalLayout = m.finalLayout;
   c.initialLayout = m.initialLayout;
   c.resonatorQubits = m.resonatorQubits;
+  c.quantumInputs=m.quantumInputs;c.reservedPool=m.reservedPool;
+  c.classicalStorage=m.classicalStorage;
+  c.classicalValues=m.classicalValues;
+  c.classicalOutputs=m.classicalOutputs;
+  c.exportedClbits=m.exportedClbits;
   std::vector<int> wire(m.numValues(), -1);
   std::size_t declaredBits = 0, ordinal = 0;
   for (const auto& op : m.ops()) {
@@ -109,6 +127,11 @@ inline Module rebuild(const WireCircuit& c) {
   m.finalLayout = c.finalLayout;
   m.initialLayout = c.initialLayout;
   m.resonatorQubits = c.resonatorQubits;
+  m.quantumInputs=c.quantumInputs;m.reservedPool=c.reservedPool;
+  m.classicalStorage=c.classicalStorage;
+  m.classicalValues=c.classicalValues;
+  m.classicalOutputs=c.classicalOutputs;
+  m.exportedClbits=c.exportedClbits;
   Builder b(m);
   std::vector<ValueId> live;
   for (std::size_t i = 0; i < c.numQubits; ++i) {

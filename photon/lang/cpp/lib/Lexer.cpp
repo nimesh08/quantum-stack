@@ -45,6 +45,13 @@ const std::unordered_map<std::string, Tok>& keywords() {
       {"def",       Tok::Def},
       {"return",    Tok::Return},
       {"for",       Tok::For},
+      {"while",     Tok::While},
+      {"max_iterations", Tok::MaxIterations},
+      {"output",    Tok::Output},
+      {"bounded",   Tok::Bounded},
+      {"break",     Tok::Break},
+      {"continue",  Tok::Continue},
+      {"discard",   Tok::Discard},
       {"if",        Tok::If},
       {"else",      Tok::Else},
       {"in",        Tok::In},
@@ -52,6 +59,10 @@ const std::unordered_map<std::string, Tok>& keywords() {
       {"angle",     Tok::Angle},
       {"bit",       Tok::Bit},
       {"Bit",       Tok::Bit},
+      {"bool",      Tok::Bit},
+      {"UInt",      Tok::UInt},
+      {"true",      Tok::True},
+      {"false",     Tok::False},
       {"QReg",      Tok::QReg},
       {"pi",        Tok::Pi},
   };
@@ -188,20 +199,26 @@ std::vector<Token> Lexer::tokenize() {
         break;
       case '*': emit(Tok::Star, "*"); break;
       case '/': emit(Tok::Slash, "/"); break;
+      case '&': emit(Tok::Amp, "&"); break;
+      case '|': emit(Tok::Pipe, "|"); break;
+      case '^': emit(Tok::Caret, "^"); break;
+      case '~': emit(Tok::Tilde, "~"); break;
       case '=':
         if (match('=')) emit(Tok::EqEq, "==");
         else emit(Tok::Equals, "=");
         break;
       case '!':
         if (match('=')) emit(Tok::NotEq, "!=");
-        else emit(Tok::Ident, "!");  // unused but harmless.
+        else emit(Tok::Bang, "!");
         break;
       case '<':
         if (match('=')) emit(Tok::Le, "<=");
+        else if (match('<')) emit(Tok::ShiftLeft, "<<");
         else emit(Tok::Lt, "<");
         break;
       case '>':
         if (match('=')) emit(Tok::Ge, ">=");
+        else if (match('>')) emit(Tok::ShiftRight, ">>");
         else emit(Tok::Gt, ">");
         break;
       default:

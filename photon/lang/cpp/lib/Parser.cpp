@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -64,6 +65,14 @@ struct ParserImpl {
     if (accept(Tok::Int))   return intType();
     if (accept(Tok::Angle)) return angleType();
     if (accept(Tok::Bit))   return bitType();
+    if (accept(Tok::UInt)) {
+      if (!expect(Tok::Lt, "'<'")) return std::nullopt;
+      if (cur().kind != Tok::Integer) { err("UInt width must be an integer in [1,64]"); return std::nullopt; }
+      auto width = std::stoull(consume().text);
+      if (width < 1 || width > 64) { err("UInt width must be in [1,64]"); return std::nullopt; }
+      if (!expect(Tok::Gt, "'>'")) return std::nullopt;
+      return uintType(static_cast<std::uint32_t>(width));
+    }
     if (cur().kind == Tok::QReg) {
       consume();
       // Optional `(N)` for parameter declarations like `QReg q(2)`,
@@ -93,10 +102,33 @@ struct ParserImpl {
   }
 
   // ---- expressions (Pratt-ish: cmp < add < mul < unary < primary) ----
-  ExprPtr parseExpr()    { return parseCmp(); }
+  ExprPtr parseExpr() { return parseCmp(); }
+
+  ExprPtr parseBitOr() {
+    auto lhs = parseBitXor();
+    while (accept(Tok::Pipe)) lhs = mkBinOp("|", lhs, parseBitXor(), lhs->loc);
+    return lhs;
+  }
+  ExprPtr parseBitXor() {
+    auto lhs = parseBitAnd();
+    while (accept(Tok::Caret)) lhs = mkBinOp("^", lhs, parseBitAnd(), lhs->loc);
+    return lhs;
+  }
+  ExprPtr parseBitAnd() {
+    auto lhs = parseShift();
+    while (accept(Tok::Amp)) lhs = mkBinOp("&", lhs, parseShift(), lhs->loc);
+    return lhs;
+  }
+  ExprPtr parseShift() {
+    auto lhs = parseAdd();
+    while (cur().kind == Tok::ShiftLeft || cur().kind == Tok::ShiftRight) {
+      auto op = consume(); lhs = mkBinOp(op.text, lhs, parseAdd(), lhs->loc);
+    }
+    return lhs;
+  }
 
   ExprPtr parseCmp() {
-    auto lhs = parseAdd();
+    auto lhs = parseBitOr();
     while (true) {
       Tok k = cur().kind;
       ExprKind ek;
@@ -111,7 +143,7 @@ struct ParserImpl {
       }
       Location loc = locHere();
       consume();
-      auto rhs = parseAdd();
+      auto rhs = parseBitOr();
       auto e = std::make_shared<Expr>();
       e->kind = ek;
       e->children = {std::move(lhs), std::move(rhs)};
@@ -145,6 +177,16 @@ struct ParserImpl {
   }
 
   ExprPtr parseUnary() {
+    if (cur().kind == Tok::Tilde) {
+      Location loc = locHere(); consume();
+      auto e = std::make_shared<Expr>(); e->kind = ExprKind::UnaryBitNot;
+      e->children = {parseUnary()}; e->loc = loc; return e;
+    }
+    if (cur().kind == Tok::Bang) {
+      Location loc = locHere(); consume();
+      auto e = std::make_shared<Expr>(); e->kind = ExprKind::UnaryNot;
+      e->children = {parseUnary()}; e->loc = loc; return e;
+    }
     if (cur().kind == Tok::Minus) {
       Location loc = locHere();
       consume();
@@ -161,8 +203,20 @@ struct ParserImpl {
   ExprPtr parsePrimary() {
     Location loc = locHere();
     if (cur().kind == Tok::Integer) {
-      std::int64_t v = std::stoll(consume().text);
-      return mkInt(v, loc);
+      auto v = std::stoull(consume().text);
+      if (v <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        return mkInt(static_cast<std::int64_t>(v), loc);
+      auto e = std::make_shared<Expr>(); e->kind = ExprKind::UIntLit; e->uint_value = v; e->loc = loc; return e;
+    }
+    if (cur().kind == Tok::True || cur().kind == Tok::False) {
+      auto e = std::make_shared<Expr>(); e->kind = ExprKind::BoolLit;
+      e->int_value = consume().kind == Tok::True; e->loc = loc; return e;
+    }
+    if (cur().kind == Tok::UInt) {
+      auto type = parseType(); if (!type) return mkInt(0, loc);
+      auto e = std::make_shared<Expr>(); e->kind = ExprKind::CastUInt;
+      e->int_value = type->qreg_size; e->loc = loc;
+      expect(Tok::LParen, "'('"); e->children = {parseExpr()}; expect(Tok::RParen, "')'"); return e;
     }
     if (cur().kind == Tok::Real) {
       double v = std::stod(consume().text);
@@ -183,6 +237,11 @@ struct ParserImpl {
     }
     if (cur().kind == Tok::Ident) {
       std::string name = consume().text;
+      if (accept(Tok::LBracket)) {
+        auto e = std::make_shared<Expr>(); e->kind = ExprKind::Index;
+        e->text = name; e->loc = loc; e->children = {parseExpr()};
+        expect(Tok::RBracket, "']'"); return e;
+      }
       // Member expression: `q.method` or `q.method(args)`.
       if (cur().kind == Tok::Dot) {
         consume();
@@ -242,6 +301,30 @@ struct ParserImpl {
 
   StmtPtr parseStmt() {
     Location loc = locHere();
+    if(cur().kind==Tok::Break||cur().kind==Tok::Continue){
+      auto s=std::make_shared<Stmt>();s->kind=consume().kind==Tok::Break?StmtKind::BreakStmt:StmtKind::ContinueStmt;s->loc=loc;return s;
+    }
+    if(accept(Tok::Discard)){
+      auto s=std::make_shared<Stmt>();s->kind=StmtKind::DiscardStmt;s->loc=loc;
+      if(cur().kind!=Tok::Ident){err("discard requires a quantum register");return nullptr;}
+      s->receiver=consume().text;
+      if(accept(Tok::LBracket)){s->args={parseExpr()};expect(Tok::RBracket,"']'");}
+      return s;
+    }
+    if (accept(Tok::Output)) {
+      auto s = std::make_shared<Stmt>(); s->kind = StmtKind::OutputStmt; s->loc = loc;
+      if (cur().kind != Tok::Ident) { err("output requires a declared variable name"); return nullptr; }
+      s->name = consume().text; s->init = mkIdent(s->name, loc); return s;
+    }
+    const bool bounded=accept(Tok::Bounded);
+    if (bounded || accept(Tok::While)) {
+      if(bounded&&!expect(Tok::While,"'while'"))return nullptr;
+      auto s = std::make_shared<Stmt>(); s->kind = StmtKind::WhileLoop; s->loc = loc;
+      expect(Tok::LParen, "'('"); s->predicate = parseExpr(); expect(Tok::RParen, "')'");
+      if (!expect(Tok::MaxIterations, "'max_iterations'")) return nullptr;
+      if (cur().kind != Tok::Integer) { err("max_iterations requires a positive integer literal"); return nullptr; }
+      s->for_hi = parsePrimary(); s->body = parseBlock(); return s;
+    }
     if (cur().kind == Tok::Return) {
       consume();
       auto s = std::make_shared<Stmt>();
@@ -289,7 +372,7 @@ struct ParserImpl {
     // Type-led declaration: `int n = ...`, `angle theta = ...`,
     // `QReg q(N)`, `Bit c = ...`.
     if (cur().kind == Tok::Int || cur().kind == Tok::Angle ||
-        cur().kind == Tok::Bit || cur().kind == Tok::QReg) {
+        cur().kind == Tok::Bit || cur().kind == Tok::UInt || cur().kind == Tok::QReg) {
       auto t = parseType();
       if (!t) return nullptr;
       if (cur().kind != Tok::Ident) {
@@ -301,6 +384,12 @@ struct ParserImpl {
       s->loc = loc;
       s->decl_type = *t;
       s->name = consume().text;
+      if (s->decl_type.kind == TypeKind::Bit && accept(Tok::LBracket)) {
+        if (cur().kind != Tok::Integer) { err("Bit register size must be a positive integer literal"); return nullptr; }
+        auto size=std::stoull(consume().text);
+        if(size==0||size>1000000){err("Bit register size must be between 1 and 1000000");return nullptr;}
+        s->decl_type.qreg_size=static_cast<std::uint32_t>(size);expect(Tok::RBracket,"']'");
+      }
       // QReg(N) — N already consumed by parseType. But the user
       // might also write `QReg q(2)` — second size after the name.
       if (s->decl_type.kind == TypeKind::QReg && accept(Tok::LParen)) {
@@ -322,6 +411,12 @@ struct ParserImpl {
     if (cur().kind == Tok::Ident) {
       // peek ahead to disambiguate.
       std::string name = cur().text;
+      if (peek(1).kind == Tok::LBracket) {
+        consume();consume();auto index=parseExpr();expect(Tok::RBracket,"']'");
+        if(!expect(Tok::Equals,"'='"))return nullptr;
+        auto s=std::make_shared<Stmt>();s->kind=StmtKind::Assign;s->loc=loc;s->name=name;
+        s->args={index};s->init=parseExpr();return s;
+      }
       if (peek(1).kind == Tok::Equals) {
         consume();  // ident
         consume();  // '='
@@ -411,7 +506,7 @@ struct ParserImpl {
         //   `name: Type` (Photon spec example: `oracle: Oracle`)
         // Form 1: type then name.
         if (cur().kind == Tok::Int || cur().kind == Tok::Angle ||
-            cur().kind == Tok::Bit || cur().kind == Tok::QReg) {
+            cur().kind == Tok::Bit || cur().kind == Tok::UInt || cur().kind == Tok::QReg) {
           auto t = parseType();
           if (!t) return std::nullopt;
           p.type = *t;
@@ -462,7 +557,7 @@ struct ParserImpl {
     Module m;
     skipNewlines();
     if (accept(Tok::Target)) {
-      if (cur().kind == Tok::Ident) m.target = consume().text;
+      if (cur().kind == Tok::Ident || cur().kind == Tok::StringLit) m.target = consume().text;
       else err("expected target id");
     }
     skipNewlines();

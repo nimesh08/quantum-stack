@@ -85,6 +85,24 @@ constexpr OpSig kSigs[] = {
     {OpKind::Measure,    "spinor.measure",     1, 0, true,  kNoAttrs,   true },
     {OpKind::Reset,      "spinor.reset",       1, 1, false, kNoAttrs,   true },
     {OpKind::Barrier,    "spinor.barrier",     -1, 0, false, kNoAttrs,  true },
+    {OpKind::CConst, "spinor.c_const", 0, 0, false, kNoAttrs, true},
+    {OpKind::CCopy, "spinor.c_copy", 0, 0, false, kNoAttrs, true},
+    {OpKind::CNot, "spinor.c_not", 0, 0, false, kNoAttrs, true},
+    {OpKind::CAnd, "spinor.c_and", 0, 0, false, kNoAttrs, true},
+    {OpKind::COr, "spinor.c_or", 0, 0, false, kNoAttrs, true},
+    {OpKind::CXor, "spinor.c_xor", 0, 0, false, kNoAttrs, true},
+    {OpKind::CAdd, "spinor.c_add", 0, 0, false, kNoAttrs, true},
+    {OpKind::CSub, "spinor.c_sub", 0, 0, false, kNoAttrs, true},
+    {OpKind::CEq, "spinor.c_eq", 0, 0, false, kNoAttrs, true},
+    {OpKind::CNe, "spinor.c_ne", 0, 0, false, kNoAttrs, true},
+    {OpKind::CLt, "spinor.c_lt", 0, 0, false, kNoAttrs, true},
+    {OpKind::CLe, "spinor.c_le", 0, 0, false, kNoAttrs, true},
+    {OpKind::CGt, "spinor.c_gt", 0, 0, false, kNoAttrs, true},
+    {OpKind::CGe, "spinor.c_ge", 0, 0, false, kNoAttrs, true},
+    {OpKind::CShl, "spinor.c_shl", 0, 0, false, kNoAttrs, true},
+    {OpKind::CShr, "spinor.c_shr", 0, 0, false, kNoAttrs, true},
+    {OpKind::CCast, "spinor.c_cast", 0, 0, false, kNoAttrs, true},
+    {OpKind::CSelect, "spinor.c_select", 0, 0, false, kNoAttrs, true},
 };
 
 const OpSig& sig(OpKind k) {
@@ -142,6 +160,9 @@ std::string Module::nameOf(ValueId v) const {
 }
 
 void Module::setName(ValueId v, std::string n) {
+  if(n=="v"+std::to_string(v.v)){values_.at(v.v).name.clear();return;}
+  if(n.size()>1&&n.front()=='v'&&n.find_first_not_of("0123456789",1)==std::string::npos)n="named_"+n;
+  for(std::size_t index=0;index<values_.size();++index)if(index!=v.v&&!n.empty()&&values_[index].name==n){n+="_"+std::to_string(v.v);index=static_cast<std::size_t>(-1);}
   values_.at(v.v).name = std::move(n);
 }
 

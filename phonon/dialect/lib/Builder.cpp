@@ -3,6 +3,9 @@
 // Builder methods for the Phonon dialect.
 
 #include "phonon/dialect/Phonon.h"
+#include "spinor/dialect/ExactInteger.h"
+#include <cstdlib>
+#include <stdexcept>
 
 #include <cassert>
 #include <stdexcept>
@@ -39,9 +42,11 @@ std::vector<ValueId> issue(Module& m, OpKind kind,
 // --- Spinor-kind ops -------------------------------------------------------
 
 ValueId Builder::allocQubit(Location loc) {
+  if(!reusableQubits_.empty()){const auto value=reusableQubits_.back();reusableQubits_.pop_back();return reset(value,std::move(loc));}
   auto r = issue(m_, OpKind::AllocQubit, {}, {}, {qubitType()}, std::move(loc));
   return r[0];
 }
+void Builder::discard(ValueId q,Location loc){reusableQubits_.push_back(reset(q,std::move(loc)));}
 ValueId Builder::allocBit(Location loc) {
   auto r = issue(m_, OpKind::AllocBit, {}, {}, {bitType()}, std::move(loc));
   return r[0];
@@ -140,7 +145,7 @@ void Builder::barrier(std::span<const ValueId> qs, Location loc) {
 
 ValueId Builder::constInt(int64_t v, Location loc) {
   auto r = issue(m_, OpKind::ConstInt, {},
-                 {Attribute{"value", static_cast<double>(v)}},
+                 {Attribute{"value", v}},
                  {intType()}, std::move(loc));
   return r[0];
 }
@@ -149,6 +154,73 @@ ValueId Builder::constAngle(double rad, Location loc) {
                  {Attribute{"value", rad}}, {angleType()},
                  std::move(loc));
   return r[0];
+}
+ValueId Builder::constUInt(std::uint64_t v, std::uint32_t width, Location loc) {
+  return issue(m_,OpKind::ConstUInt,{},{{"value",v}},{uintType(width)},std::move(loc))[0];
+}
+ValueId Builder::copy(ValueId value,Type type,Location loc) {
+  return issue(m_,OpKind::Copy,{value},{},{type},std::move(loc))[0];
+}
+ValueId Builder::bitNot(ValueId value,Location loc){
+  return issue(m_,OpKind::Copy,{value},{{"complement",1.0}},{m_.typeOf(value)},std::move(loc))[0];
+}
+ValueId Builder::select(ValueId predicate,ValueId thenValue,ValueId elseValue,Location loc) {
+  return issue(m_,OpKind::Select,{predicate,thenValue,elseValue},{},{m_.typeOf(thenValue)},std::move(loc))[0];
+}
+void Builder::output(std::string name,ValueId value,std::string role,Location loc) {
+  issue(m_,OpKind::Output,{value},{{"name",std::move(name)},{"role",std::move(role)}},{},std::move(loc));
+}
+Builder::BoundedLoopResult Builder::boundedWhile(std::size_t maxIterations,std::span<const ValueId> initial,
+    const std::function<ValueId(std::span<const ValueId>)>& condition,
+    const std::function<LoopStep(std::span<const ValueId>)>& body,Location loc){
+  std::size_t budget=100000;if(const auto* text=std::getenv("QSTACK_EXPANDED_OPERATION_BUDGET"))budget=spinor::dialect::parseExactInteger<std::size_t>(text);
+  if(!maxIterations||!budget||maxIterations>budget)throw std::invalid_argument("boundedWhile requires a positive bound within QSTACK_EXPANDED_OPERATION_BUDGET");
+  const auto start=m_.numOps();std::vector<ValueId> values(initial.begin(),initial.end());
+  for(auto value:values)if(m_.typeOf(value).kind!=TypeKind::UInt&&m_.typeOf(value).kind!=TypeKind::Bit)throw std::invalid_argument("boundedWhile state must contain bool or explicit uint values");
+  auto live=copy(constInt(1,loc),bitType(),loc);
+  for(std::size_t iteration=0;iteration<maxIterations;++iteration){
+    const auto conditionGuard=beginIf(live,loc);
+    const auto test=condition(values);if(m_.typeOf(test)!=bitType())throw std::invalid_argument("boundedWhile condition must produce bool");
+    endIf(conditionGuard,loc);
+    const auto predicate=select(live,test,copy(constInt(0,loc),bitType(),loc),loc);
+    live=predicate;const auto marker=beginIf(predicate,loc);
+    std::vector<Type> types;for(auto value:values)types.push_back(m_.typeOf(value));
+    auto resultTypes=types;resultTypes.push_back(bitType());
+    const auto bodyResults=issue(m_,OpKind::LoopBody,values,{},resultTypes,loc);
+    loopTypes_.push_back(types);
+    LoopStep step;
+    try{step=body(values);}catch(...){loopTypes_.pop_back();throw;}
+    loopTypes_.pop_back();
+    if(step.values.size()!=values.size())throw std::invalid_argument("boundedWhile body changed carried value arity");
+    for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=m_.typeOf(step.values[i]))throw std::invalid_argument("boundedWhile body changed carried value type or width");
+    auto yielded=step.values;
+    if(step.breakWhen){if(m_.typeOf(*step.breakWhen)!=bitType())throw std::invalid_argument("boundedWhile breakWhen must be bool");yielded.push_back(*step.breakWhen);}
+    issue(m_,OpKind::EndLoopBody,yielded,{{"has_break",std::int64_t(step.breakWhen.has_value())}},{},loc);
+    const auto nextLive=select(bodyResults.back(),copy(constInt(0,loc),bitType(),loc),live,loc);
+    endIf(marker,loc);
+    for(std::size_t i=0;i<values.size();++i)values[i]=select(predicate,bodyResults[i],values[i],loc);
+    if(nextLive!=live)live=select(predicate,nextLive,live,loc);
+    if(m_.numOps()-start>budget)throw std::invalid_argument("boundedWhile expanded operation budget exceeded");
+  }
+  const auto conditionGuard=beginIf(live,loc);
+  const auto test=condition(values);if(m_.typeOf(test)!=bitType())throw std::invalid_argument("boundedWhile condition must produce bool");
+  endIf(conditionGuard,loc);
+  const auto exhausted=select(live,test,copy(constInt(0,loc),bitType(),loc),loc);
+  output("loop_exhausted_builder_"+std::to_string(start),exhausted,"loop_exhausted",loc);
+  if(m_.numOps()-start>budget)throw std::invalid_argument("boundedWhile expanded operation budget exceeded");
+  return {values,exhausted};
+}
+void Builder::breakLoop(std::span<const ValueId> values,Location loc){
+  if(loopTypes_.empty())throw std::invalid_argument("breakLoop requires an enclosing boundedWhile callback");
+  if(values.size()!=loopTypes_.back().size())throw std::invalid_argument("breakLoop changes loop-carried arity");
+  for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=loopTypes_.back()[i])throw std::invalid_argument("breakLoop changes loop-carried type or width");
+  issue(m_,OpKind::Break,std::vector<ValueId>(values.begin(),values.end()),{},{},std::move(loc));
+}
+void Builder::continueLoop(std::span<const ValueId> values,Location loc){
+  if(loopTypes_.empty())throw std::invalid_argument("continueLoop requires an enclosing boundedWhile callback");
+  if(values.size()!=loopTypes_.back().size())throw std::invalid_argument("continueLoop changes loop-carried arity");
+  for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=loopTypes_.back()[i])throw std::invalid_argument("continueLoop changes loop-carried type or width");
+  issue(m_,OpKind::Continue,std::vector<ValueId>(values.begin(),values.end()),{},{},std::move(loc));
 }
 ValueId Builder::binOp(std::string op, ValueId a, ValueId b, Location loc) {
   // Result type follows the operand type (int + int → int, angle + angle
@@ -291,6 +363,12 @@ void Builder::endDef(OpId begin, Location loc) {
   end.kind = OpKind::EndDef;
   end.loc = std::move(loc);
   m_.addOp(std::move(end));
+}
+OpId Builder::beginTypedDef(std::string name,std::span<const Param> params,std::span<const Type> results,Location loc){
+  const auto id=beginDef(std::move(name),params,std::move(loc));
+  auto& op=m_.opMut(id);op.attributes.push_back({"explicit_results",std::int64_t{1}});
+  for(auto type:results){op.attributes.push_back({"result_type",std::string(typeName(type))});if(type.kind==TypeKind::UInt)op.attributes.push_back({"result_width",std::uint64_t(type.width)});}
+  return id;
 }
 void Builder::returnOp(std::span<const ValueId> values, Location loc) {
   Op op;

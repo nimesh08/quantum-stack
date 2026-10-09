@@ -2,6 +2,7 @@
 
 #include "spinor/passes/OptimizationLoop.h"
 #include "spinor/dialect/Circuit.h"
+#include "spinor/passes/CompilationReport.h"
 #include <type_traits>
 #include <algorithm>
 
@@ -13,7 +14,7 @@ CircuitMetric computeMetric(const dialect::Module& m) {
   for(const auto& op:circuit.instructions){
     ++x.size;
     if(op.qubits.empty()){
-      if(op.kind==dialect::OpKind::Barrier||dialect::isControl(op.kind))std::fill(depth.begin(),depth.end(),x.depth);
+      if(op.kind==dialect::OpKind::Barrier||dialect::isControl(op.kind)||dialect::isClassical(op.kind))std::fill(depth.begin(),depth.end(),x.depth);
       continue;
     }
     std::size_t previous=0;for(int q:op.qubits)previous=std::max(previous,depth.at(q));
@@ -49,6 +50,12 @@ dialect::Module OptimizationLoop<C>::run(const dialect::Module& initial,
                                          C criterion,
                                          int maxIters) const {
   dialect::Module cur=initial,best=initial;
+  auto* report=currentCompilationReport();
+  auto bestReport=report?*report:CompilationReport{};
+  auto retainBestReport=[&]{if(report){
+    auto counters=report->counters;*report=bestReport;
+    for(const auto& [name,count]:counters)report->counters[name]=std::max(report->counters[name],count);
+  }};
   auto bestMetric=computeMetric(best);
   for(int it=0;it<maxIters;++it){
     auto next=body(cur);auto metric=computeMetric(next);
@@ -57,13 +64,13 @@ dialect::Module OptimizationLoop<C>::run(const dialect::Module& initial,
     }else{
       bool better=metric.size<bestMetric.size||(metric.size==bestMetric.size&&metric.depth<bestMetric.depth);
       auto previousBest=bestMetric;
-      if(better){best=next;bestMetric=metric;}
-      if(criterion.shouldStop(previousBest,metric,it+1,maxIters))return best;
+      if(better){best=next;bestMetric=metric;if(report)bestReport=*report;}
+      if(criterion.shouldStop(previousBest,metric,it+1,maxIters)){retainBestReport();return best;}
     }
     cur=std::move(next);
   }
   if constexpr(std::is_same_v<C,FixedPointCriterion>)return cur;
-  else return best;
+  else {retainBestReport();return best;}
 }
 
 // Explicit instantiations for the two stock criteria.

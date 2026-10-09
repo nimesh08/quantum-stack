@@ -37,6 +37,14 @@ credentials, and current target capabilities. Install only the provider extra
 you use, for example `heisenberg-spinor-submit[ibm]`. SDKs with incompatible
 dependencies can use separate environments and the configured SDK Python path.
 
+New compilations produce version-2 artifacts with logical and physical IR,
+typed classical mappings, capability requirements and numerical diagnostics.
+Version-1 artifacts keep their original hashes and execution semantics. Install
+the `verify` extra and run `qstack verify program.qstack` for independent offline
+operator/instrument comparisons. The command reports `passed`, `failed` or
+`not_checked`, stores artifact-bound evidence, and never submits a job. Numerical
+diagnostics and finite comparisons are not certified whole-program error bounds.
+
 ```python
 import qstack
 
@@ -65,5 +73,10 @@ python tests/check_distribution.py dist/heisenberg_spinor_submit-0.6.0-py3-none-
 ```
 
 The distribution check installs into a fresh environment outside the checkout.
-It verifies registry and topology data, provider imports and the qstack command.
-It does not submit provider jobs.
+It checks the bundled registry, topology data, installed module origins and the
+`qstack` command, then installs the optional `verify` extra. It exercises v1 hash
+compatibility, v2 artifact sidecars, exact 64-bit classical values, full-phase
+verification, a deliberately wrong gate angle, and the verifier's size limit.
+CLI outcomes must distinguish passed, failed and not checked. Add
+`--output package-evidence.json` to retain wheel hashes and check results.
+Only dependency installation uses the network; no compiler or provider jobs run.

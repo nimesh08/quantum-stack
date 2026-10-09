@@ -26,8 +26,9 @@ Three flavours, by what's in the condition:
 | only loop indices | compile time after loop unrolling | per-iteration unroll |
 | a `bit[k]` from `measure` | **runtime** (feedforward) | classical-controlled gates |
 
-The third flavour requires `chip.supports.feedforward` (or post-selection
-fallback; see [feedforward_legalisation](../rules/feedforward_legalisation.md)).
+Runtime conditions require a compatible concrete target snapshot. Boolean/UInt
+expressions and typed joins additionally require their declared controller
+features. See [capability checks](../rules/feedforward_legalisation.md).
 
 ## Legality
 
@@ -35,8 +36,8 @@ fallback; see [feedforward_legalisation](../rules/feedforward_legalisation.md)).
 - The condition's type must be `bit` after evaluation (or
   `int == int` etc.).
 - If the condition reads a `bit[k]` from a `measure`, the chip must
-  support feedforward, OR the legalisation pass falls back to
-  post-selection.
+  support the branch. Unsupported branches receive an error; they are not
+  replaced by postselection or an unconditional branch.
 
 ## Examples
 
@@ -65,7 +66,7 @@ def maybe_h(qubit qq, int flag) {
 
 ## Equivalents
 
-- **Spinor**: cannot express conditionals.
+- **Spinor**: retains explicit if/else/end-if markers.
 - **Photon**: `if (cond) { ... } else { ... }`.
 
 ## See also

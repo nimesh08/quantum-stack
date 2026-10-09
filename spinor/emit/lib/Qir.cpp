@@ -1,5 +1,6 @@
 #include "spinor/emit/Emitters.h"
 #include "spinor/dialect/Circuit.h"
+#include "spinor/dialect/Classical.h"
 #include <iomanip>
 #include <map>
 #include <sstream>
@@ -15,7 +16,7 @@ std::string emitQir(const Module& m,const registry::ChipInfo* chip) {
   const std::string platform=chip?chip->qirPlatform:"standard";
   const bool quantinuum=platform=="quantinuum-h2"||platform=="quantinuum-helios";
   const bool initialize=platform!="quantinuum-h2";
-  const bool dynamic=hasControlFlow(m);
+  const bool dynamic=hasControlFlow(m)||hasClassicalOperations(m);
   const std::string readResult=quantinuum?"__quantum__rt__read_result":"__quantum__qis__read_result__body";
   auto ptr=[](std::size_t n,const std::string& qualifier=std::string{}){
     return "ptr "+qualifier+"inttoptr (i64 "+std::to_string(n)+" to ptr)";
@@ -34,9 +35,53 @@ std::string emitQir(const Module& m,const registry::ChipInfo* chip) {
   bool measurementBlock=false;
   std::string currentBlock="body";
   std::vector<std::string> values(c.numClbits,"false");
+  std::map<std::string,const ClassicalValue*> classical;
+  for(const auto& value:c.classicalValues)classical[value.id]=&value;
+  std::size_t controllerId=0;
+  auto temporary=[&](){return "%controller"+std::to_string(controllerId++);};
+  auto readValue=[&](const std::string& id){
+    const auto& value=*classical.at(id);const auto type="i"+std::to_string(value.width);
+    if(value.width==1)return values.at(value.storage.at(0));
+    std::string accumulated="0";
+    for(std::size_t bit=0;bit<value.storage.size();++bit){
+      auto extended=temporary();body<<"  "<<extended<<" = zext i1 "<<values.at(value.storage[bit])<<" to "<<type<<"\n";
+      if(bit){auto shifted=temporary();body<<"  "<<shifted<<" = shl "<<type<<' '<<extended<<", "<<bit<<"\n";extended=shifted;}
+      const auto combined=temporary();body<<"  "<<combined<<" = or "<<type<<' '<<accumulated<<", "<<extended<<"\n";accumulated=combined;
+    }return accumulated;
+  };
+  auto writeValue=[&](const std::string& id,const std::string& expression){
+    const auto& value=*classical.at(id);const auto type="i"+std::to_string(value.width);
+    for(std::size_t bit=0;bit<value.storage.size();++bit){
+      if(value.width==1){values.at(value.storage[bit])=expression;continue;}
+      std::string shifted=expression;
+      if(bit){shifted=temporary();body<<"  "<<shifted<<" = lshr "<<type<<' '<<expression<<", "<<bit<<"\n";}
+      const auto extracted=temporary();body<<"  "<<extracted<<" = trunc "<<type<<' '<<shifted<<" to i1\n";values.at(value.storage[bit])=extracted;
+    }
+  };
+  for(const auto& value:c.classicalValues)if(value.initialized)writeValue(value.id,value.initialValue);
   struct Branch {std::size_t id;bool hasElse=false;std::vector<std::string> before,thenValues;std::string thenBlock;};
   std::vector<Branch> branches;
   for(const auto& op:c.instructions){
+    if(isClassical(op.kind)){
+      const auto result=stringAttribute(op,"result"),type="i"+std::to_string(classical.at(result)->width);
+      const auto inputs=classicalInputs(op);std::string expression;
+      if(op.kind==OpKind::CConst)expression=stringAttribute(op,"value");
+      else{
+        const auto a=readValue(inputs.at(0));const auto inputWidth=classical.at(inputs.at(0))->width;const auto inputType="i"+std::to_string(inputWidth);
+        if(op.kind==OpKind::CCopy||op.kind==OpKind::CCast){
+          if(inputWidth==classical.at(result)->width)expression=a;
+          else{expression=temporary();body<<"  "<<expression<<" = "<<(inputWidth<classical.at(result)->width?"zext":"trunc")<<' '<<inputType<<' '<<a<<" to "<<type<<"\n";}
+        }else if(op.kind==OpKind::CSelect){
+          const auto yes=readValue(inputs.at(1)),no=readValue(inputs.at(2));expression=temporary();body<<"  "<<expression<<" = select i1 "<<a<<", "<<type<<' '<<yes<<", "<<type<<' '<<no<<"\n";
+        }else if(op.kind==OpKind::CNot){expression=temporary();body<<"  "<<expression<<" = xor "<<inputType<<' '<<a<<", -1\n";}
+        else{
+          const auto b=readValue(inputs.at(1));expression=temporary();
+          const std::map<OpKind,std::string> opcode={{OpKind::CAnd,"and"},{OpKind::COr,"or"},{OpKind::CXor,"xor"},{OpKind::CAdd,"add"},{OpKind::CSub,"sub"},{OpKind::CEq,"icmp eq"},{OpKind::CNe,"icmp ne"},{OpKind::CLt,"icmp ult"},{OpKind::CLe,"icmp ule"},{OpKind::CGt,"icmp ugt"},{OpKind::CGe,"icmp uge"},{OpKind::CShl,"shl"},{OpKind::CShr,"lshr"}};
+          body<<"  "<<expression<<" = "<<opcode.at(op.kind)<<' '<<inputType<<' '<<a<<", "<<b<<"\n";
+        }
+      }
+      writeValue(result,expression);continue;
+    }
     if(op.kind==OpKind::GlobalPhase){body<<"  ; branch global phase "<<parameter(op)<<" radians (unobservable after classical measurement)\n";continue;}
     if(op.kind==OpKind::If){
       auto id=branchId++;branches.push_back({id,false,values,{},""});

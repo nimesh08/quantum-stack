@@ -16,6 +16,7 @@ enum class Tok : std::uint8_t {
   Bit,
   Int,         // phonon
   Angle,       // phonon
+  Bool, UInt, Output, Bounded, MaxIterations, Break, Continue, Discard,
   Measure,
   Reset,
   Barrier,
@@ -45,6 +46,7 @@ enum class Tok : std::uint8_t {
   NotEq,                 // !=
   Lt, Gt, Le, Ge,        // comparisons
   Plus, Minus, Star, Slash,
+  Amp, Pipe, Caret, Bang, Tilde, Shl, Shr,
   DotDot,                // ..   (range operator in `for i in lo..hi`)
   Newline,
   Eof,

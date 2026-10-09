@@ -82,7 +82,7 @@ depending on the chip's `supports.feedforward` field:
 |--------------------|----------|
 | `Full` | Conditional gates emit native QIR-Adaptive `branch` ops. |
 | `Limited` | Conditional gates lower to a fixed pattern the hardware accepts. |
-| `None` | The compiler refuses to compile feedforward; you can opt into [post-selection](rules/post_selection.md) instead. |
+| `None` | The compiler refuses unsupported feedforward. There is [no automatic postselection](rules/post_selection.md). |
 
 Try a chip with feedforward:
 
@@ -97,7 +97,7 @@ spinorc compile -t ionq_harmony teleport.pho
 ```
 
 The IonQ Harmony compile fails with a precise diagnostic pointing at
-the `if` statements and a link to the post-selection cookbook.
+the `if` statements. Select a compatible concrete target and refresh its snapshot.
 
 ## Step 4 — see the optimizer at work
 

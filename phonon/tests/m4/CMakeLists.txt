@@ -11,7 +11,7 @@ function(phonon_add_m4_test name source)
   )
   target_link_libraries(${name} PRIVATE
     phonon::lower phonon::parser phonon::dialect
-    spinor::dialect spinor::verify)
+    spinor::dialect spinor::verify spinor::sim spinor::emit)
   target_compile_features(${name} PRIVATE cxx_std_20)
   target_compile_definitions(${name} PRIVATE
     SPINOR_CORPUS_DIR="${CMAKE_SOURCE_DIR}/spinor/tests/corpus"

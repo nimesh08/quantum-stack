@@ -1,5 +1,6 @@
 #include "spinor/passes/AvailableRouting.h"
 #include "spinor/passes/Decomposition.h"
+#include "spinor/passes/HeterogeneousRouting.h"
 #include "spinor/registry/ComponentTopology.h"
 #include <algorithm>
 #include <map>
@@ -29,6 +30,12 @@ void validateAvailableCircuit(const dialect::WireCircuit& circuit,const registry
   for(int q:circuit.finalLayout)check(q);
   for(const auto& op:circuit.instructions) {
     for(int q:op.qubits)check(q);
+    if(op.qubits.size()==2&&op.kind!=OpKind::Barrier){
+      const auto locus=chip.twoQubitGateLoci.find(name(op.kind));
+      if(locus!=chip.twoQubitGateLoci.end()&&std::find(locus->second.begin(),locus->second.end(),
+          std::pair{op.qubits[0],op.qubits[1]})==locus->second.end())
+        throw std::runtime_error("native operation '"+name(op.kind)+"' is unavailable on its ordered physical locus");
+    }
     if(op.qubits.size()!=1||op.kind==OpKind::Barrier)continue;
     const auto locus=chip.singleQubitGateLoci.find(name(op.kind));
     if(locus!=chip.singleQubitGateLoci.end()&&
@@ -37,8 +44,9 @@ void validateAvailableCircuit(const dialect::WireCircuit& circuit,const registry
   }
 }
 
-std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& input,
-    const registry::ChipInfo& chip,OptimizationLevel level,dialect::Diagnostics& diagnostics) {
+static std::optional<dialect::Module> compileUniformAvailableCircuit(const dialect::Module& input,
+    const registry::ChipInfo& chip,OptimizationLevel level,dialect::Diagnostics& diagnostics,
+    CompilationReport* report) {
   if(!chip.availableQubits&&!chip.unavailableQubits.size()&&chip.singleQubitGateLoci.empty())return std::nullopt;
   const auto computers=registry::computationalComponents(chip);
   const std::set<int> resonators(chip.resonatorQubits.begin(),chip.resonatorQubits.end());
@@ -81,6 +89,7 @@ std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& in
   std::map<int,int> compact;
   for(std::size_t i=0;i<physical.size();++i)compact[physical[i]]=static_cast<int>(i);
   auto effective=chip;
+  effective.placementPreparedUniform=true;
   effective.qubits=physical.size();effective.availableQubits.reset();effective.unavailableQubits.clear();
   effective.singleQubitGateLoci.clear();effective.computationalQubits.clear();effective.resonatorQubits.clear();
   for(int q:computers)if(compact.contains(q))effective.computationalQubits.push_back(compact.at(q));
@@ -90,6 +99,8 @@ std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& in
     for(auto [a,b]:original)if(compact.contains(a)&&compact.contains(b))destination.emplace_back(compact.at(a),compact.at(b));
   };
   edges(chip.coupling,effective.coupling);edges(chip.moveLoci,effective.moveLoci);edges(chip.czLoci,effective.czLoci);
+  effective.twoQubitGateLoci.clear();
+  for(const auto& [gate,loci]:chip.twoQubitGateLoci)edges(loci,effective.twoQubitGateLoci[gate]);
   if(effective.resonatorQubits.empty())std::erase(effective.nativeGates,"move");
   effective.calibrationOneQubitError.clear();effective.calibrationReadoutError.clear();effective.calibrationTwoQubitError.clear();
   for(const auto& [q,error]:chip.calibrationOneQubitError)if(compact.contains(q))effective.calibrationOneQubitError[compact.at(q)]=error;
@@ -103,7 +114,8 @@ std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& in
     for(auto& op:circuit.instructions)for(auto& q:op.qubits)q=physical.at(q);
     return rebuild(circuit);
   };
-  auto compiled=PassManager{}.compile(input,effective,level,diagnostics);
+  const auto reportPrefix=report?*report:CompilationReport{};
+  auto compiled=PassManager{}.compilePrepared(input,effective,level,diagnostics,report);
   if(diagnostics.hasErrors())return input;
   auto result=lift(compiled);
   // Resynthesis may introduce another native gate. Fall back to legal O0
@@ -111,10 +123,61 @@ std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& in
   Diagnostics validation;
   if(!validateCompiled(result,chip,validation)&&level!=OptimizationLevel::O0) {
     Diagnostics baseline;
-    auto candidate=PassManager{}.compile(input,effective,OptimizationLevel::O0,baseline);
-    if(!baseline.hasErrors())result=lift(candidate);
+    auto baselineReport=reportPrefix;
+    auto candidate=PassManager{}.compilePrepared(input,effective,OptimizationLevel::O0,baseline,report?&baselineReport:nullptr);
+    if(!baseline.hasErrors()){
+      result=lift(candidate);
+      if(report){*report=std::move(baselineReport);++report->counters["availability_fallbacks"];}
+    }
   }
   validateCompiled(result,chip,diagnostics);
   return result;
+}
+
+std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module& input,
+    const registry::ChipInfo& chip,OptimizationLevel level,dialect::Diagnostics& diagnostics,
+    CompilationReport* report) {
+  if(chip.placementPreparedUniform)return std::nullopt;
+  const bool restricted=chip.availableQubits||!chip.unavailableQubits.empty()||
+    !chip.singleQubitGateLoci.empty()||!chip.twoQubitGateLoci.empty();
+  if(!restricted&&chip.placement.strategy=="auto")return std::nullopt;
+  const auto prefix=report?*report:CompilationReport{};
+  auto baselineReport=prefix;Diagnostics baselineDiagnostics;
+  std::optional<Module> baseline;
+  try {
+    auto candidate=compileUniformAvailableCircuit(input,chip,level,baselineDiagnostics,report?&baselineReport:nullptr);
+    if(!candidate){auto uniform=chip;uniform.placementPreparedUniform=true;
+      candidate=PassManager{}.compilePrepared(input,uniform,level,baselineDiagnostics,report?&baselineReport:nullptr);}
+    if(!baselineDiagnostics.hasErrors())baseline=std::move(candidate);
+  }catch(const std::exception& error){baselineDiagnostics.error(error.what());}
+  if(baseline&&chip.placement.strategy!="heterogeneous"){
+    if(report){*report=std::move(baselineReport);report->notes["placement_strategy"]="uniform";}
+    return baseline;
+  }
+  if(chip.placement.strategy=="uniform"){
+    diagnostics=std::move(baselineDiagnostics);return input;
+  }
+  auto candidateReport=prefix;Diagnostics candidateDiagnostics;
+  std::optional<Module> candidate;std::string failure;
+  try {
+    auto compiled=compileHeterogeneousCircuit(input,chip,level,candidateDiagnostics,report?&candidateReport:nullptr);
+    if(!candidateDiagnostics.hasErrors())candidate=std::move(compiled);
+  }catch(const std::exception& error){failure=error.what();}
+  auto cost=[](const Module& module){std::size_t gates=0,two=0;
+    for(const auto& op:flatten(module).instructions)if(!op.qubits.empty()&&op.kind!=OpKind::Measure&&op.kind!=OpKind::Barrier){++gates;two+=op.qubits.size()==2;}
+    return std::pair{two,gates};};
+  bool accept=bool(candidate);
+  if(candidate&&baseline){const auto a=cost(*candidate),b=cost(*baseline);accept=a.first<=b.first&&a.second<=b.second;}
+  if(accept){if(report)*report=std::move(candidateReport);return candidate;}
+  if(baseline){
+    if(report){*report=std::move(baselineReport);report->notes["placement_strategy"]="uniform_incumbent";
+      report->notes["placement_candidate_rejection"]=candidate?"native_gate_count_growth":failure;
+      for(const auto& [key,value]:candidateReport.counters)if(key.starts_with("placement_"))report->counters[key]=value;}
+    return baseline;
+  }
+  if(report)*report=std::move(candidateReport);
+  if(!failure.empty())diagnostics.error(failure);
+  else diagnostics=std::move(candidateDiagnostics);
+  return input;
 }
 }

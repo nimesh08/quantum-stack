@@ -1,0 +1,55 @@
+name: independent-scientific-nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scientific-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  numerical:
+    name: Offline numerical audit (seed ${{ matrix.seed }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ["0xB20261009", "0xB2026100A", "0xB2026100B"]
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      OTEL_SDK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline audit dependencies
+        run: >-
+          python -m pip install "cmake>=3.28" ninja "nanobind==2.12.0"
+          "./spinor/submit/python[test,qir]" -r spinor/tests/scientific/requirements.txt
+      - name: Configure native audit targets
+        run: >-
+          python -c "import nanobind, subprocess, sys; subprocess.run(['cmake', '-S', '.', '-B', 'build', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DQSTACK_ENABLE_TESTS=ON', '-DQSTACK_BUILD_PHOTON=OFF', '-DQSTACK_BUILD_PHONON=OFF', '-Dnanobind_DIR='+nanobind.cmake_dir(), '-DPython_EXECUTABLE='+sys.executable], check=True)"
+      - name: Build compiler and public synthesis probe
+        run: cmake --build build --target spinorc spinor_kak_audit_probe --parallel 2
+      - name: Larger seeded complete-operator audit
+        run: >-
+          python spinor/tests/scientific/audit.py --mode all --seed ${{ matrix.seed }}
+          --haar-count 1024 --random-count 64 --output build/scientific-nightly.json
+      - name: High precision boundary audit
+        if: always()
+        run: python spinor/tests/scientific/high_precision.py --output build/scientific-high-precision.json
+      - name: Keep source, binary, dependency and numerical evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-nightly-${{ matrix.seed }}
+          path: build/scientific-*.json
+          if-no-files-found: warn
+          retention-days: 30

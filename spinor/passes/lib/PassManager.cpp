@@ -8,6 +8,7 @@
 #include <tuple>
 
 #include "spinor/passes/Cleanup.h"
+#include "spinor/passes/ClassicalStorageReuse.h"
 #include "spinor/passes/Collect2qBlocks.h"
 #include "spinor/passes/CommutativeCancellation.h"
 #include "spinor/passes/ConsolidateBlocks.h"
@@ -39,8 +40,12 @@ double boundedRotation(double angle) {
 dialect::Module boundedInputParameters(const dialect::Module& module) {
   using namespace dialect;
   auto circuit=flatten(module);
+  const auto originalPhase=circuit.globalPhase;
   circuit.globalPhase=boundedPhase(circuit.globalPhase);
+  observeRewrite("parameter-normalization","scalar-phase",{},{},originalPhase,circuit.globalPhase);
+  std::size_t region=0;
   for(auto& op:circuit.instructions) {
+    const auto original=op;
     switch(op.kind) {
       case OpKind::Rx:case OpKind::Ry:case OpKind::Rz:
       case OpKind::Rxx:case OpKind::Rzz:
@@ -56,26 +61,38 @@ dialect::Module boundedInputParameters(const dialect::Module& module) {
                        namedDouble("axis_phase",boundedPhase(parameter(op,"axis_phase")))};break;
       default:break;
     }
+    observeRewrite("parameter-normalization","individual-input",{original},{op},0,0,std::nullopt,numericalRegion(region));
+    if(isNumericalRegionBoundary(op))++region;
   }
   return rebuild(circuit);
 }
-dialect::Module canonicalParameters(const dialect::Module& module) {
+dialect::Module canonicalParameters(const dialect::Module& module,std::size_t region=0) {
   using namespace dialect;
   auto in=flatten(module),out=in;out.instructions.clear();
   if(hasControlFlow(module)){
     int depth=0;
     for(const auto& op:in.instructions){
-      if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;continue;}
+      if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){
+        out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;
+        if(isNumericalRegionBoundary(op))++region;
+        continue;
+      }
       auto single=in;single.instructions={op};single.globalPhase=0;
-      auto normalized=flatten(canonicalParameters(rebuild(single)));
+      auto normalized=flatten(canonicalParameters(rebuild(single),region));
       out.instructions.insert(out.instructions.end(),normalized.instructions.begin(),normalized.instructions.end());
       if(depth){if(std::abs(normalized.globalPhase)>kRecognitionTolerance)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(normalized.globalPhase)},op.loc});}
       else out.globalPhase+=normalized.globalPhase;
+      if(isNumericalRegionBoundary(op))++region;
     }
     return rebuild(out);
   }
   auto wrap=[](double x){double r=boundedPhase(x);return r<0?r+2*M_PI:r;};
   for(auto op:in.instructions){
+    if(isNumericalRegionBoundary(op)){out.instructions.push_back(op);++region;continue;}
+    const auto original=op;
+    const auto start=out.instructions.size();const auto phaseBefore=out.globalPhase;
+    auto record=[&]{observeRewrite("parameter-canonicalization","native-range",{original},
+      std::vector<WireOp>(out.instructions.begin()+start,out.instructions.end()),0,out.globalPhase-phaseBefore,std::nullopt,numericalRegion(region));};
     if(op.kind==OpKind::U1q){
       auto desired=matrix1(op);double theta=boundedRotation(parameter(op,"theta")),phi=boundedPhase(parameter(op,"phi"));
       if(theta<0)theta+=2*M_PI;
@@ -90,7 +107,7 @@ dialect::Module canonicalParameters(const dialect::Module& module) {
       if(reduced<-M_PI)reduced+=2*M_PI;
       op.attributes={angleAttr(reduced)};
       out.globalPhase+=phaseDifference(desired,matrix1(op));
-      if(std::abs(reduced)<kRecognitionTolerance)continue;
+      if(std::abs(reduced)<kRecognitionTolerance){record();continue;}
     }
     else if(op.kind==OpKind::Rxx){
       const auto desired=matrix2(op);
@@ -101,9 +118,10 @@ dialect::Module canonicalParameters(const dialect::Module& module) {
       int pieces=std::max(1,static_cast<int>(std::ceil(reduced/(M_PI/2))));
       op.attributes={angleAttr(reduced/pieces)};
       for(int i=0;i<pieces;++i)out.instructions.push_back(op);
-      continue;
+      record();continue;
     }
     out.instructions.push_back(op);
+    record();
   }
   return rebuild(out);
 }
@@ -128,27 +146,75 @@ dialect::Module canonicalNativeLoci(const dialect::Module& module,const registry
   }
   return rebuild(circuit);
 }
+bool preservesClassicalExports(const dialect::WireCircuit& before,
+                              const dialect::WireCircuit& after) {
+  if(before.exportedClbits!=after.exportedClbits||
+     before.classicalOutputs.size()!=after.classicalOutputs.size())return false;
+  for(std::size_t i=0;i<before.classicalOutputs.size();++i){
+    const auto& a=before.classicalOutputs[i];const auto& b=after.classicalOutputs[i];
+    if(std::tie(a.name,a.value,a.type,a.width,a.role)!=std::tie(b.name,b.value,b.type,b.width,b.role))return false;
+    const auto oldValue=std::find_if(before.classicalValues.begin(),before.classicalValues.end(),[&](const auto& v){return v.id==a.value;});
+    const auto newValue=std::find_if(after.classicalValues.begin(),after.classicalValues.end(),[&](const auto& v){return v.id==a.value;});
+    if(oldValue==before.classicalValues.end()||newValue==after.classicalValues.end()||oldValue->storage!=newValue->storage)return false;
+  }
+  for(const auto& value:before.classicalValues)if(value.visibility!="private"||value.initialized){
+    const auto found=std::find_if(after.classicalValues.begin(),after.classicalValues.end(),[&](const auto& v){return v.id==value.id;});
+    if(found==after.classicalValues.end()||found->storage!=value.storage)return false;
+  }
+  return true;
+}
 void checkCapabilities(const dialect::WireCircuit& c,const registry::ChipInfo& chip){
   bool measured=false;std::vector<bool> branches;
   if(c.numQubits>chip.qubits)throw std::runtime_error("circuit exceeds target qubit capacity");
+  auto requireFeature=[&](const std::string& name){
+    const auto found=chip.classicalFeatures.find(name);
+    if(found==chip.classicalFeatures.end()||found->second!="supported")
+      throw std::runtime_error("target capability "+name+" is not verified supported; refresh capabilities or select a compatible target");
+  };
+  auto supportsFeature=[&](const std::string& name,bool legacy){
+    const auto found=chip.classicalFeatures.find(name);
+    // Only absent legacy metadata may inherit the historical flag. An explicit
+    // unknown snapshot is not evidence that this operation is supported.
+    return found==chip.classicalFeatures.end()?legacy:found->second=="supported";
+  };
+  if(!c.classicalOutputs.empty())requireFeature("output.classical");
+  for(const auto& output:c.classicalOutputs)if(output.role=="loop_exhausted")requireFeature("output.loop_exhausted");
+  for(const auto& value:c.classicalValues)if(value.type=="uint"&&
+      std::find(chip.classicalIntegerWidths.begin(),chip.classicalIntegerWidths.end(),value.width)==chip.classicalIntegerWidths.end())
+    throw std::runtime_error("target has no verified support for runtime uint width "+std::to_string(value.width)+"; refresh capabilities or use an explicitly supporting target");
   for(const auto& op:c.instructions){
+    if(dialect::isClassical(op.kind)){
+      auto name=std::string(dialect::opMnemonic(op.kind));
+      const auto marker=name.find("c_");
+      if(marker==std::string::npos)throw std::runtime_error("unknown classical instruction capability");
+      const auto feature="classical."+name.substr(marker+2);
+      requireFeature(feature);
+      continue;
+    }
     if(op.kind==dialect::OpKind::If){
-      if(chip.supports.feedforward==registry::CapabilityFlags::Feedforward::None)throw std::runtime_error("target does not support classical feed-forward");
+      if(!supportsFeature("branching.bit",chip.supports.feedforward!=registry::CapabilityFlags::Feedforward::None))
+        throw std::runtime_error("target capability branching.bit does not support classical feed-forward");
       auto bit=dialect::parameter(op,"condition_clbit"),value=dialect::parameter(op,"condition_value");
       if(bit<0||bit>=c.numClbits||bit!=std::floor(bit)||(value!=0&&value!=1))throw std::runtime_error("invalid classical condition");
       branches.push_back(false);continue;
     }
     if(op.kind==dialect::OpKind::Else){if(branches.empty()||branches.back())throw std::runtime_error("unmatched or duplicate else");branches.back()=true;continue;}
     if(op.kind==dialect::OpKind::EndIf){if(branches.empty())throw std::runtime_error("unmatched endif");branches.pop_back();continue;}
-    if(op.kind==dialect::OpKind::GlobalPhase)continue;
-    if(op.kind==dialect::OpKind::Measure){measured=true;continue;}
+    if(op.kind==dialect::OpKind::GlobalPhase||dialect::isClassical(op.kind))continue;
+    if(op.kind==dialect::OpKind::Measure){
+      if(!supportsFeature("measure",true))throw std::runtime_error("target capability measure does not support measurement");
+      measured=true;continue;
+    }
     if(op.kind==dialect::OpKind::Barrier)continue;
     if(measured&&!chip.supports.midCircuitMeasure)throw std::runtime_error("target does not support mid-circuit measurement");
-    if(op.kind==dialect::OpKind::Reset&&!chip.supports.reset)throw std::runtime_error("target does not support reset");
+    if(op.kind==dialect::OpKind::Reset&&!supportsFeature("reset",chip.supports.reset))throw std::runtime_error("target capability reset does not support reset");
     if(op.qubits.size()==2 && op.qubits[0]==op.qubits[1])throw std::runtime_error("two-qubit gate operands must be distinct");
   }
   if(!branches.empty())throw std::runtime_error("unclosed conditional block");
 }
+}
+dialect::Module canonicalizeNative(const dialect::Module& module,const registry::ChipInfo& chip){
+  return canonicalNativeLoci(canonicalParameters(module),chip);
 }
 bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& chip,dialect::Diagnostics& diag){
   try{
@@ -170,7 +236,7 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
     if(c.initialLayout.size()!=c.finalLayout.size())throw std::runtime_error("inconsistent initial/final layout widths");
     CouplingGraph graph(chip.qubits,chip.coupling,chip.allToAll);
     for(const auto& op:c.instructions){
-      if(dialect::isControl(op.kind)||op.kind==dialect::OpKind::GlobalPhase)continue;
+      if(dialect::isControl(op.kind)||dialect::isClassical(op.kind)||op.kind==dialect::OpKind::GlobalPhase)continue;
       if(op.kind==dialect::OpKind::Measure||op.kind==dialect::OpKind::Reset||op.kind==dialect::OpKind::Barrier)continue;
       auto name=std::string(dialect::opMnemonic(op.kind)).substr(7);
       if(std::find(chip.nativeGates.begin(),chip.nativeGates.end(),name)==chip.nativeGates.end())throw std::runtime_error("non-native gate in compiled circuit: "+name);
@@ -203,16 +269,64 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
 dialect::Module PassManager::compile(const dialect::Module& module,
                                      const registry::ChipInfo& chip,
                                      OptimizationLevel level,
-                                     dialect::Diagnostics& diag) const try {
+                                     dialect::Diagnostics& diag,
+                                     CompilationReport* report) const try {
+  CompilationReportScope reportScope(report);
   dialect::verify(module,diag);
   if(diag.hasErrors())return module;
   // Bound each input independently before additions in rotation merging or
   // synthesis. Adding a small angle to an unbounded double can otherwise
   // discard the complete operation (for example RZ(1e16); RZ(1)).
-  const auto bounded=boundedInputParameters(module);
+  if(report){
+    report->stage="logical";
+    report->addGap("Wire placement, routing permutations and serialization rounding are not included in local residual observations");
+    for(const auto& op:dialect::flatten(module).instructions)
+      if(isNumericalRegionBoundary(op)&&op.kind!=dialect::OpKind::Barrier)report->hasNonunitaryOperations=true;
+  }
+  auto bounded=boundedInputParameters(module);
   checkCapabilities(dialect::flatten(bounded),chip);
-  if(auto available=compileAvailableCircuit(bounded,chip,level,diag))return *available;
-  if(!chip.resonatorQubits.empty())return compileResonatorCircuit(bounded,chip,level,diag);
+  if(level!=OptimizationLevel::O0){
+    bounded=Cleanup{}.run(bounded);
+    if(level==OptimizationLevel::O2||level==OptimizationLevel::O3)
+      bounded=CommutativeCancellation{}.run(bounded,computeTraits(chip));
+  }
+  if(report)report->stage="native";
+  auto result=compilePrepared(bounded,chip,level,diag,report);
+  // Storage coloring is independent of recursive physical-index compaction.
+  // Run it once, only after the complete selected native candidate is known.
+  if(level!=OptimizationLevel::O0&&!diag.hasErrors()&&!result.classicalValues.empty()){
+    auto candidateReport=report?*report:CompilationReport{};
+    try{
+      CompilationReportScope candidateScope(report?&candidateReport:nullptr);
+      auto candidate=ClassicalStorageReuse{}.run(result);
+      const auto before=dialect::flatten(result),after=dialect::flatten(candidate);
+      dialect::Diagnostics candidateDiagnostics;
+      if(before.instructions.size()!=after.instructions.size()||
+         !preservesClassicalExports(before,after)||!validateCompiled(candidate,chip,candidateDiagnostics))
+        throw std::runtime_error("private storage candidate failed export or native validation");
+      result=std::move(candidate);
+      if(report){*report=std::move(candidateReport);++report->counters["classical_storage_candidates_accepted"];}
+    }catch(const std::exception&){
+      if(report)++report->counters["classical_storage_candidates_rejected"];
+      // Optional reuse never replaces the validated physical program on failure.
+    }
+  }
+  return result;
+} catch(const std::exception& e) {
+  diag.error(std::string("compile: ")+e.what());return module;
+}
+
+dialect::Module PassManager::compilePrepared(const dialect::Module& bounded,
+                                     const registry::ChipInfo& chip,
+                                     OptimizationLevel level,
+                                     dialect::Diagnostics& diag,
+                                     CompilationReport* report) const try {
+  CompilationReportScope reportScope(report);
+  dialect::verify(bounded,diag);
+  if(diag.hasErrors())return bounded;
+  checkCapabilities(dialect::flatten(bounded),chip);
+  if(auto available=compileAvailableCircuit(bounded,chip,level,diag,report))return *available;
+  if(!chip.resonatorQubits.empty())return compileResonatorCircuit(bounded,chip,level,diag,report);
   // Stage 1: Placement (always run; chip-agnostic — only reads
   // the coupling map).
   CouplingGraph g(chip.qubits, chip.coupling, chip.allToAll);
@@ -235,7 +349,7 @@ dialect::Module PassManager::compile(const dialect::Module& module,
   // hardware characterization use. O1/O2/O3 run the local
   // peephole (vendor-aware overload).
   if (level == OptimizationLevel::O0) {
-    auto result=canonicalNativeLoci(canonicalParameters(decomposed),chip);
+    auto result=canonicalizeNative(decomposed,chip);
     validateCompiled(result,chip,candidateDiagnostics);
     return result;
   }
@@ -306,10 +420,11 @@ dialect::Module PassManager::compile(const dialect::Module& module,
     cleaned = vf2.run(cleaned, chip, calibration);
   }
 
-  auto result=canonicalNativeLoci(canonicalParameters(cleaned),chip);
+  auto result=canonicalizeNative(cleaned,chip);
   validateCompiled(result,chip,candidateDiagnostics);
   return result;
   };
+  const auto reportPrefix=report?*report:CompilationReport{};
   auto best = compileLayout(layout, diag);
   if (diag.hasErrors() || level != OptimizationLevel::O3 || g.allToAll() || layout.v2p.size() < 2)
     return best;
@@ -363,14 +478,24 @@ dialect::Module PassManager::compile(const dialect::Module& module,
     for (std::size_t q = 0; q < physical.size(); ++q) candidate.p2v[physical[q]] = int(q);
     try {
       dialect::Diagnostics trialDiagnostics;
+      auto trialReport=reportPrefix;
+      CompilationReportScope trialScope(report?&trialReport:nullptr);
       auto trial = compileLayout(candidate, trialDiagnostics);
-      if (trialDiagnostics.hasErrors()) continue;
+      if(report)++report->counters["layout_trials"];
+      if (trialDiagnostics.hasErrors()) {if(report)++report->counters["layout_trials_rejected"];continue;}
       const auto trialCost = cost(trial);
       if (std::get<0>(trialCost) <= std::get<0>(bestCost) &&
           std::get<1>(trialCost) <= std::get<1>(bestCost) && trialCost < bestCost) {
         best = std::move(trial); bestCost = trialCost;
-      }
+        if(report){
+          const auto counters=report->counters;
+          *report=std::move(trialReport);
+          for(const auto& [key,value]:counters)report->counters[key]=std::max(report->counters[key],value);
+          ++report->counters["layout_trials_accepted"];
+        }
+      }else if(report)++report->counters["layout_trials_rejected"];
     } catch (const std::exception&) {
+      if(report)++report->counters["layout_trial_exceptions"];
       // Disconnected or otherwise infeasible candidates retain the already
       // validated baseline; a bounded layout search is optional optimization.
     }
@@ -378,7 +503,7 @@ dialect::Module PassManager::compile(const dialect::Module& module,
   return best;
 } catch(const std::exception& e) {
   diag.error(std::string("compile: ")+e.what());
-  return module;
+  return bounded;
 }
 
 }  // namespace spinor::passes

@@ -81,9 +81,21 @@ class _PhotonKernel:
             raise PhotonKernelError("execution requires the qstack runtime package") from error
         result = qstack.run_source(source, language="phonon", target=selected_target,
                                   mode=mode, shots=shots, **options)
+        status = getattr(result, "metadata", {}).get("application_status")
+        if status in ("loop_exhausted", "not_checked"):
+            detail = "bounded loop exhausted its iteration limit" if status == "loop_exhausted" else "bounded-loop completion could not be checked"
+            error = PhotonKernelError(f"{detail}; retrieve the preserved result for job {result.job_id}")
+            error.result = result
+            raise error
         counts = result.counts
         if counts is None:
             raise PhotonKernelError("execution completed without measurement counts")
+        if translation.return_value is not None:
+            name,width=translation.return_value
+            classical=result.metadata.get("classical_counts",{}).get(name)
+            if classical is None:
+                raise PhotonKernelError("execution result is missing the declared classical return value")
+            return {format(int(value),f"0{width}b"):count for value,count in classical.items()}
         if translation.return_bits is not None:
             selected = {}
             for bits, count in counts.items():

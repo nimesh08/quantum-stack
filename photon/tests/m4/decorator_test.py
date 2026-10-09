@@ -9,6 +9,22 @@ if PY_PKG_DIR: sys.path.insert(0, PY_PKG_DIR)
 
 
 class M4Decorator(unittest.TestCase):
+    def test_typed_controller_return_projects_actual_output_histogram(self):
+        import photon
+        with patch.object(photon,"_engine",None):
+            @photon.kernel
+            def sample():
+                q=photon.QReg(1)
+                value=photon.uint(8,255)
+                return value
+        service=Mock(return_value=SimpleNamespace(counts={"111000":7},metadata={"classical_counts":{"__qstack_return_value":{"255":7}}}))
+        with patch.dict(sys.modules,{"qstack":SimpleNamespace(run_source=service)}):
+            self.assertEqual(sample.run(shots=7),{"11111111":7})
+        service.return_value=SimpleNamespace(counts={"111000":7},metadata={})
+        with patch.dict(sys.modules,{"qstack":SimpleNamespace(run_source=service)}):
+            with self.assertRaisesRegex(Exception,"missing the declared classical return"):
+                sample.run(shots=7)
+
     def setUp(self) -> None:
         try:
             import photon  # noqa: F401
@@ -84,6 +100,7 @@ class M4Decorator(unittest.TestCase):
                 sample.run()
 
     def test_numeric_parameters_bind_before_execution(self) -> None:
+        # Numeric arguments are compile-time source bindings.
         import photon
         @photon.kernel
         def rotate(theta, width=2):
@@ -99,6 +116,21 @@ class M4Decorator(unittest.TestCase):
         from photon._errors import CompilationError
         with self.assertRaisesRegex(CompilationError, "theta"):
             rotate.run()
+
+    def test_unverified_or_exhausted_application_keeps_result_on_error(self) -> None:
+        import photon
+        from photon._errors import PhotonKernelError
+        @photon.kernel
+        def sample():
+            q = photon.QReg(1)
+            return q.measure_int()
+        for status in ("loop_exhausted", "not_checked"):
+            result = SimpleNamespace(job_id="saved-job", counts={"0": 3, "1": 4}, metadata={"application_status": status})
+            with patch.dict(sys.modules, {"qstack": SimpleNamespace(run_source=Mock(return_value=result))}):
+                with self.assertRaises(PhotonKernelError) as failure:
+                    sample.run(shots=7)
+            self.assertIs(failure.exception.result, result)
+            self.assertIn("saved-job", str(failure.exception))
 
     def test_call_uses_execution_service_not_python_qreg_stub(self) -> None:
         import photon

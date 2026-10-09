@@ -23,6 +23,7 @@
 #include "spinor/dialect/Spinor.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -55,10 +56,12 @@ enum class TypeKind : std::uint8_t {
   Int,
   Angle,
   Func,
+  UInt,
 };
 
 struct Type {
   TypeKind kind;
+  std::uint32_t width = 0;
   friend constexpr bool operator==(Type, Type) = default;
 };
 
@@ -67,6 +70,7 @@ inline constexpr Type bitType()   { return {TypeKind::Bit}; }
 inline constexpr Type intType()   { return {TypeKind::Int}; }
 inline constexpr Type angleType() { return {TypeKind::Angle}; }
 inline constexpr Type funcType()  { return {TypeKind::Func}; }
+inline constexpr Type uintType(std::uint32_t width) { return {TypeKind::UInt, width}; }
 
 std::string_view typeName(Type t);
 
@@ -104,7 +108,7 @@ enum class OpKind : std::uint16_t {
   // measurement / reset / barrier (spinor.*)
   Measure, Reset, Barrier, GlobalPhase,
   // -- Phonon additions ---------------------------------------------------
-  ConstInt,    // attr "value" : double (stored as int64 cast)
+  ConstInt,    // attr "value" : exact int64 (never converted through double)
   ConstAngle,  // attr "value" : double (radians)
   BinOp,       // attr "op" : "+|-|*|/"; classical 2-input expression
   Cmp,         // attr "op" : "==|!=|<|>"; classical 2-input → 1 bit
@@ -119,6 +123,8 @@ enum class OpKind : std::uint16_t {
   Call,        // attr "name"; operands = args; results inferred from def
   Return,      // operands: returned values
   Assign,      // operand: source value; attr "name" (symbol)
+  ConstUInt, Copy, Select, Output,
+  LoopBody, EndLoopBody, Break, Continue,
 };
 
 std::string_view opMnemonic(OpKind k);
@@ -183,6 +189,7 @@ class Builder {
 
   // Spinor-kind ops (every gate the Spinor dialect has).
   ValueId allocQubit(Location loc = {});
+  void discard(ValueId q,Location loc = {});
   ValueId allocBit(Location loc = {});
   void globalPhase(double angle, Location loc = {});
   ValueId h(ValueId q, Location loc = {});
@@ -216,6 +223,22 @@ class Builder {
   // Phonon classical ops.
   ValueId constInt(int64_t v, Location loc = {});
   ValueId constAngle(double rad, Location loc = {});
+  ValueId constUInt(std::uint64_t v, std::uint32_t width, Location loc = {});
+  ValueId copy(ValueId value, Type type, Location loc = {});
+  ValueId bitNot(ValueId value,Location loc = {});
+  ValueId select(ValueId predicate, ValueId thenValue, ValueId elseValue, Location loc = {});
+  void output(std::string name, ValueId value, std::string role = "value", Location loc = {});
+  struct LoopStep {std::vector<ValueId> values;std::optional<ValueId> breakWhen;};
+  struct BoundedLoopResult {std::vector<ValueId> values;ValueId exhausted;};
+  // Transfer immediately to the innermost bounded-loop exit/next iteration.
+  // The explicit values are the loop-carried state at the transfer point.
+  void breakLoop(std::span<const ValueId> values, Location loc = {});
+  void continueLoop(std::span<const ValueId> values, Location loc = {});
+  // Callbacks build device IR. They never inspect measurement outcomes on the
+  // host. Loop-carried values and every result retain their declared widths.
+  BoundedLoopResult boundedWhile(std::size_t maxIterations,std::span<const ValueId> initial,
+      const std::function<ValueId(std::span<const ValueId>)>& condition,
+      const std::function<LoopStep(std::span<const ValueId>)>& body,Location loc = {});
   ValueId binOp(std::string op, ValueId a, ValueId b, Location loc = {});
   ValueId cmp(std::string op, ValueId a, ValueId b, Location loc = {});
 
@@ -237,6 +260,9 @@ class Builder {
   struct Param { Type type; std::string name; };
   OpId beginDef(std::string name, std::span<const Param> params,
                 Location loc = {});
+  // An explicit signature requires a matching return on every execution path.
+  OpId beginTypedDef(std::string name, std::span<const Param> params,
+                    std::span<const Type> results, Location loc = {});
   void endDef(OpId begin, Location loc = {});
   void returnOp(std::span<const ValueId> values, Location loc = {});
   std::vector<ValueId> call(std::string name,
@@ -252,6 +278,8 @@ class Builder {
 
  private:
   Module& m_;
+  std::vector<ValueId> reusableQubits_;
+  std::vector<std::vector<Type>> loopTypes_;
 };
 
 // --- Print / Parse / Verify ------------------------------------------------

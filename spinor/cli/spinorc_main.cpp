@@ -111,6 +111,11 @@ void printHelp() {
     "  -O 2   commutation, block optimization and topology routing (default)\n"
     "  -O 3   bounded layout alternatives and native resynthesis\n"
     "\n"
+    "compile evidence options:\n"
+    "  --numerical-report PATH   write empirical rewrite observations\n"
+    "  --logical-ir-output PATH  write original logical Spinor JSON\n"
+    "  Defaults: QSTACK_NUMERICAL_REPORT and QSTACK_LOGICAL_IR_OUTPUT.\n"
+    "\n"
     "Native synthesis, routing, and optimization are performed by Spinor.\n";
 }
 
@@ -220,11 +225,28 @@ int main(int argc, char** argv) try {
     const auto& chip = reg.get(*target);
     spinor::dialect::Diagnostics pmDiag;
     spinor::passes::PassManager pm;
-    auto cleaned = pm.compile(*r.module, chip, level, pmDiag);
+    auto reportPath=argValue(argc,argv,"--numerical-report");
+    auto logicalPath=argValue(argc,argv,"--logical-ir-output");
+    if(!reportPath)if(const char* value=std::getenv("QSTACK_NUMERICAL_REPORT"))reportPath=value;
+    if(!logicalPath)if(const char* value=std::getenv("QSTACK_LOGICAL_IR_OUTPUT"))logicalPath=value;
+    for(const auto& path:{reportPath,logicalPath})if(path&&std::filesystem::absolute(*path).lexically_normal()==std::filesystem::absolute(file).lexically_normal()){
+      std::cerr<<"compile output must not overwrite the source\n";return 2;
+    }
+    if(reportPath&&logicalPath&&std::filesystem::absolute(*reportPath).lexically_normal()==std::filesystem::absolute(*logicalPath).lexically_normal()){
+      std::cerr<<"numerical and logical output paths must differ\n";return 2;
+    }
+    spinor::passes::CompilationReport report;
+    auto cleaned = pm.compile(*r.module, chip, level, pmDiag,reportPath?&report:nullptr);
     if (pmDiag.hasErrors()) {
       dumpDiagnostics(pmDiag);
       return 1;
     }
+    auto writeOutput=[](const std::string& path,const std::string& content){
+      std::ofstream output(path,std::ios::binary);
+      if(!output||!(output<<content)||!output.flush())throw std::runtime_error("cannot write compiler output: "+path);
+    };
+    if(logicalPath)writeOutput(*logicalPath,spinor::emit::emitPhysicalJson(*r.module));
+    if(reportPath)writeOutput(*reportPath,report.json());
     std::cout << print(cleaned);
     return 0;
   }

@@ -13,8 +13,10 @@
 
 #include "phonon/parser/Parser.h"
 #include "Lexer.h"
+#include "spinor/dialect/ExactInteger.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 #include <numbers>
 #include <cstdint>
@@ -79,11 +81,38 @@ struct Parser {
   };
   using Registers = std::unordered_map<std::string, Register>;
   Registers qreg;
+  std::unordered_map<std::string,std::size_t> quantumScope;
+  std::vector<pd::ValueId> reusableQubits;
   Registers creg;
   std::unordered_map<std::string, pd::ValueId> classicals;  // int/angle
+  std::unordered_map<std::string,pd::Type> scalarTypes;
+  std::size_t operationBudget=100000;
+  std::optional<unsigned> unsignedLiteralWidth;
   // Classical scalars whose compile-time value is known (used for
   // for-loop bound resolution and qubit register sizes).
   std::unordered_map<std::string, double> ctConst;
+  void cacheInteger(const std::string& name,std::int64_t value){
+    if(value>=-9007199254740991LL&&value<=9007199254740991LL)ctConst[name]=static_cast<double>(value);
+    else ctConst.erase(name);
+  }
+  std::optional<std::int64_t> integerValue(pd::ValueId value) const {
+    const auto& op=mod.op(mod.producerOf(value));
+    if(op.kind==pd::OpKind::ConstInt){
+      for(const auto& attr:op.attributes)if(attr.name=="value"){
+        if(const auto* exact=std::get_if<std::int64_t>(&attr.value))return *exact;
+        if(const auto* old=std::get_if<double>(&attr.value);old&&std::isfinite(*old)&&std::floor(*old)==*old&&std::abs(*old)<=9007199254740991.0)return static_cast<std::int64_t>(*old);
+      }
+    }
+    if(op.kind==pd::OpKind::BinOp&&op.operands.size()==2){
+      const auto a=integerValue(op.operands[0]),b_=integerValue(op.operands[1]);
+      if(a&&b_)for(const auto& attr:op.attributes)if(attr.name=="op"){
+        const auto& symbol=std::get<std::string>(attr.value);
+        if(symbol=="/"&&*b_&& !(*a==std::numeric_limits<std::int64_t>::min()&&*b_==-1)&&*a%*b_!=0)return std::nullopt;
+        return spinor::dialect::checkedInteger(symbol,*a,*b_);
+      }
+    }
+    return std::nullopt;
+  }
   struct ScalarBinding {
     pd::ValueId value;
     std::optional<double> constant;
@@ -103,6 +132,11 @@ struct Parser {
   std::size_t expandedIterations = 0;
   std::size_t expandedCalls = 0;
   std::size_t runtimeDepth = 0;
+  struct LoopFrame {std::string live,done;bool mayTransfer=false;std::size_t functionDepth=0;};
+  std::vector<LoopFrame> loopFrames;
+  std::size_t generatedName=0;
+  std::size_t flowEpoch=0;
+  std::string freshName(std::string stem){std::string name;do{name="__qstack_"+stem+"_"+std::to_string(generatedName++);}while(classicals.count(name)||qreg.count(name)||creg.count(name));return name;}
 
   // Numeric parameters must be bound before register indices and static
   // loops are resolved. Retain these bodies as lexical source templates;
@@ -110,9 +144,12 @@ struct Parser {
   struct FuncDecl {
     std::string name;
     std::vector<pd::Builder::Param> params;
+    std::vector<pd::Type> returnTypes;
+    bool typedResults = false;
     std::size_t body_start = 0;  // index of `{`
     std::size_t body_end = 0;    // index of `}`
     bool specialize = false;
+    bool normalizeReturns = false;
     Registers capturedQreg;
     Registers capturedCreg;
     ScalarBindings capturedScalars;
@@ -124,12 +161,24 @@ struct Parser {
     std::size_t runtimeDepth;
     bool returned = false;
     std::vector<pd::ValueId> values;
+    bool normalizeReturns = false;
+    bool mayReturn = false;
+    std::string done;
+    std::vector<std::string> quantumParams;
   };
   std::vector<InlineFrame> inlineFrames;
+  std::vector<pd::Type> activeReturnTypes;
   bool inlineReturned() const { return !inlineFrames.empty() && inlineFrames.back().returned; }
 
   Parser(std::vector<Token> ts, std::string fn)
-      : toks(std::move(ts)), filename(std::move(fn)), b(mod) {}
+      : toks(std::move(ts)), filename(std::move(fn)), b(mod) {
+    if(const char* budget=std::getenv("QSTACK_EXPANDED_OPERATION_BUDGET")){
+      try{
+        operationBudget=spinor::dialect::parseExactInteger<std::size_t>(budget);
+        if(!operationBudget)throw std::invalid_argument("expanded operation budget must be positive");
+      }catch(const std::exception& error){err(std::string("invalid expanded operation budget: ")+error.what());fatal=true;}
+    }
+  }
 
   // --- Token helpers -----------------------------------------------------
 
@@ -164,11 +213,47 @@ struct Parser {
   std::optional<double> foldExpr();
   std::optional<double> foldTerm();
   std::optional<double> foldFactor();
+  std::optional<std::int64_t> foldIntegerExpr();
+  std::optional<std::int64_t> foldIntegerTerm();
+  std::optional<std::int64_t> foldIntegerFactor();
 
   // --- Parse-time expression to ValueId ----------------------------------
   pd::ValueId parseExpr();
+  pd::ValueId parseBinary(int minimum);
   pd::ValueId parseTerm();
   pd::ValueId parseFactor();
+  pd::ValueId parsePredicate();
+  pd::ValueId coerce(pd::ValueId value,pd::Type type);
+  void parseTypedDecl();
+  void joinClassicals(pd::ValueId predicate,const std::unordered_map<std::string,pd::ValueId>& before,const std::unordered_map<std::string,pd::ValueId>& thenValues,const std::unordered_map<std::string,pd::ValueId>& elseValues);
+  using BitBindings=std::unordered_map<std::string,std::vector<pd::ValueId>>;
+  BitBindings snapshotBits()const {BitBindings result;for(const auto& [name,reg]:creg)for(auto value:reg)result[name].push_back(value);return result;}
+  void restoreBits(const BitBindings& values){for(const auto& [name,bits]:values)for(std::size_t bit=0;bit<bits.size();++bit)creg.at(name)[bit]=bits[bit];}
+  void joinBits(pd::ValueId predicate,const BitBindings& before,const BitBindings& yes,const BitBindings& no){
+    for(const auto& [name,bits]:before)for(std::size_t bit=0;bit<bits.size();++bit){
+      auto a=yes.at(name).at(bit),b_=no.at(name).at(bit);
+      if(a==b_)creg.at(name)[bit]=a;
+      else{auto joined=b.select(predicate,a,b_);mod.opMut(mod.producerOf(joined)).attributes.push_back({"mutable_clbit",static_cast<double>(bitTargets.at(name).at(bit))});creg.at(name)[bit]=joined;}
+    }
+  }
+  void parseBoundedWhile();
+  void parseTransfer(bool breaking){
+    consume();if(loopFrames.empty()||loopFrames.back().functionDepth!=inlineFrames.size()){err("break/continue requires a bounded runtime loop in this function");return;}
+    auto& loop=loopFrames.back();
+    if(breaking){classicals[loop.live]=b.copy(b.constInt(0),pd::bitType());recordScalar(loop.live);}
+    classicals[loop.done]=b.copy(b.constInt(1),pd::bitType());recordScalar(loop.done);loop.mayTransfer=true;++flowEpoch;
+  }
+  void parseDiscard(){
+    consume();const auto reference=parseQubitRef();if(!reference)return;
+    const auto& [name,index]=*reference;
+    if(!qreg.count(name)){err("discard requires a live quantum register");return;}
+    if(runtimeDepth&&quantumScope[name]<runtimeDepth){err("conditional discard of an outer quantum binding requires matching ownership on every branch; discard a branch-local register or reset explicitly");return;}
+    const auto count=qreg.at(name).size();
+    for(std::size_t slot=0;slot<count;++slot)if(index<0||slot==static_cast<std::size_t>(index)){
+      auto value=getQubitSlot(name,static_cast<int>(slot),cur());if(value==pd::kInvalidValue)return;
+      reusableQubits.push_back(b.reset(value));qreg.at(name)[slot]=pd::kInvalidValue;
+    }
+  }
 
   // --- Top-level ---------------------------------------------------------
   void parseProgram();
@@ -191,6 +276,8 @@ struct Parser {
   void parseWhileStmt();
   void parseDefStmt();
   void parseCallStmt(const std::string& name);
+  pd::Type parseFunctionType();
+  std::vector<pd::ValueId> parseTypedCall(const std::string& name);
   void parseAssignStmt(const std::string& name);
   void parseReturnStmt();
   void parseBlock();  // expects '{', parses stmts, expects '}'
@@ -207,6 +294,48 @@ struct Parser {
 };
 
 // --- Compile-time fold ----------------------------------------------------
+
+std::optional<std::int64_t> Parser::foldIntegerFactor() {
+  const auto start=pos;
+  if(accept(Tok::Minus)){
+    if(cur().kind==Tok::Integer&&cur().text=="9223372036854775808"){
+      consume();return std::numeric_limits<std::int64_t>::min();
+    }
+    if(auto value=foldIntegerFactor())return spinor::dialect::checkedInteger("-",0,*value);
+  }else if(cur().kind==Tok::Integer){
+    const auto value=spinor::dialect::parseExactInteger<std::uint64_t>(cur().text);
+    if(value<=static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())){consume();return static_cast<std::int64_t>(value);}
+  }else if(accept(Tok::LParen)){
+    const auto value=foldIntegerExpr();if(value&&accept(Tok::RParen))return value;
+  }else if(cur().kind==Tok::Identifier){
+    const auto found=classicals.find(cur().text);
+    if(found!=classicals.end())if(auto value=integerValue(found->second)){consume();return value;}
+  }
+  pos=start;return std::nullopt;
+}
+std::optional<std::int64_t> Parser::foldIntegerTerm() {
+  const auto start=pos;auto value=foldIntegerFactor();
+  if(!value)return std::nullopt;
+  while(cur().kind==Tok::Star||cur().kind==Tok::Slash){
+    const auto operation=consume().text;const auto rhs=foldIntegerFactor();
+    if(!rhs){pos=start;return std::nullopt;}
+    // Nonintegral division belongs to the angle evaluator; exact integer
+    // overflow and division by zero remain diagnostics, never float fallback.
+    if(operation=="/"&&*rhs&& !(*value==std::numeric_limits<std::int64_t>::min()&&*rhs==-1)&&*value%*rhs!=0){pos=start;return std::nullopt;}
+    value=spinor::dialect::checkedInteger(operation,*value,*rhs);
+  }
+  return value;
+}
+std::optional<std::int64_t> Parser::foldIntegerExpr() {
+  const auto start=pos;auto value=foldIntegerTerm();
+  if(!value)return std::nullopt;
+  while(cur().kind==Tok::Plus||cur().kind==Tok::Minus){
+    const auto operation=consume().text;const auto rhs=foldIntegerTerm();
+    if(!rhs){pos=start;return std::nullopt;}
+    value=spinor::dialect::checkedInteger(operation,*value,*rhs);
+  }
+  return value;
+}
 
 std::optional<double> Parser::foldFactor() {
   // Snapshot pos so we can rewind if we cannot fold.
@@ -258,6 +387,9 @@ std::optional<double> Parser::foldTerm() {
 }
 
 std::optional<double> Parser::foldExpr() {
+  const auto start=pos;
+  if(auto exact=foldIntegerExpr())return static_cast<double>(*exact);
+  pos=start;
   auto a = foldTerm();
   if (!a) return std::nullopt;
   while (cur().kind == Tok::Plus || cur().kind == Tok::Minus) {
@@ -277,8 +409,25 @@ std::optional<double> Parser::foldExpr() {
 // in a `cmp` predicate context, but the parser is permissive — the
 // type checker will reject misuse).
 pd::ValueId Parser::parseFactor() {
+  if(accept(Tok::Tilde)){
+    auto value=parseFactor();if(mod.typeOf(value).kind!=pd::TypeKind::UInt){err("bitwise complement requires an explicit uint[width] value");return value;}return b.bitNot(value);
+  }
+  if(accept(Tok::Bang)){
+    auto value=parseFactor();return b.cmp("==",value,b.constInt(0));
+  }
+  if(cur().kind==Tok::UInt){
+    consume();expect(Tok::LBracket,"'['");const auto width=foldExpr();expect(Tok::RBracket,"']'");expect(Tok::LParen,"'('");
+    if(!width||*width<1||*width>64||std::floor(*width)!=*width){err("uint width must be an integer in [1,64]");return b.constInt(0);}
+    pd::ValueId value;
+    if(cur().kind==Tok::Integer&&peek(1).kind==Tok::RParen)value=b.constUInt(spinor::dialect::parseExactInteger<std::uint64_t>(consume().text),static_cast<unsigned>(*width));
+    else value=coerce(parsePredicate(),pd::uintType(static_cast<unsigned>(*width)));
+    expect(Tok::RParen,"')'");return value;
+  }
   if (cur().kind == Tok::Minus) {
     consume();
+    if(cur().kind==Tok::Integer&&cur().text=="9223372036854775808"){
+      consume();return b.constInt(std::numeric_limits<std::int64_t>::min());
+    }
     pd::ValueId v = parseFactor();
     pd::ValueId zero = b.constInt(0);
     return b.binOp("-", zero, v);
@@ -288,19 +437,26 @@ pd::ValueId Parser::parseFactor() {
     return b.constAngle(std::numbers::pi);
   }
   if (cur().kind == Tok::Integer) {
-    return b.constInt(static_cast<int64_t>(std::stoll(consume().text)));
+    if(unsignedLiteralWidth)return b.constUInt(spinor::dialect::parseExactInteger<std::uint64_t>(consume().text),*unsignedLiteralWidth);
+    return b.constInt(spinor::dialect::parseExactInteger<std::int64_t>(consume().text));
   }
   if (cur().kind == Tok::Real) {
     return b.constAngle(std::stod(consume().text));
   }
   if (cur().kind == Tok::LParen) {
     consume();
-    pd::ValueId v = parseExpr();
+    pd::ValueId v = parsePredicate();
     expect(Tok::RParen, "')'");
     return v;
   }
   if (cur().kind == Tok::Identifier) {
     std::string name = consume().text;
+    if(name=="true"||name=="false")return b.copy(b.constInt(name=="true"),pd::bitType());
+    if(cur().kind==Tok::LParen&&funcs.count(name)&&funcs.at(name).typedResults){
+      const auto values=parseTypedCall(name);
+      if(values.size()!=1){err("helper expression requires exactly one classical result; use tuple assignment for multiple results");return b.constInt(0);}
+      return values[0];
+    }
     // Indexed reference: name[expr]
     if (cur().kind == Tok::LBracket) {
       consume();
@@ -350,15 +506,62 @@ pd::ValueId Parser::parseTerm() {
   return a;
 }
 
-pd::ValueId Parser::parseExpr() {
-  pd::ValueId a = parseTerm();
-  while (cur().kind == Tok::Plus || cur().kind == Tok::Minus) {
-    std::string op = cur().kind == Tok::Plus ? "+" : "-";
-    consume();
-    pd::ValueId b_ = parseTerm();
-    a = b.binOp(op, a, b_);
+pd::ValueId Parser::parseExpr(){return parseBinary(1);}
+pd::ValueId Parser::parseBinary(int minimum){
+  auto lhs=parseFactor();
+  auto precedence=[](Tok token){switch(token){case Tok::Pipe:return 1;case Tok::Caret:return 2;case Tok::Amp:return 3;case Tok::Shl:case Tok::Shr:return 4;case Tok::Plus:case Tok::Minus:return 5;case Tok::Star:case Tok::Slash:return 6;default:return 0;}};
+  while(precedence(cur().kind)>=minimum){
+    const auto level=precedence(cur().kind);if(!level)break;const auto symbol=consume().text;
+    const auto oldWidth=unsignedLiteralWidth;if(mod.typeOf(lhs).kind==pd::TypeKind::UInt)unsignedLiteralWidth=mod.typeOf(lhs).width;
+    auto rhs=parseBinary(level+1);unsignedLiteralWidth=oldWidth;
+    lhs=b.binOp(symbol,lhs,rhs);
   }
-  return a;
+  return lhs;
+}
+
+pd::ValueId Parser::parsePredicate(){
+  auto value=parseExpr();
+  if(cur().kind==Tok::EqEq||cur().kind==Tok::NotEq||cur().kind==Tok::Lt||cur().kind==Tok::Gt||cur().kind==Tok::Le||cur().kind==Tok::Ge){
+    auto symbol=consume().text;const auto oldWidth=unsignedLiteralWidth;if(mod.typeOf(value).kind==pd::TypeKind::UInt)unsignedLiteralWidth=mod.typeOf(value).width;
+    auto rhs=parseExpr();unsignedLiteralWidth=oldWidth;
+    if(mod.typeOf(value).kind==pd::TypeKind::UInt&&mod.typeOf(rhs).kind==pd::TypeKind::Int)rhs=coerce(rhs,mod.typeOf(value));
+    value=b.cmp(symbol,value,rhs);
+  }
+  return value;
+}
+pd::ValueId Parser::coerce(pd::ValueId value,pd::Type type){
+  if(type.kind==pd::TypeKind::Bit&&mod.typeOf(value).kind==pd::TypeKind::UInt){err("bool requires a Boolean value; compare uint explicitly with zero instead of implicitly truncating it");return value;}
+  if(type.kind==pd::TypeKind::Angle){err("runtime floating-point values are unsupported; angles must be compile-time constants");return value;}
+  if(type.kind==pd::TypeKind::Int){
+    if(mod.typeOf(value).kind!=pd::TypeKind::Bit&&mod.typeOf(value).kind!=pd::TypeKind::Int){err("runtime int accepts only a measured-bit snapshot; use explicit uint[width] for arithmetic");return value;}
+  }
+  if(auto exact=integerValue(value)){
+    if(type.kind==pd::TypeKind::UInt){
+      if(*exact<0|| (type.width<64&&static_cast<std::uint64_t>(*exact)>((std::uint64_t(1)<<type.width)-1))){err("uint literal does not fit its declared width");return value;}
+      return b.constUInt(static_cast<std::uint64_t>(*exact),type.width);
+    }
+    if(type.kind==pd::TypeKind::Bit&&*exact!=0&&*exact!=1){err("bool initializer must be 0 or 1");return value;}
+  }
+  return b.copy(value,type);
+}
+void Parser::parseTypedDecl(){
+  const bool uint=consume().kind==Tok::UInt;pd::Type type=pd::bitType();
+  if(uint){expect(Tok::LBracket,"'['");auto width=foldExpr();expect(Tok::RBracket,"']'");
+    if(!width||*width<1||*width>64||std::floor(*width)!=*width){err("uint width must be an integer in [1,64]");return;}type=pd::uintType(static_cast<unsigned>(*width));}
+  if(cur().kind!=Tok::Identifier){err("expected scalar name");return;}const auto name=consume().text;
+  expect(Tok::Equals,"'='");const auto oldWidth=unsignedLiteralWidth;if(uint)unsignedLiteralWidth=type.width;
+  classicals[name]=coerce(parsePredicate(),type);unsignedLiteralWidth=oldWidth;scalarTypes[name]=type;ctConst.erase(name);recordScalar(name,true);
+}
+void Parser::joinClassicals(pd::ValueId predicate,const std::unordered_map<std::string,pd::ValueId>& before,const std::unordered_map<std::string,pd::ValueId>& thenValues,const std::unordered_map<std::string,pd::ValueId>& elseValues){
+  classicals=before;
+  for(const auto& [name,value]:before){
+    const auto yes=thenValues.at(name),no=elseValues.at(name);
+    if(yes==no){classicals[name]=yes;continue;}
+    const auto type=scalarTypes.count(name)?scalarTypes.at(name):mod.typeOf(value);
+    if(type.kind==pd::TypeKind::Angle||(type.kind==pd::TypeKind::Int&&integerValue(value))){err("runtime branches cannot change compile-time scalar bindings; declare uint[width] for controller arithmetic");continue;}
+    if(mod.typeOf(yes)!=mod.typeOf(no)){err("runtime branch values must have identical types and widths");continue;}
+    classicals[name]=b.select(predicate,yes,no);ctConst.erase(name);recordScalar(name);
+  }
 }
 
 // --- Slot accessors ------------------------------------------------------
@@ -376,6 +579,7 @@ pd::ValueId Parser::getQubitSlot(const std::string& name, int idx,
                pd::Location{filename, at.line, at.column});
     return pd::kInvalidValue;
   }
+  if(pd::ValueId(it->second[idx])==pd::kInvalidValue){err("quantum value was discarded and cannot be used again: "+name);return pd::kInvalidValue;}
   return it->second[idx];
 }
 void Parser::setQubitSlot(const std::string& name, int idx, pd::ValueId v) {
@@ -434,13 +638,11 @@ void Parser::parseHeader() {
 // --- Declarations --------------------------------------------------------
 
 void Parser::parseDeclQubit() {
-  if (runtimeDepth) {
-    err("runtime branches cannot allocate or redeclare quantum registers; declare the register before the branch");
-    fatal = true; return;
-  }
   consume();  // 'qubit'
   if (cur().kind != Tok::Identifier) { err("expected register name"); return; }
   std::string name = consume().text;
+  if(qreg.count(name)&&std::all_of(qreg.at(name).begin(),qreg.at(name).end(),[](const auto& value){return pd::ValueId(value)==pd::kInvalidValue;}))qreg.erase(name);
+  if(runtimeDepth&&(qreg.count(name)||creg.count(name)||classicals.count(name))){err("runtime branches cannot redeclare or shadow an existing register or scalar");fatal=true;return;}
   if (!expect(Tok::LBracket, "'['")) return;
   auto sizeOpt = foldExpr();
   if (!expect(Tok::RBracket, "']'")) return;
@@ -452,11 +654,15 @@ void Parser::parseDeclQubit() {
   std::vector<pd::ValueId> slots;
   slots.reserve(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i) {
-    pd::ValueId v = b.allocQubit();
+    pd::ValueId v;
+    if(reusableQubits.empty())v=b.allocQubit();
+    else{v=b.reset(reusableQubits.back());reusableQubits.pop_back();}
+    if(runtimeDepth||!inlineFrames.empty())mod.opMut(mod.producerOf(v)).attributes.push_back({"fresh",1.0});
     mod.setName(v, name + std::to_string(i));
     slots.push_back(v);
   }
   qreg[name] = std::move(slots);
+  quantumScope[name]=runtimeDepth;
 }
 
 void Parser::parseDeclBit() {
@@ -494,11 +700,19 @@ void Parser::parseDeclClassical(bool isAngle) {
   if (cur().kind != Tok::Identifier) { err("expected name"); return; }
   std::string name = consume().text;
   if (!expect(Tok::Equals, "'='")) return;
+  if(!isAngle){
+    const auto start=pos;
+    if(auto exact=foldIntegerExpr()){
+      classicals[name]=b.constInt(*exact);cacheInteger(name,*exact);
+      recordScalar(name,true);return;
+    }
+    pos=start;
+  }
   // Try to compile-time fold first (so we can use it as a `for` bound).
   std::size_t save = pos;
   auto folded = foldExpr();
   if (folded && (cur().kind == Tok::Newline || cur().kind == Tok::Eof)) {
-    if (!std::isfinite(*folded) || (!isAngle && std::floor(*folded) != *folded)) {
+    if (!std::isfinite(*folded) || (!isAngle && (std::floor(*folded) != *folded||std::abs(*folded)>9007199254740991.0))) {
       err("classical initializer must match its finite numeric type"); return;
     }
     ctConst[name] = *folded;
@@ -509,8 +723,8 @@ void Parser::parseDeclClassical(bool isAngle) {
     pos = save;
     pd::ValueId v = parseExpr();
     if (mod.typeOf(v).kind == pd::TypeKind::Bit) {
-      err("copying measured data into a numeric scalar is unsupported; use a separate measurement destination instead of a saved scalar alias");
-      return;
+      if(isAngle){err("runtime floating-point angles are unsupported; use bool or uint for measured data");return;}
+      classicals[name]=b.copy(v,pd::intType());scalarTypes[name]=pd::intType();recordScalar(name,true);return;
     }
     classicals[name] = v;
   }
@@ -529,6 +743,7 @@ std::optional<std::pair<std::string, int>> Parser::parseQubitRef() {
   if (cur().kind == Tok::LBracket) {
     consume();
     auto v = foldExpr();
+    if(!v){err("dynamic qubit indexing is unsupported; qubit index must be a compile-time integer");return std::nullopt;}
     if (!expect(Tok::RBracket, "']'")) return std::nullopt;
     if (!v || !std::isfinite(*v) || std::floor(*v) != *v ||
         *v < 0 || *v > std::numeric_limits<int>::max()) {
@@ -759,6 +974,25 @@ void Parser::parseIfStmt() {
   // Resolve static conditions before constructing SSA so the untaken branch
   // cannot change qubit bindings or leak a value into the following code.
   const auto conditionStart = pos;
+  // Integer comparisons are resolved without the angle evaluator's double
+  // conversion. This also preserves distinctions above 2^53.
+  bool helperPredicate=false;
+  for(auto token=conditionStart;token+1<toks.size()&&toks[token].kind!=Tok::LBrace;++token)
+    if(toks[token].kind==Tok::Identifier&&toks[token+1].kind==Tok::LParen&&funcs.count(toks[token].text)&&funcs.at(toks[token].text).typedResults)helperPredicate=true;
+  if(!helperPredicate){
+    const auto left=parseExpr();const auto comparison=cur().kind;
+    if(comparison==Tok::EqEq||comparison==Tok::NotEq||comparison==Tok::Lt||comparison==Tok::Gt||comparison==Tok::Le||comparison==Tok::Ge){
+      consume();const auto oldWidth=unsignedLiteralWidth;if(mod.typeOf(left).kind==pd::TypeKind::UInt)unsignedLiteralWidth=mod.typeOf(left).width;
+      const auto right=parseExpr();unsignedLiteralWidth=oldWidth;
+      const auto a=integerValue(left),b_=integerValue(right);
+      if(a&&b_&&accept(Tok::RParen)){
+        const bool take=comparison==Tok::EqEq?*a==*b_:comparison==Tok::NotEq?*a!=*b_:comparison==Tok::Lt?*a<*b_:comparison==Tok::Gt?*a>*b_:comparison==Tok::Le?*a<=*b_:*a>=*b_;
+        if(take)parseBlock();else skipBlock();skipNewlines();
+        if(accept(Tok::Else)){if(take)skipBlock();else parseBlock();}return;
+      }
+    }
+    pos=conditionStart;
+  }
   auto foldedLeft = foldExpr();
   const auto comparison = cur().kind;
   if (foldedLeft && (comparison == Tok::EqEq || comparison == Tok::NotEq ||
@@ -781,32 +1015,27 @@ void Parser::parseIfStmt() {
     }
   }
   pos = conditionStart;
-  pd::ValueId lhs = parseExpr();
-  std::string cmpOp = "==";
-  if (cur().kind == Tok::EqEq) { cmpOp = "=="; consume(); }
-  else if (cur().kind == Tok::NotEq) { cmpOp = "!="; consume(); }
-  else if (cur().kind == Tok::Lt) { cmpOp = "<"; consume(); }
-  else if (cur().kind == Tok::Gt) { cmpOp = ">"; consume(); }
-  else if (cur().kind == Tok::Le) { cmpOp = "<="; consume(); }
-  else if (cur().kind == Tok::Ge) { cmpOp = ">="; consume(); }
-  pd::ValueId rhs = parseExpr();
-  expect(Tok::RParen, "')'");
-  pd::ValueId pred = b.cmp(cmpOp, lhs, rhs);
-  pd::OpId ifId = b.beginIf(pred);
-  auto staticBefore=classicals;auto qBefore=qreg;auto cBefore=creg;
-  ++runtimeDepth;
-  parseBlock();
-  skipNewlines();
-  if (cur().kind == Tok::Else) {
-    consume();
-    b.elseIf(ifId);
-    parseBlock();
-  }
-  --runtimeDepth;
-  if(classicals!=staticBefore||qreg.size()!=qBefore.size()||creg.size()!=cBefore.size())
-    err("runtime branches cannot declare registers or change compile-time scalar bindings");
-  b.endIf(ifId);
-  if (cur().kind == Tok::Newline) consume();
+  pd::ValueId pred=parsePredicate();
+  expect(Tok::RParen,"')'");
+  if(mod.typeOf(pred).kind!=pd::TypeKind::Bit)pred=b.cmp("!=",pred,b.constInt(0));
+  pd::OpId ifId=b.beginIf(pred);
+  const auto before=classicals;const auto constantsBefore=ctConst;
+  const auto bitsBefore=snapshotBits();
+  const auto registersBefore=qreg;
+  const auto typesBefore=scalarTypes;
+  ++runtimeDepth;parseBlock();skipNewlines();
+  const auto thenValues=classicals;
+  const auto thenBits=snapshotBits();restoreBits(bitsBefore);
+  classicals=before;ctConst=constantsBefore;scalarTypes=typesBefore;qreg=registersBefore;
+  if(accept(Tok::Else)){b.elseIf(ifId);parseBlock();}
+  const auto elseValues=classicals;
+  const auto elseBits=snapshotBits();
+  --runtimeDepth;b.endIf(ifId);
+  scalarTypes=typesBefore;ctConst=constantsBefore;
+  joinClassicals(pred,before,thenValues,elseValues);
+  joinBits(pred,bitsBefore,thenBits,elseBits);
+  qreg=registersBefore;
+  if(cur().kind==Tok::Newline)consume();
 }
 
 void Parser::parseForStmt() {
@@ -814,12 +1043,15 @@ void Parser::parseForStmt() {
   if (cur().kind != Tok::Identifier) { err("expected loop variable"); return; }
   std::string var = consume().text;
   if (!expect(Tok::In, "'in'")) return;
-  auto loOpt = foldExpr();
+  auto bound=[&]() -> std::optional<std::int64_t> {
+    const auto start=pos;if(auto exact=foldIntegerExpr())return exact;pos=start;
+    const auto value=foldExpr();if(value&&std::isfinite(*value)&&std::floor(*value)==*value&&std::abs(*value)<=9007199254740991.0)return static_cast<std::int64_t>(*value);
+    return std::nullopt;
+  };
+  auto loOpt = bound();
   if (!expect(Tok::DotDot, "'..'")) return;
-  auto hiOpt = foldExpr();
-  if (!loOpt || !hiOpt || !std::isfinite(*loOpt) || !std::isfinite(*hiOpt) ||
-      std::floor(*loOpt) != *loOpt || std::floor(*hiOpt) != *hiOpt ||
-      std::abs(*loOpt) > 9007199254740991.0 || std::abs(*hiOpt) > 9007199254740991.0) {
+  auto hiOpt = bound();
+  if (!loOpt || !hiOpt) {
     err("for-loop bounds must be compile-time integers"); return;
   }
   skipNewlines();
@@ -832,7 +1064,7 @@ void Parser::parseForStmt() {
   for (auto value = static_cast<std::int64_t>(*loOpt);
        value < static_cast<std::int64_t>(*hiOpt) && !diag.hasErrors() && !inlineReturned(); ++value) {
     if (++expandedIterations > 100000) { err("static loop expansion exceeds 100000 iterations"); break; }
-    ctConst[var] = static_cast<double>(value);
+    cacheInteger(var,value);
     classicals[var] = b.constInt(value);
     recordScalar(var);
     pos = bodyStart;
@@ -858,11 +1090,25 @@ void Parser::skipBlock() {
 }
 
 void Parser::parseWhileStmt() {
+  // The unprefixed form is canonical; keep static while for compatibility.
+  {auto scan=pos;int depth=0;bool bounded=false;
+    while(scan<toks.size()&&toks[scan].kind!=Tok::LBrace&&toks[scan].kind!=Tok::Eof){if(toks[scan].kind==Tok::MaxIterations)bounded=true;++scan;}
+    if(bounded){parseBoundedWhile();return;}}
   consume();
   if (!expect(Tok::LParen, "'('")) return;
   const auto conditionStart = pos;
   auto condition = [&]() -> std::optional<bool> {
     pos = conditionStart;
+    if(const auto left=foldIntegerExpr()){
+      const auto comparison=consume().kind;const auto right=foldIntegerExpr();
+      if(right&&accept(Tok::RParen))switch(comparison){
+        case Tok::EqEq:return *left==*right;case Tok::NotEq:return *left!=*right;
+        case Tok::Lt:return *left<*right;case Tok::Gt:return *left>*right;
+        case Tok::Le:return *left<=*right;case Tok::Ge:return *left>=*right;
+        default:break;
+      }
+    }
+    pos=conditionStart;
     auto left = foldExpr();
     const auto comparison = consume().kind;
     auto right = foldExpr();
@@ -901,7 +1147,57 @@ void Parser::parseWhileStmt() {
   if (cur().kind == Tok::Newline) consume();
 }
 
+void Parser::parseBoundedWhile(){
+  accept(Tok::Bounded);if(!expect(Tok::While,"'while'"))return;
+  if(!expect(Tok::LParen,"'('"))return;
+  const auto conditionStart=pos;std::size_t parentheses=1;
+  while(cur().kind!=Tok::Eof&&parentheses){if(cur().kind==Tok::LParen)++parentheses;else if(cur().kind==Tok::RParen){if(!--parentheses)break;}consume();}
+  if(!expect(Tok::RParen,"')'"))return;
+  if(!expect(Tok::MaxIterations,"'max_iterations'"))return;
+  const auto bound=foldExpr();
+  if(!bound||!std::isfinite(*bound)||std::floor(*bound)!=*bound||*bound<=0||*bound>operationBudget){err("bounded while max_iterations must be a positive compile-time integer within the expanded operation budget");return;}
+  const auto bodyStart=pos;skipBlock();const auto afterBody=pos;
+  const auto loopId=expandedCalls++;
+  const auto liveName=freshName("loop_live"),doneName=freshName("iteration_done");
+  classicals[liveName]=b.copy(b.constInt(1),pd::bitType());scalarTypes[liveName]=pd::bitType();
+  classicals[doneName]=b.copy(b.constInt(0),pd::bitType());scalarTypes[doneName]=pd::bitType();
+  loopFrames.push_back({liveName,doneName,false,inlineFrames.size()});
+  for(std::size_t iteration=0;iteration<static_cast<std::size_t>(*bound)&&!diag.hasErrors();++iteration){
+    if(mod.numOps()>operationBudget){err("bounded while exceeds QSTACK_EXPANDED_OPERATION_BUDGET");return;}
+    const auto live=classicals.at(liveName);const auto conditionGuard=b.beginIf(live);
+    pos=conditionStart;auto predicate=parsePredicate();
+    if(mod.typeOf(predicate).kind!=pd::TypeKind::Bit)predicate=b.cmp("!=",predicate,b.constInt(0));
+    b.endIf(conditionGuard);predicate=b.select(live,predicate,b.copy(b.constInt(0),pd::bitType()));
+    classicals[liveName]=predicate;recordScalar(liveName);
+    classicals[doneName]=b.copy(b.constInt(0),pd::bitType());loopFrames.back().mayTransfer=false;
+    const auto before=classicals;const auto constantsBefore=ctConst;const auto typesBefore=scalarTypes;const auto bitsBefore=snapshotBits();const auto registersBefore=qreg;
+    auto marker=b.beginIf(predicate);++runtimeDepth;pos=bodyStart;parseBlock();--runtimeDepth;b.endIf(marker);
+    const auto thenValues=classicals;const auto thenBits=snapshotBits();
+    classicals=before;ctConst=constantsBefore;scalarTypes=typesBefore;qreg=registersBefore;
+    joinClassicals(predicate,before,thenValues,before);joinBits(predicate,bitsBefore,thenBits,bitsBefore);
+    if(inlineReturned()){err("return inside bounded runtime loops requires explicit loop-exit normalization");return;}
+  }
+  const auto live=classicals.at(liveName);const auto conditionGuard=b.beginIf(live);
+  pos=conditionStart;auto exhausted=parsePredicate();
+  if(mod.typeOf(exhausted).kind!=pd::TypeKind::Bit)exhausted=b.cmp("!=",exhausted,b.constInt(0));
+  b.endIf(conditionGuard);exhausted=b.select(live,exhausted,b.copy(b.constInt(0),pd::bitType()));b.output("loop_exhausted_"+std::to_string(loopId),exhausted,"loop_exhausted");
+  loopFrames.pop_back();classicals.erase(liveName);classicals.erase(doneName);scalarTypes.erase(liveName);scalarTypes.erase(doneName);
+  pos=afterBody;
+}
+
 // --- Function definition / call ------------------------------------------
+
+pd::Type Parser::parseFunctionType(){
+  if(accept(Tok::Qubit))return pd::qubitType();
+  if(accept(Tok::Bit)||accept(Tok::Bool))return pd::bitType();
+  if(accept(Tok::Int))return pd::intType();
+  if(accept(Tok::Angle))return pd::angleType();
+  if(accept(Tok::UInt)){
+    expect(Tok::LBracket,"'['");const auto width=foldIntegerExpr();expect(Tok::RBracket,"']'");
+    if(!width||*width<1||*width>64){err("helper uint width must be in [1,64]");return pd::uintType(1);}return pd::uintType(static_cast<unsigned>(*width));
+  }
+  err("expected parameter/result type (qubit/bool/bit/uint[width]/int/angle)");return pd::intType();
+}
 
 void Parser::parseDefStmt() {
   if (!inlineFrames.empty()) {
@@ -916,12 +1212,7 @@ void Parser::parseDefStmt() {
   if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::Builder::Param> params;
   while (cur().kind != Tok::RParen) {
-    pd::Type ty = pd::qubitType();
-    if      (cur().kind == Tok::Qubit) { ty = pd::qubitType(); consume(); }
-    else if (cur().kind == Tok::Bit)   { ty = pd::bitType();   consume(); }
-    else if (cur().kind == Tok::Int)   { ty = pd::intType();   consume(); }
-    else if (cur().kind == Tok::Angle) { ty = pd::angleType(); consume(); }
-    else { err("expected parameter type (qubit/bit/int/angle)"); return; }
+    const pd::Type ty=parseFunctionType();if(diag.hasErrors())return;
     if (cur().kind != Tok::Identifier) { err("expected parameter name"); return; }
     std::string pname = consume().text;
     if (std::any_of(params.begin(), params.end(), [&](const auto& p) { return p.name == pname; })) {
@@ -931,10 +1222,19 @@ void Parser::parseDefStmt() {
     if (!accept(Tok::Comma)) break;
   }
   if (!expect(Tok::RParen, "')'")) return;
-  skipNewlines();
   FuncDecl fd;
   fd.name = name;
   fd.params = params;
+  if(accept(Tok::Minus)){
+    if(!expect(Tok::Gt,"'>' in return signature"))return;
+    fd.typedResults=true;const bool tuple=accept(Tok::LParen);
+    do{fd.returnTypes.push_back(parseFunctionType());}while(tuple&&accept(Tok::Comma));
+    if(tuple)expect(Tok::RParen,"')'");
+    const auto quantumParams=std::count_if(params.begin(),params.end(),[](const auto& p){return p.type.kind==pd::TypeKind::Qubit;});
+    const auto quantumResults=std::count(fd.returnTypes.begin(),fd.returnTypes.end(),pd::qubitType());
+    if(quantumParams!=quantumResults){err("text helper must return one unique qubit per qubit parameter; list classical results in the return signature too");return;}
+  }
+  skipNewlines();
   fd.body_start = pos;
   fd.specialize = std::any_of(params.begin(), params.end(), [](const auto& p) {
     return p.type.kind != pd::TypeKind::Qubit;
@@ -942,6 +1242,12 @@ void Parser::parseDefStmt() {
   skipBlock();
   fd.body_end = pos;
   pos = fd.body_start;
+  {std::size_t depth=0;for(auto token=fd.body_start;token<fd.body_end;++token){
+    if(toks[token].kind==Tok::LBrace)++depth;
+    else if(toks[token].kind==Tok::RBrace)--depth;
+    else if(toks[token].kind==Tok::Return&&depth>1)fd.normalizeReturns=true;
+  }}
+  if(fd.normalizeReturns)fd.specialize=true;
   // A wrapper around a template and a function using lexical variables
   // also need call-time expansion. Pure qubit helpers retain Def/Call IR.
   for (auto token = fd.body_start; token < fd.body_end; ++token) {
@@ -954,6 +1260,7 @@ void Parser::parseDefStmt() {
     if (helper != funcs.end() && helper->second.specialize && toks[token + 1].kind == Tok::LParen)
       fd.specialize = true;
   }
+  if(fd.typedResults){fd.specialize=false;fd.normalizeReturns=false;}
   if (fd.specialize) {
     fd.capturedQreg = qreg;
     fd.capturedCreg = creg;
@@ -967,6 +1274,7 @@ void Parser::parseDefStmt() {
   const auto savedQreg = qreg;
   const auto savedCreg = creg;
   const auto savedClassicals = classicals;
+  const auto savedScalarTypes = scalarTypes;
   const auto savedConstants = ctConst;
   const auto savedScalars = scalarBindings;
   const auto savedBitTargets = bitTargets;
@@ -974,7 +1282,7 @@ void Parser::parseDefStmt() {
   for (auto& [_, reg] : qreg) reg = reg.clone();
   for (auto& [_, reg] : creg) reg = reg.clone();
   for (auto& [_, binding] : scalarBindings) binding = std::make_shared<ScalarBinding>(*binding);
-  pd::OpId defId = b.beginDef(name, std::span<const pd::Builder::Param>(params.data(), params.size()));
+  pd::OpId defId = fd.typedResults?b.beginTypedDef(name,params,fd.returnTypes):b.beginDef(name,params);
   for (std::size_t i = 0; i < params.size(); ++i) {
     pd::ValueId pv = b.paramValue(defId, i);
     qreg.erase(params[i].name); creg.erase(params[i].name);
@@ -982,11 +1290,13 @@ void Parser::parseDefStmt() {
     bitTargets.erase(params[i].name);
     scalarBindings.erase(params[i].name);
     if (params[i].type.kind == pd::TypeKind::Qubit) qreg[params[i].name] = {pv};
-    else if (params[i].type.kind == pd::TypeKind::Bit) creg[params[i].name] = {pv};
-    else classicals[params[i].name] = pv;
+    else if (params[i].type.kind == pd::TypeKind::Bit&&!fd.typedResults) creg[params[i].name] = {pv};
+    else {classicals[params[i].name] = pv;scalarTypes[params[i].name]=params[i].type;}
   }
-  parseBlock();
+  const auto savedReturnTypes=activeReturnTypes;activeReturnTypes=fd.returnTypes;
+  parseBlock();activeReturnTypes=savedReturnTypes;
   qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
+  scalarTypes = savedScalarTypes;
   ctConst = savedConstants; bitTargets = savedBitTargets;
   scalarBindings = savedScalars;
   b.endDef(defId);
@@ -995,7 +1305,36 @@ void Parser::parseDefStmt() {
   if (cur().kind == Tok::Newline) consume();
 }
 
+std::vector<pd::ValueId> Parser::parseTypedCall(const std::string& name){
+  const auto function=funcs.at(name);expect(Tok::LParen,"'('");
+  std::vector<pd::ValueId> args;std::vector<std::pair<std::string,int>> quantumRefs;
+  while(cur().kind!=Tok::RParen&&cur().kind!=Tok::Eof){
+    if(args.size()>=function.params.size()){err("too many helper arguments: "+name);return {};}
+    const auto type=function.params[args.size()].type;
+    if(type.kind==pd::TypeKind::Qubit){
+      const auto ref=parseQubitRef();if(!ref)return {};const auto [reg,index]=*ref;
+      if(!qreg.count(reg)||(index<0&&qreg.at(reg).size()!=1)){err("helper qubit parameter requires one live quantum slot");return {};}
+      const auto slot=index<0?0:index;args.push_back(getQubitSlot(reg,slot,cur()));quantumRefs.push_back({reg,slot});
+    }else{
+      const auto previous=unsignedLiteralWidth;unsignedLiteralWidth=type.kind==pd::TypeKind::UInt?std::optional<unsigned>{type.width}:std::nullopt;
+      auto value=parsePredicate();unsignedLiteralWidth=previous;
+      if(mod.typeOf(value)!=type){
+        if(mod.typeOf(value).kind==pd::TypeKind::Int&&(type.kind==pd::TypeKind::UInt||type.kind==pd::TypeKind::Bit))value=coerce(value,type);
+        else{err("helper argument type or width mismatch; use an explicit cast");return {};}
+      }args.push_back(value);
+    }
+    if(!accept(Tok::Comma))break;
+  }
+  if(!expect(Tok::RParen,"')'")||args.size()!=function.params.size()){err("helper argument count mismatch: "+name);return {};}
+  auto result=b.call(name,args,function.returnTypes);std::vector<pd::ValueId> classical;std::size_t quantum=0;
+  for(std::size_t i=0;i<result.size();++i){
+    if(function.returnTypes[i].kind==pd::TypeKind::Qubit){const auto& [reg,slot]=quantumRefs.at(quantum++);setQubitSlot(reg,slot,result[i]);}
+    else classical.push_back(result[i]);
+  }return classical;
+}
+
 void Parser::parseCallStmt(const std::string& name) {
+  if(funcs.count(name)&&funcs.at(name).typedResults){parseTypedCall(name);if(cur().kind==Tok::Newline)consume();return;}
   if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::ValueId> args;
   std::vector<std::pair<std::string, int>> refs;
@@ -1046,9 +1385,10 @@ void Parser::parseCallStmt(const std::string& name) {
       const auto type = function.params[i].type.kind;
       const auto actual = mod.typeOf(args[i]).kind;
       if (type == pd::TypeKind::Int || type == pd::TypeKind::Angle) {
+        const auto exact=type==pd::TypeKind::Int?integerValue(args[i]):std::nullopt;
         if ((actual != pd::TypeKind::Int && actual != pd::TypeKind::Angle) ||
             !constants[i] || !std::isfinite(*constants[i]) ||
-            (type == pd::TypeKind::Int && (std::floor(*constants[i]) != *constants[i] ||
+            (type == pd::TypeKind::Int && !exact&&(std::floor(*constants[i]) != *constants[i] ||
                                          std::abs(*constants[i]) > 9007199254740991.0))) {
           err("function scalar argument must be bound to a finite value matching its parameter type"); return;
         }
@@ -1066,14 +1406,16 @@ void Parser::parseCallStmt(const std::string& name) {
     const auto savedQreg = qreg;
     const auto savedCreg = creg;
     const auto savedClassicals = classicals;
+    const auto savedScalarTypes = scalarTypes;
     const auto savedConstants = ctConst;
     const auto savedScalars = scalarBindings;
     const auto savedBitTargets = bitTargets;
     qreg = function.capturedQreg;
     creg = function.capturedCreg;
-    classicals.clear(); ctConst.clear(); scalarBindings.clear();
+    classicals.clear(); ctConst.clear(); scalarBindings.clear();scalarTypes.clear();
     for (const auto& [symbol, binding] : function.capturedScalars) {
       classicals[symbol] = binding->value;
+      scalarTypes[symbol] = mod.typeOf(binding->value);
       if (binding->constant) ctConst[symbol] = *binding->constant;
       scalarBindings[symbol] = std::make_shared<ScalarBinding>(*binding);
     }
@@ -1082,6 +1424,7 @@ void Parser::parseCallStmt(const std::string& name) {
       const auto& param = function.params[i];
       qreg.erase(param.name); creg.erase(param.name);
       classicals.erase(param.name); ctConst.erase(param.name); bitTargets.erase(param.name);
+      scalarTypes.erase(param.name);
       scalarBindings.erase(param.name);
       if (param.type.kind == pd::TypeKind::Qubit) {
         qreg[param.name] = Register::alias(savedQreg.at(refs[i].first), refs[i].second);
@@ -1090,12 +1433,19 @@ void Parser::parseCallStmt(const std::string& name) {
         const auto target = savedBitTargets.find(refs[i].first);
         if (target != savedBitTargets.end()) bitTargets[param.name] = {target->second.at(refs[i].second)};
       } else {
-        ctConst[param.name] = *constants[i];
+        if(param.type.kind==pd::TypeKind::Int){if(const auto exact=integerValue(args[i]))cacheInteger(param.name,*exact);else cacheInteger(param.name,static_cast<std::int64_t>(*constants[i]));}
+        else ctConst[param.name] = *constants[i];
         classicals[param.name] = args[i];
+        scalarTypes[param.name] = param.type;
         recordScalar(param.name, true);
       }
     }
-    inlineFrames.push_back({name, runtimeDepth});
+    InlineFrame newFrame{name,runtimeDepth};newFrame.normalizeReturns=function.normalizeReturns;
+    if(newFrame.normalizeReturns){
+      newFrame.done=freshName("returned");classicals[newFrame.done]=b.copy(b.constInt(0),pd::bitType());scalarTypes[newFrame.done]=pd::bitType();
+      for(const auto& param:function.params)if(param.type.kind==pd::TypeKind::Qubit)newFrame.quantumParams.push_back(param.name);
+    }
+    inlineFrames.push_back(std::move(newFrame));
     pos = function.body_start;
     parseBlock();
     auto frame = std::move(inlineFrames.back());
@@ -1119,29 +1469,26 @@ void Parser::parseCallStmt(const std::string& name) {
       if (std::find(results.begin(), results.begin() + i, results[i]) != results.begin() + i)
         err("function cannot return duplicate qubit aliases: " + name);
     if (runtimeDepth && results.size() == current.size() && !diag.hasErrors()) {
-      std::vector<std::size_t> wanted, stateAt;
-      for (auto value : results) {
-        const auto found = std::find(current.begin(), current.end(), value);
-        if (found == current.end()) {
-          err("runtime function return must be a permutation of its input qubits; fresh-wire substitution needs branch value merging");
-          break;
+      const auto argumentCount=current.size();
+      for(auto value:results)if(std::find(current.begin(),current.end(),value)==current.end())current.push_back(value);
+      std::vector<std::size_t> wanted,stateAt;
+      for(auto value:results)wanted.push_back(static_cast<std::size_t>(std::find(current.begin(),current.end(),value)-current.begin()));
+      for(std::size_t i=0;i<current.size();++i)stateAt.push_back(i);
+      for(std::size_t i=0;i<argumentCount;++i){
+        const auto found=std::find(stateAt.begin()+i,stateAt.end(),wanted[i]);const auto j=static_cast<std::size_t>(found-stateAt.begin());
+        if(i==j)continue;
+        const auto oldA=current[i],oldB=current[j];const auto swapped=b.swap(oldA,oldB);
+        current[i]=swapped.first;current[j]=swapped.second;
+        for(auto& [_,reg]:qreg)for(std::size_t slot=0;slot<reg.size();++slot){
+          if(pd::ValueId(reg[slot])==oldA)reg[slot]=swapped.first;
+          else if(pd::ValueId(reg[slot])==oldB)reg[slot]=swapped.second;
         }
-        wanted.push_back(static_cast<std::size_t>(found - current.begin()));
+        std::swap(stateAt[i],stateAt[j]);
       }
-      for (std::size_t i = 0; i < current.size(); ++i) stateAt.push_back(i);
-      if (!diag.hasErrors()) for (std::size_t i = 0; i < current.size(); ++i) {
-        const auto found = std::find(stateAt.begin() + i, stateAt.end(), wanted[i]);
-        const auto j = static_cast<std::size_t>(found - stateAt.begin());
-        if (i == j) continue;
-        auto swapped = b.swap(current[i], current[j]);
-        current[i] = swapped.first; current[j] = swapped.second;
-        setQubitSlot(quantumParams[i], 0, current[i]);
-        setQubitSlot(quantumParams[j], 0, current[j]);
-        std::swap(stateAt[i], stateAt[j]);
-      }
-      if (!diag.hasErrors()) results = std::move(current);
+      current.resize(argumentCount);results=std::move(current);
     }
     qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
+    scalarTypes = savedScalarTypes;
     ctConst = savedConstants; bitTargets = savedBitTargets;
     scalarBindings = savedScalars;
     pos = afterCall;
@@ -1170,21 +1517,21 @@ void Parser::parseCallStmt(const std::string& name) {
 }
 
 void Parser::parseAssignStmt(const std::string& name) {
-  expect(Tok::Equals, "'='");
-  const auto expressionStart = pos;
-  auto folded = foldExpr();
-  pos = expressionStart;
-  pd::ValueId v = parseExpr();
-  if (mod.typeOf(v).kind == pd::TypeKind::Bit) {
-    err("copying measured data into a numeric scalar is unsupported; use a separate measurement destination instead of a saved scalar alias");
-    return;
+  expect(Tok::Equals,"'='");
+  if(!classicals.count(name)){err("assignment requires a declared scalar: "+name);return;}
+  const auto expressionStart=pos;auto folded=foldExpr();pos=expressionStart;
+  const auto oldType=scalarTypes.count(name)?scalarTypes.at(name):mod.typeOf(classicals.at(name));
+  const auto oldWidth=unsignedLiteralWidth;if(oldType.kind==pd::TypeKind::UInt)unsignedLiteralWidth=oldType.width;
+  auto value=parsePredicate();unsignedLiteralWidth=oldWidth;
+  if(oldType.kind==pd::TypeKind::UInt||oldType.kind==pd::TypeKind::Bit||mod.typeOf(value).kind==pd::TypeKind::Bit){
+    value=coerce(value,oldType);ctConst.erase(name);scalarTypes[name]=oldType;
+  }else{
+    if(runtimeDepth){err("runtime branches cannot change compile-time scalar bindings; declare uint[width] for controller arithmetic");return;}
+    if(const auto exact=integerValue(value))cacheInteger(name,*exact);
+    else if(folded&&std::isfinite(*folded))ctConst[name]=*folded;else ctConst.erase(name);
   }
-  if (folded && std::isfinite(*folded)) ctConst[name] = *folded;
-  else ctConst.erase(name);
-  classicals[name] = v;
-  recordScalar(name);
-  b.assign(name, v);
-  if (cur().kind == Tok::Newline) consume();
+  classicals[name]=value;recordScalar(name);
+  if(cur().kind==Tok::Newline)consume();
 }
 
 void Parser::parseReturnStmt() {
@@ -1201,12 +1548,34 @@ void Parser::parseReturnStmt() {
       }
       vs.push_back(getQubitSlot(reg, idx == -1 ? 0 : idx, cur()));
     } else {
-      vs.push_back(parseExpr());
+      const auto expected=vs.size()<activeReturnTypes.size()?std::optional<pd::Type>{activeReturnTypes[vs.size()]}:std::nullopt;
+      const auto previous=unsignedLiteralWidth;if(expected&&expected->kind==pd::TypeKind::UInt)unsignedLiteralWidth=expected->width;
+      auto value=parsePredicate();unsignedLiteralWidth=previous;
+      if(expected&&mod.typeOf(value)!=*expected&&mod.typeOf(value).kind==pd::TypeKind::Int&&(expected->kind==pd::TypeKind::UInt||expected->kind==pd::TypeKind::Bit))value=coerce(value,*expected);
+      if(expected&&expected->kind==pd::TypeKind::Int&&mod.typeOf(value).kind==pd::TypeKind::Bit)value=b.copy(value,pd::intType());
+      vs.push_back(value);
     }
     if (!accept(Tok::Comma)) break;
   }
   if (!inlineFrames.empty()) {
-    if (runtimeDepth != inlineFrames.back().runtimeDepth) {
+    if(inlineFrames.back().normalizeReturns&&(runtimeDepth!=inlineFrames.back().runtimeDepth||inlineFrames.back().mayReturn)){
+      auto& frame=inlineFrames.back();
+      if(vs.size()!=frame.quantumParams.size()||std::any_of(vs.begin(),vs.end(),[&](auto value){return mod.typeOf(value).kind!=pd::TypeKind::Qubit;})){
+        err("all function return paths must return one live quantum value per quantum parameter");return;
+      }
+      for(std::size_t i=0;i<vs.size();++i)if(std::find(vs.begin(),vs.begin()+i,vs[i])!=vs.begin()+i){err("function cannot return duplicate quantum aliases");return;}
+      std::vector<pd::ValueId> current;for(const auto& param:frame.quantumParams)current.push_back(qreg.at(param)[0]);
+      const auto count=current.size();for(auto value:vs)if(std::find(current.begin(),current.end(),value)==current.end())current.push_back(value);
+      std::vector<std::size_t> wanted,stateAt;for(auto value:vs)wanted.push_back(static_cast<std::size_t>(std::find(current.begin(),current.end(),value)-current.begin()));
+      for(std::size_t i=0;i<current.size();++i)stateAt.push_back(i);
+      for(std::size_t i=0;i<count;++i){const auto found=std::find(stateAt.begin()+i,stateAt.end(),wanted[i]);const auto j=static_cast<std::size_t>(found-stateAt.begin());if(i==j)continue;
+        const auto oldA=current[i],oldB=current[j];const auto swap=b.swap(oldA,oldB);current[i]=swap.first;current[j]=swap.second;
+        for(auto& [_,reg]:qreg)for(std::size_t slot=0;slot<reg.size();++slot){if(pd::ValueId(reg[slot])==oldA)reg[slot]=swap.first;else if(pd::ValueId(reg[slot])==oldB)reg[slot]=swap.second;}
+        std::swap(stateAt[i],stateAt[j]);
+      }
+      classicals[frame.done]=b.copy(b.constInt(1),pd::bitType());recordScalar(frame.done);frame.mayReturn=true;++flowEpoch;
+      for(auto& loop:loopFrames)if(loop.functionDepth==inlineFrames.size()){classicals[loop.live]=b.copy(b.constInt(0),pd::bitType());classicals[loop.done]=b.copy(b.constInt(1),pd::bitType());loop.mayTransfer=true;}
+    } else if (runtimeDepth != inlineFrames.back().runtimeDepth) {
       err("conditional return requires explicit control-flow return lowering");
     } else {
       inlineFrames.back().returned = true;
@@ -1222,17 +1591,24 @@ void Parser::parseReturnStmt() {
 
 void Parser::parseStmt() {
   skipNewlines();
+  if(mod.numOps()>operationBudget){err("expanded operation budget exceeded; raise QSTACK_EXPANDED_OPERATION_BUDGET or reduce the bounded program");fatal=true;return;}
   switch (cur().kind) {
     case Tok::Qubit:    parseDeclQubit(); return;
     case Tok::Bit:      parseDeclBit();   return;
     case Tok::Int:      parseDeclClassical(false); return;
     case Tok::Angle:    parseDeclClassical(true);  return;
+    case Tok::Bool:case Tok::UInt:parseTypedDecl();return;
+    case Tok::Output:{consume();if(cur().kind!=Tok::Identifier){err("output requires a named scalar");return;}const auto name=consume().text;if(!classicals.count(name)){err("unknown output scalar: "+name);return;}b.output(name,classicals.at(name));return;}
     case Tok::GateName: parseGateStmt(); return;
     case Tok::Reset:    parseResetStmt(); return;
     case Tok::Barrier:  parseBarrierStmt(); return;
     case Tok::If:       parseIfStmt(); return;
     case Tok::For:      parseForStmt(); return;
     case Tok::While:    parseWhileStmt(); return;
+    case Tok::Bounded:  parseBoundedWhile();return;
+    case Tok::Break:parseTransfer(true);return;
+    case Tok::Continue:parseTransfer(false);return;
+    case Tok::Discard:parseDiscard();return;
     case Tok::Def:      parseDefStmt(); return;
     case Tok::Return:   parseReturnStmt(); return;
     case Tok::Identifier: {
@@ -1270,6 +1646,16 @@ void Parser::parseStmt() {
       }
       if (cur().kind == Tok::LParen) {
         parseCallStmt(name); return;
+      }
+      if(cur().kind==Tok::Comma){
+        std::vector<std::string> names{name};
+        while(accept(Tok::Comma)){if(cur().kind!=Tok::Identifier){err("tuple assignment requires scalar names");return;}names.push_back(consume().text);}
+        if(!expect(Tok::Equals,"'='"))return;
+        if(cur().kind!=Tok::Identifier||!funcs.count(cur().text)||!funcs.at(cur().text).typedResults){err("tuple assignment requires a typed helper call");return;}
+        const auto helper=consume().text;const auto values=parseTypedCall(helper);
+        if(values.size()!=names.size()){err("helper result arity does not match tuple assignment");return;}
+        for(std::size_t k=0;k<names.size();++k){if(!classicals.count(names[k])||scalarTypes.at(names[k])!=mod.typeOf(values[k])){err("tuple result requires a predeclared scalar with matching type and width");return;}}
+        for(std::size_t k=0;k<names.size();++k){classicals[names[k]]=values[k];ctConst.erase(names[k]);recordScalar(names[k]);}return;
       }
       if (cur().kind == Tok::Equals) {
         consume();
@@ -1324,6 +1710,14 @@ void Parser::parseBlock() {
   skipNewlines();
   if (!expect(Tok::LBrace, "'{'")) return;
   skipNewlines();
+  struct Guard {
+    pd::OpId marker;pd::ValueId predicate;
+    std::unordered_map<std::string,pd::ValueId> values;
+    std::unordered_map<std::string,double> constants;
+    std::unordered_map<std::string,pd::Type> types;
+    BitBindings bits;Registers registers;
+  };
+  std::vector<Guard> guards;std::size_t guardedEpoch=0;
   while (cur().kind != Tok::RBrace && cur().kind != Tok::Eof) {
     if (fatal) return;
     if (inlineReturned()) {
@@ -1338,10 +1732,23 @@ void Parser::parseBlock() {
       }
       break;
     }
+    if(guards.empty()||guardedEpoch!=flowEpoch){
+      std::optional<pd::ValueId> predicate;
+      auto add=[&](const std::string& done){const auto available=b.cmp("==",classicals.at(done),b.constInt(0));predicate=predicate?b.binOp("&",*predicate,available):available;};
+      for(const auto& loop:loopFrames)if(loop.functionDepth==inlineFrames.size()&&loop.mayTransfer)add(loop.done);
+      if(!inlineFrames.empty()&&inlineFrames.back().normalizeReturns&&inlineFrames.back().mayReturn)add(inlineFrames.back().done);
+      if(predicate){guards.push_back(Guard{b.beginIf(*predicate),*predicate,classicals,ctConst,scalarTypes,snapshotBits(),qreg});guardedEpoch=flowEpoch;}
+    }
     const auto previous = pos;
     parseStmt();
     if (pos == previous) { err("parser could not consume statement"); consume(); }
     skipNewlines();
+  }
+  while(!guards.empty()){
+    const auto guard=std::move(guards.back());guards.pop_back();
+    const auto after=classicals;const auto bits=snapshotBits();b.endIf(guard.marker);
+    ctConst=guard.constants;scalarTypes=guard.types;qreg=guard.registers;
+    joinClassicals(guard.predicate,guard.values,after,guard.values);joinBits(guard.predicate,guard.bits,bits,guard.bits);
   }
   expect(Tok::RBrace, "'}'");
 }
@@ -1354,6 +1761,7 @@ void Parser::parseProgram() {
     if (pos == previous) { err("unexpected token outside a block"); consume(); }
     skipNewlines();
   }
+  if(mod.numOps()>operationBudget)err("expanded operation budget exceeded; raise QSTACK_EXPANDED_OPERATION_BUDGET or reduce the program");
 }
 
 }  // namespace
