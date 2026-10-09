@@ -5,6 +5,7 @@
 // production parser is a separate component (M2).
 
 #include "phonon/dialect/Phonon.h"
+#include "spinor/dialect/ExactInteger.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -110,7 +111,7 @@ struct Cursor {
 std::unordered_map<std::string, OpKind>& mnemonicMap() {
   static std::unordered_map<std::string, OpKind> m;
   if (!m.empty()) return m;
-  for (int k = 0; k <= static_cast<int>(OpKind::Assign); ++k) {
+  for (int k = 0; k <= static_cast<int>(OpKind::Output); ++k) {
     OpKind ok = static_cast<OpKind>(k);
     m[std::string(opMnemonic(ok))] = ok;
   }
@@ -123,6 +124,7 @@ Type parseTypeName(std::string_view t) {
   if (t == "!phonon.int")   return intType();
   if (t == "!phonon.angle") return angleType();
   if (t == "!phonon.func")  return funcType();
+  if (t == "!phonon.uint")  return uintType(0);
   return qubitType();  // fallback
 }
 
@@ -189,7 +191,7 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
     // Operands: %a, %b, %c (until '{' or ':' or newline)
     std::vector<ValueId> operands;
     while (true) {
-      c.skipSpace();
+      while(c.i<c.s.size()&&(c.s[c.i]==' '||c.s[c.i]=='\t'||c.s[c.i]=='\r'))c.advance(1);
       if (c.i >= c.s.size()) break;
       char ch = c.s[c.i];
       if (ch == '{' || ch == ':' || ch == '\n') break;
@@ -214,7 +216,15 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
         std::string key = c.readWord();
         c.eat("=");
         c.skipSpace();
-        if (c.i < c.s.size() && c.s[c.i] == '"') {
+        if (c.s.substr(c.i,4)=="i64(" || c.s.substr(c.i,4)=="u64(") {
+          const bool signedValue=c.s[c.i]=='i'; c.advance(4);
+          auto text=c.readQuoted();
+          if(!text||!c.eat(")")){diag.error("malformed exact integer attribute");return std::nullopt;}
+          try {
+            if(signedValue)attrs.push_back({key,spinor::dialect::parseExactInteger<std::int64_t>(*text)});
+            else attrs.push_back({key,spinor::dialect::parseExactInteger<std::uint64_t>(*text)});
+          } catch(const std::exception& error){diag.error(error.what());return std::nullopt;}
+        } else if (c.i < c.s.size() && c.s[c.i] == '"') {
           if (auto q = c.readQuoted()) attrs.push_back({key, *q});
         } else if (auto n = c.readNumber()) {
           attrs.push_back({key, *n});
@@ -233,7 +243,14 @@ std::optional<Module> parse(std::string_view text, Diagnostics& diag) {
         c.advance(1);  // consume '!'
         std::string tn = c.readWord();
         if (tn.empty()) break;
-        resultTypes.push_back(parseTypeName(std::string("!") + tn));
+        auto type=parseTypeName(std::string("!")+tn);
+        if(type.kind==TypeKind::UInt){
+          if(!c.eat("<")){diag.error("uint type requires an explicit width");return std::nullopt;}
+          const auto start=c.i;while(c.i<c.s.size()&&std::isdigit(static_cast<unsigned char>(c.s[c.i])))c.advance(1);
+          type.width=spinor::dialect::parseExactInteger<std::uint32_t>(c.s.substr(start,c.i-start));
+          if(type.width<1||type.width>64||!c.eat(">")){diag.error("uint width must be in [1,64]");return std::nullopt;}
+        }
+        resultTypes.push_back(type);
         c.skipSpace();
         if (!c.eat(",")) break;
       }

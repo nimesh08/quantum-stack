@@ -31,8 +31,9 @@ gate sequence.
 
 ## Variations
 
-- **Run on a feedforward-less chip**: post-selection halves your
-  effective shot count. Set `shots = 2 * desired_shots` to compensate.
+- **Target requirements**: choose a concrete device with measurement and
+  feedforward support. Unsupported targets reject the program; there is no
+  automatic postselection fallback.
 - **Multiple teleports**: chain `q.teleport(0,1,2); q.teleport(2,3,4)`.
 
 ## See also

@@ -40,7 +40,7 @@ QReg q(1)
 q.h(0)
 bit m = q.measure(0)
 q.reset(0)
-q.h(0)                       ; legal again after reset
+q.h(0)                       ; acts on the explicitly reset zero state
 ```
 
 ## Equivalents
@@ -51,3 +51,9 @@ q.h(0)                       ; legal again after reset
 ## See also
 
 [Spinor `measure`](../../../spinor/reference/measure.md), [Spinor `reset`](../../../spinor/reference/reset.md)
+
+A gate after measurement is also quantum-mechanically valid without reset when
+the device supports mid-circuit measurement. Reset changes the state and is
+never inserted merely to bypass an unsupported capability. Python kernels use
+whole-register `q.measure()`; indexed measurement arguments belong to the
+text frontend and are rejected by the Python translator.

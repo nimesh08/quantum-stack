@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -16,7 +18,7 @@ from . import __version__
 from .artifacts import artifact_hash, save_artifact
 from .config import SECRET_FIELDS
 from .jobs import read_with_retry, save_job, wait_for_result
-from .models import CompiledArtifact, ExecutionResult, JobReceipt, QStackError, SubmissionOptions
+from .models import ARTIFACT_VERSION, CompiledArtifact, ExecutionResult, JobReceipt, QStackError, SubmissionOptions
 from .registry import canonical_format, digest, ensure_live_target, get_target, registry_root, target_edges, validate_format, validate_physical
 from .scheduling import optimization_report
 
@@ -54,7 +56,7 @@ def _process(args: list[str], env: dict) -> str:
 
 
 def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path, str]:
-    if not record.get("capability_verified"):
+    if not record.get("capability_verified") and not any(k.startswith("placement_") for k in config):
         return registry_root(config), record["id"]
     root = scratch / "registry"
     (root / "chips").mkdir(parents=True)
@@ -67,12 +69,11 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
         supports["feedforward"] = "full" if supports["feedforward"] else "none"
     all_to_all, edges = target_edges(record, config)
     if entangler in record.get("gate_loci", {}):
-        # A union of all gate couplings is not a legal coupling map for any one
-        # gate. Use one owned synthesis basis and its actual physical loci.
-        edges = record["gate_loci"][entangler]
+        # Connectivity is only a search graph. Per-operation ordered loci below
+        # determine which actual recipes and SWAP decompositions are legal.
+        edges = sorted({tuple(locus) for loci in record["gate_loci"].values() for locus in loci if len(locus) == 2})
+        edges = [list(edge) for edge in edges]
         all_to_all = False
-        two_qubit_gates = {"cz", "cx", "rzz", "rxx", "ms", "ecr", "sqrt_iswap", "sqrt_iswap_inv", "syc", "iswap", "swap"}
-        gates = [gate for gate in gates if gate not in two_qubit_gates or gate == entangler]
     chip = {"id": compiler_id, "provider": record["route"], "vendor": record.get("vendor", ""),
             "qir_platform": record.get("qir_platform", "standard"),
             "qubits": record["qubits"], "native_gates": gates, "supports": supports,
@@ -83,6 +84,8 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
             "decomposition": {"one_qubit": {"recipe": "euler_zyz", "rotation_gate": "rz",
                 "pi_2_gate": "sx" if "sx" in gates else "gpi2" if "gpi2" in gates else "rx" if "rx" in gates else ""},
                 "two_qubit": {"recipe": "kak", "entangler": entangler, "entangler_count_max": 3}}}
+    if record.get("capabilities"):
+        chip["capabilities"] = record["capabilities"]
     if record.get("resonator_qubits"):
         chip.update(computational_qubits=record["computational_qubits"],
                     resonator_qubits=record["resonator_qubits"],
@@ -97,13 +100,22 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
             if gate in single_qubit_gates and all(len(locus) == 1 for locus in values)}
     if loci:
         chip["single_qubit_gate_loci"] = loci
+    two_qubit_loci = {gate: values for gate, values in record.get("gate_loci", {}).items()
+                      if values and all(len(locus) == 2 for locus in values)}
+    if two_qubit_loci:
+        chip["two_qubit_gate_loci"] = two_qubit_loci
+    chip["placement"] = {"seed": config.get("seed", 42), **{
+        key.removeprefix("placement_"): value for key, value in config.items() if key.startswith("placement_")}}
     # The small C++ reader accepts block maps and flow lists, not flow maps.
     # Timing objects belong in the Python scheduling report; only numeric error
     # pairs/triples are passed to the native placement engine.
     chip["calibration"] = {k: v for k, v in chip["calibration"].items()
                            if k in {"one_qubit_errors", "readout_errors", "two_qubit_errors"}}
     class RegistryDumper(yaml.SafeDumper):
-        pass
+        def ignore_aliases(self, data):
+            # The standalone registry reader deliberately has no YAML aliases.
+            # IQM MOVE/CZ lists occur in both component and operation contracts.
+            return True
     RegistryDumper.add_representer(list, lambda dumper, value: dumper.represent_sequence("tag:yaml.org,2002:seq", value, flow_style=True))
     def registry_yaml(data):
         return yaml.dump(data, Dumper=RegistryDumper, default_flow_style=False, sort_keys=False, width=100000)
@@ -119,13 +131,19 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
 def compile_file(source: str | Path, *, target: str, config: dict | None = None,
                  output: str | Path | None = None, language: str | None = None,
                  optimization_level: int = 2, format: str | None = None) -> CompiledArtifact:
+    started = time.perf_counter()
     config = dict(config or {})
     route = config.get("provider")
     record = get_target(target, route, config)
+    if config.get("timing_model"):
+        from .target_models import attach_timing_model
+        record = attach_timing_model(record, config["timing_model"])
     route = route or record["provider"]
     source = Path(source).resolve()
     if not source.is_file():
         raise QStackError(f"Source file not found: {source}")
+    source_bytes = source.read_bytes()
+    source_text = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     if optimization_level not in range(4):
         raise QStackError("optimization level must be 0, 1, 2 or 3")
     language = language or {".pho": "photon", ".phn": "phonon", ".phonon": "phonon",
@@ -133,15 +151,27 @@ def compile_file(source: str | Path, *, target: str, config: dict | None = None,
     if language not in {"photon", "phonon", "spinor", "qasm"}:
         raise QStackError("Unknown source language; specify --language photon|phonon|spinor|qasm")
     sc = find_binary("spinorc", config)
+    driver = find_binary("photonc" if language == "photon" else "phononc", config) if language in {"photon", "phonon"} else sc
+    def compiler_identity():
+        result = {}
+        for path in sorted({sc, driver}):
+            with open(path, "rb") as executable:
+                result[Path(path).stem] = {"sha256": hashlib.file_digest(executable, "sha256").hexdigest(),
+                                           "size_bytes": Path(path).stat().st_size}
+        return result
+    compiler_tools = compiler_identity()
     env = dict(os.environ)
     env["QSTACK_SPINORC"] = sc
     env.pop("QSTACK_FORWARDED_ARGS", None)
     with tempfile.TemporaryDirectory(prefix="qstack-") as temp:
         scratch = Path(temp)
+        report_path, logical_path = scratch / "numerical.json", scratch / "logical.json"
+        env["QSTACK_NUMERICAL_REPORT"] = str(report_path)
+        env["QSTACK_LOGICAL_IR_OUTPUT"] = str(logical_path)
+        env["QSTACK_EXPANDED_OPERATION_BUDGET"] = str(config.get("expanded_operation_budget", 100000))
         root, compiler_id = _compiler_registry(record, config, scratch)
         env["SPINOR_REGISTRY_ROOT"] = str(root)
         if language in {"photon", "phonon"}:
-            driver = find_binary("photonc" if language == "photon" else "phononc", config)
             native = _process([driver, "compile", "--target", compiler_id, "--emit", "spinor", "-O", str(optimization_level), str(source)], env)
         else:
             native = _process([sc, "compile", "-t", compiler_id, "-O", str(optimization_level), str(source)], env)
@@ -152,6 +182,14 @@ def compile_file(source: str | Path, *, target: str, config: dict | None = None,
             return _process([sc, "emit", "--compiled", "-t", compiler_id, "-f", fmt, *extra, str(native_path)], env)
         physical = json.loads(emit("json"))
         physical["target"] = target
+        if not logical_path.is_file() or not report_path.is_file():
+            raise QStackError("Compiler did not produce v2 logical/numerical evidence; rebuild all compiler drivers", "COMPILER_VERSION_MISMATCH")
+        logical, numerical = json.loads(logical_path.read_bytes()), json.loads(report_path.read_bytes())
+        from .classical import extract_requirements, validate_classical, needs_controller_contract
+        validate_classical(physical)
+        requirements = extract_requirements(physical)
+        numerical["logical_ir_hash"] = digest(logical)
+        numerical["physical_ir_hash"] = digest(physical)
         validate_physical(physical, record, config)
         if format:
             chosen = canonical_format(format)
@@ -167,6 +205,9 @@ def compile_file(source: str | Path, *, target: str, config: dict | None = None,
                 chosen = next((f for f in ("qasm3", "qir-bitcode", "qir-text", "qasm2") if f in formats), chosen)
         if record.get("capability_verified"):
             validate_format(route, chosen, record)
+        if needs_controller_contract(requirements):
+            from .classical import validate_requirements, serializer_capabilities
+            validate_requirements(requirements, record, serializer_capabilities(chosen))
         if chosen in {"ionq-native-json", "iqm-json", "anyon-json"}:
             from .providers.native import serialize_native
             serializer_route = "ionq" if chosen == "ionq-native-json" else route
@@ -196,13 +237,29 @@ def compile_file(source: str | Path, *, target: str, config: dict | None = None,
             if chosen not in {"qasm3", "qasm2", "quil", "json"}:
                 raise QStackError(f"Unsupported output format: {chosen}", "UNSUPPORTED_FORMAT")
             payload = emit(chosen)
-        manifest = {"compiler_version": __version__, "source_hash": digest(source.read_text(encoding="utf-8")),
+        if compiler_identity() != compiler_tools:
+            raise QStackError("Compiler executable changed during compilation; rebuild and retry compilation", "COMPILER_CHANGED")
+        if source.read_bytes() != source_bytes:
+            raise QStackError("Source changed during compilation; retry with the saved source", "SOURCE_CHANGED")
+        manifest = {"compiler_version": __version__, "compiler_tools": compiler_tools, "source_hash": digest(source_text),
+                    "source_bytes_sha256": hashlib.sha256(source_bytes).hexdigest(),
                     "optimization_level": optimization_level, "seed": config.get("seed", 42),
                     "statistics": optimization_report(physical, record), "native_spinor": native,
                     "compiler_target": compiler_id, "compilation_owner": "quantum-stack",
                     "qir_entry_point": "main" if chosen.startswith("qir") else None,
-                    "readout_order": "c[n-1]...c[0]", "approximation_error_budget": 0}
-        artifact = CompiledArtifact(route, target, chosen, payload, physical, record, manifest)
+                    "readout_order": "c[n-1]...c[0]", "approximation_error_budget": 0,
+                    "limits": {"expanded_operation_budget": config.get("expanded_operation_budget", 100000),
+                               "placement": {"beam_width": config.get("placement_beam_width", (16,16,32,64)[optimization_level]),
+                                   "max_states": config.get("placement_max_states", (10000,10000,50000,200000)[optimization_level]),
+                                   "max_layouts": config.get("placement_max_layouts", 8 if optimization_level == 3 else 1)}}}
+        artifact = CompiledArtifact(route, target, chosen, payload, physical, record, manifest,
+                                    schema_version=ARTIFACT_VERSION, logical_ir=logical,
+                                    numerical_report=numerical, feature_requirements=requirements)
+        logical_stats = optimization_report(logical, {})
+        manifest["comparison"] = {"before": {k: logical_stats.get(k) for k in ("gate_count", "two_qubit_count", "depth")},
+                                  "after": {k: manifest["statistics"].get(k) for k in ("gate_count", "two_qubit_count", "depth")},
+                                  "compilation_time_seconds": time.perf_counter() - started,
+                                  "trial_statistics": numerical.get("trial_statistics", {})}
         artifact.manifest["artifact_hash"] = artifact_hash(artifact)
         if output is not None:
             save_artifact(artifact, output)
@@ -229,6 +286,7 @@ def _execute_local(artifact: CompiledArtifact, options: SubmissionOptions, confi
                 "num_clbits": artifact.physical_ir["num_clbits"],
                 "measurement_mapping": artifact.physical_ir.get("measurement_mapping", []),
                 "logical_to_physical": artifact.physical_ir.get("logical_to_physical", [])}
+    metadata["application_outputs"] = application_outputs(artifact)
     receipt = JobReceipt(artifact.route, artifact.target, job_id, metadata=dict(metadata),
                          artifact_hash=metadata["artifact_hash"], mode="local")
     return receipt, ExecutionResult(artifact.route, artifact.target, job_id, counts, data,
@@ -245,6 +303,13 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
     if config.get("provider", artifact.route) != artifact.route:
         raise QStackError("Submission route differs from the compiled artifact; recompile for that route")
     validate_physical(artifact.physical_ir, artifact.target_snapshot, config)
+    from .classical import extract_requirements, validate_classical, validate_requirements, serializer_capabilities, needs_controller_contract
+    validate_classical(artifact.physical_ir)
+    requirements = extract_requirements(artifact.physical_ir)
+    if artifact.feature_requirements and artifact.feature_requirements != requirements:
+        raise QStackError("Artifact feature requirements disagree with physical IR; recompile", "ARTIFACT_INVALID")
+    if needs_controller_contract(requirements):
+        validate_requirements(requirements, artifact.target_snapshot, serializer_capabilities(artifact.format))
     if dry_run:
         if options.mode == "live":
             from .providers import validate_serialization
@@ -267,7 +332,8 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         raw = json.loads(path.read_text())
         metadata = {"mode": "cassette", "fixture": options.name, "artifact_hash": artifact_hash(artifact),
                     "num_clbits": artifact.physical_ir["num_clbits"],
-                    "measurement_mapping": artifact.physical_ir.get("measurement_mapping", [])}
+                    "measurement_mapping": artifact.physical_ir.get("measurement_mapping", []),
+                    "application_outputs": application_outputs(artifact)}
         receipt = JobReceipt(artifact.route, artifact.target, "cassette-" + uuid.uuid4().hex,
                              metadata=dict(metadata), artifact_hash=metadata["artifact_hash"], mode="cassette")
         result = ExecutionResult(artifact.route, artifact.target, receipt.job_id, None, raw, metadata)
@@ -283,6 +349,8 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         raise QStackError("Cannot revalidate current device capabilities; refresh targets before submitting", "TARGET_REFRESH_REQUIRED")
     validate_physical(artifact.physical_ir, current, config)
     validate_format(artifact.route, artifact.format, current)
+    if needs_controller_contract(requirements):
+        validate_requirements(requirements, current, serializer_capabilities(artifact.format))
     if current.get("parameter_units", "radians") != artifact.target_snapshot.get("parameter_units", "radians"):
         raise QStackError("Target parameter units changed; refresh and recompile", "TARGET_INCOMPATIBLE")
     if artifact.format.startswith("qir") and current.get("qir_platform", "standard") != artifact.target_snapshot.get("qir_platform", "standard"):
@@ -292,15 +360,26 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
     old_labels = artifact.target_snapshot.get("qubit_labels")
     if old_labels is not None and current.get("qubit_labels") != old_labels:
         raise QStackError("Device qubit labels changed; refresh and recompile", "TARGET_INCOMPATIBLE")
+    from .target_models import target_fingerprints
+    old_fingerprints, current_fingerprints = target_fingerprints(artifact.target_snapshot), target_fingerprints(current)
+    performance_stale = old_fingerprints["quality_hash"] != current_fingerprints["quality_hash"]
     if options.cost_cap_usd is not None:
         estimate = read_with_retry(lambda: adapter.estimate(artifact, options)) if hasattr(adapter, "estimate") else None
         amount = estimate.get("usd") if isinstance(estimate, dict) else None
-        if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
             raise QStackError("This route cannot evaluate the requested USD cost cap", "COST_UNKNOWN")
         if amount > options.cost_cap_usd:
             raise QStackError("Estimated execution cost exceeds --cost-cap-usd", "COST_CAP_EXCEEDED")
     receipt = adapter.submit(artifact, options)
     receipt.artifact_hash = artifact_hash(artifact)
+    receipt.metadata["application_outputs"] = application_outputs(artifact)
+    receipt.metadata["performance_estimates_stale"] = performance_stale
+    receipt.metadata["submission_target_fingerprints"] = current_fingerprints
+    # Device classification is separate from adapter transport markers such as
+    # Qibolab's execution_kind='synchronous-lab', needed for later retrieval.
+    receipt.metadata["device_execution_kind"] = current.get("execution_kind", "unknown")
+    receipt.metadata["device_execution_kind_verified"] = current.get("execution_kind_verified") is True
+    receipt.metadata["device_execution_kind_source"] = current.get("execution_kind_source")
     receipt.metadata["context"] = {k: v for k, v in config.items() if k not in SECRET_FIELDS and k in {
         "device", "project", "workspace", "workspace_resource_id", "resource", "region", "instance_crn", "url", "host", "user", "realm",
         "sdk_profile", "sdk_config_file", "tokens_file", "credentials_file", "qibolab_bridge", "qibolab_platform", "platform", "platform_path", "capability_snapshot", "device_config_name",
@@ -314,6 +393,12 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         save_job(receipt, result, config)
         return result
     return wait_for_result(adapter, receipt, timeout=config.get("timeout", 600), poll_interval=config.get("poll_interval", 2), config=config)
+
+
+def application_outputs(artifact):
+    values = {v["id"]: v for v in artifact.physical_ir.get("classical_values", [])}
+    return [{**output, "bits": values[output["value"]]["storage"]}
+            for output in artifact.physical_ir.get("classical_outputs", [])]
 
 
 def run_source(source: str, *, language: str = "phonon", target: str, mode: str,

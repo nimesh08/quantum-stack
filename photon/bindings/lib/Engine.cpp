@@ -96,6 +96,7 @@ ResourceEstimate CompiledProgram::estimate() const {
       ++d;
   }
   r.depth = d;
+  r.logical_operation_count = d;
   return r;
 }
 

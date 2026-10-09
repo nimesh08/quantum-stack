@@ -38,7 +38,7 @@ auto physicalCost(const Module& module) {
 }
 
 Module compileResonatorCircuit(const Module& input,const registry::ChipInfo& chip,
-    OptimizationLevel level,Diagnostics& diagnostics) {
+    OptimizationLevel level,Diagnostics& diagnostics,CompilationReport* report) {
   const auto physical=registry::computationalComponents(chip);
   const auto original=flatten(input);
   if(!original.resonatorQubits.empty() || std::any_of(original.instructions.begin(),original.instructions.end(),
@@ -84,6 +84,9 @@ Module compileResonatorCircuit(const Module& input,const registry::ChipInfo& chi
     for(int q:loci)if(compact.contains(q))mapped.push_back(compact.at(q));
   }
   effective.moveLoci.clear();effective.czLoci.clear();effective.coupling.clear();
+  // This is an effective computational CZ graph: physical resonator loci
+  // must never be interpreted as indices of its compact computational wires.
+  effective.twoQubitGateLoci.clear();
   effective.nativeGates.erase(std::remove(effective.nativeGates.begin(),effective.nativeGates.end(),"move"),effective.nativeGates.end());
   effective.calibrationOneQubitError.clear();effective.calibrationReadoutError.clear();effective.calibrationTwoQubitError.clear();
   for(const auto& [q,error]:chip.calibrationOneQubitError)if(compact.contains(q))effective.calibrationOneQubitError[compact.at(q)]=error;
@@ -91,6 +94,10 @@ Module compileResonatorCircuit(const Module& input,const registry::ChipInfo& chi
   for(const auto& [pair,route]:routes) {
     auto logical=edge(compact.at(pair.first),compact.at(pair.second));
     effective.coupling.push_back(logical);
+    if(chip.twoQubitGateLoci.contains("cz")){
+      effective.twoQubitGateLoci["cz"].push_back(logical);
+      effective.twoQubitGateLoci["cz"].emplace_back(logical.second,logical.first);
+    }
     if(route.error)effective.calibrationTwoQubitError[logical]=*route.error;
   }
 
@@ -119,18 +126,24 @@ Module compileResonatorCircuit(const Module& input,const registry::ChipInfo& chi
     validateResonatorCircuit(out);
     return rebuild(out);
   };
-  auto optimized=PassManager{}.compile(input,effective,level,diagnostics);
+  if(report)report->addGap("Resonator MOVE expansion is not a full-space unitary rewrite; restricted-subspace residual is unmeasured");
+  const auto reportPrefix=report?*report:CompilationReport{};
+  auto optimized=PassManager{}.compilePrepared(input,effective,level,diagnostics,report);
   if(diagnostics.hasErrors())return input;
   auto result=expand(optimized,level!=OptimizationLevel::O0);
   // Optimization on the effective graph must not conceal growth in physical
   // MOVE count on mixed direct/mediated architectures.
   if(level!=OptimizationLevel::O0) {
     Diagnostics baselineDiagnostics;
-    auto baseline=PassManager{}.compile(input,effective,OptimizationLevel::O0,baselineDiagnostics);
+    auto baselineReport=reportPrefix;
+    auto baseline=PassManager{}.compilePrepared(input,effective,OptimizationLevel::O0,baselineDiagnostics,report?&baselineReport:nullptr);
     if(!baselineDiagnostics.hasErrors()) {
       baseline=expand(baseline,false);
       const auto currentCost=physicalCost(result),baselineCost=physicalCost(baseline);
-      if(currentCost.first>baselineCost.first||currentCost.second>baselineCost.second)result=std::move(baseline);
+      if(currentCost.first>baselineCost.first||currentCost.second>baselineCost.second){
+        result=std::move(baseline);
+        if(report){*report=std::move(baselineReport);++report->counters["resonator_fallbacks"];}
+      }
     }
   }
   validateCompiled(result,chip,diagnostics);

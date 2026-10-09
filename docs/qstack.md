@@ -63,26 +63,40 @@ The public CLI/API lowers Phonon into logical Spinor before running quantum
 optimization. The separate legacy Phonon optimizer API is not enabled in this
 path; selecting O1-O3 selects the owned Spinor passes described above.
 Unsupported features, unbound parameters and missing native recipes are errors.
-Counted loops preserve their induction step and comparison. Phonon `while`
-loops are expanded only when their condition is known at compile time and they
-terminate within the compiler's expansion limit. Function specialization binds
+Counted loops preserve their induction step and comparison. Static Phonon
+`while` loops retain compile-time expansion. Adaptive loops use the explicit
+`while (...) max_iterations N` form and execute as guarded device operations.
+They record a correlated per-shot exhaustion flag after the final predicate
+check. Every shot and raw result is saved; exhaustion has a separate application
+status and CLI exit code 4. Missing status evidence exits 5. Function specialization binds
 angles, register indices, allocation sizes and static loop bounds at each call.
 Lexical captures and parameter shadows preserve their separate bindings;
 qubit and readout arguments retain their original register slots. Expansion is
 bounded to 128 nested calls and 100000 expanded calls or loop iterations.
 Runtime unbounded loops and recursive calls are diagnosed explicitly.
-Runtime branches cannot allocate or redeclare registers. Copying a measured bit
-into a numeric scalar is unsupported; use an explicit measurement destination.
-Returning a permutation of existing qubit arguments inside a classical branch
-materializes SWAPs in that branch, preserving consistent wire identities at joins.
+Saved measured-bit values, Boolean expressions and explicit `uint[1..64]`
+values use typed immutable values and private controller storage. Addition and
+subtraction wrap modulo the declared width. Both the device and the output
+format must explicitly support the required operations, widths and outputs;
+legacy feedforward does not authorize arithmetic. Runtime floating-point angles,
+dynamic qubit indices and unbounded execution remain unsupported.
+Compile-time-sized branch-local qubits use a reserved pool. Explicit discard and
+reset-backed reuse preserve linear ownership and fixed join mappings. Conditional
+returns suppress subsequent operations on their taken paths. See the
+[controller language contract](language/controller.md) for syntax and boundaries.
 Provider serialization can impose numeric precision limits; Google's Engine
 protobuf stores numeric gate arguments as float32, which is recorded in its
 job receipt. This does not enable approximate synthesis in the compiler.
 
-Artifacts contain `manifest.json`, `physical.json`, `native.spinor`, a native
+Version-2 artifacts contain `manifest.json`, `logical.json`, `physical.json`,
+`classical.json`, `requirements.json`, `numerical.json`, `native.spinor`, a native
 program (`.qasm3`, `.bc`, `.ll`, `.quil`, or `.json`), `target.json`,
 `optimization.json`, and `mappings.json`. Content hashes detect inconsistent
-files. Reports include gate/two-qubit counts, dependency depth, and a resource
+files. Version-1 artifacts keep their original semantics and hash preimage.
+`qstack verify ARTIFACT` independently checks finite operators or complete
+instruments offline, with explicit coverage limits and passed/failed/not_checked
+outcomes. See [artifact compatibility and verification](artifact-v2.md).
+Reports include gate/two-qubit counts, dependency depth, and a resource
 schedule. Duration is reported only when every relevant instruction has timing
 data. Runtime conditions also require an explicitly supplied
 `scheduling.feedback_latency_ns`; otherwise total duration remains unknown.
@@ -91,9 +105,15 @@ do not claim enforced pulse timing. Branch counts include both bodies;
 depth/duration use worst-case joins. Qubit and readout mappings accompany results.
 Discovered available/disabled components and operation-specific readout/native
 gate loci restrict placement without changing the provider's physical IDs.
-The current search selects a common compatible native subgraph. It can reject a
-heterogeneous device even when a more general placement exists; it does not claim
-complete or globally optimal placement.
+Heterogeneous placement tracks per-operation ordered loci, each state's current
+location and branch-entry mappings. Every inserted SWAP must have a legal owned
+native decomposition. Deterministic bounded search retains validated incumbents;
+budget exhaustion without one reports `PLACEMENT_SEARCH_LIMIT`, not proof of
+impossibility. See [search budgets and join mappings](heterogeneous-placement.md).
+Supplied calibration is kept per ordered operation locus. Resource schedules
+remain advisory, and missing or expired required timing data leaves duration
+unknown. [Validation suites](validation-harness.md) separately record offline
+contracts, authenticated account access and hardware execution.
 
 ## Configuration and credentials
 

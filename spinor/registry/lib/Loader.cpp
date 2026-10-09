@@ -271,6 +271,39 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
     };
     operationLoci("move_loci", out.moveLoci);
     operationLoci("cz_loci", out.czLoci);
+    if (n.has("two_qubit_gate_loci")) {
+      const std::set<std::string> gates{"cx","cz","swap","move","ecr","ms","rxx","rzz",
+        "iswap","sqrt_iswap","sqrt_iswap_inv","syc"};
+      for (const auto& [gate, values] : n.at("two_qubit_gate_loci").asMap()) {
+        if (!gates.contains(gate)) throw std::runtime_error("unknown two-qubit operation locus: " + gate);
+        auto& destination=out.twoQubitGateLoci[gate];
+        std::set<std::pair<int,int>> unique;
+        for (const auto& value : values.asArray()) {
+          const auto& row=value.asArray();
+          if(row.size()!=2)throw std::runtime_error("two-qubit operation locus requires two components");
+          const auto pair=std::pair{componentIndex(row[0]),componentIndex(row[1])};
+          if(pair.first==pair.second||!unique.insert(pair).second)
+            throw std::runtime_error("duplicate or self two-qubit operation locus");
+          destination.push_back(pair);
+        }
+      }
+    }
+    if(n.has("placement")) {
+      const auto& p=n.at("placement");
+      if(p.has("strategy"))out.placement.strategy=p.at("strategy").asString();
+      if(out.placement.strategy!="auto"&&out.placement.strategy!="uniform"&&out.placement.strategy!="heterogeneous")
+        throw std::runtime_error("placement strategy must be auto, uniform or heterogeneous");
+      auto count=[&](const char* key,std::size_t& destination,bool allowZero=false){
+        if(!p.has(key))return;
+        const auto& value=p.at(key);
+        if(!value.isInt()||value.asInt()<0||(!allowZero&&value.asInt()==0))
+          throw std::runtime_error(std::string("placement ")+key+" must be a positive integer");
+        destination=static_cast<std::size_t>(value.asInt());
+      };
+      count("seed",out.placement.seed,true);count("max_states",out.placement.maxStates);
+      count("beam_width",out.placement.beamWidth);count("max_layouts",out.placement.maxLayouts);
+      if(p.has("max_swaps")){std::size_t value=0;count("max_swaps",value,true);out.placement.maxSwaps=value;}
+    }
     if (n.has("native_gates") && n.at("native_gates").isArray()) {
       for (const auto& g : n.at("native_gates").asArray()) {
         out.nativeGates.push_back(g.asString());
@@ -323,6 +356,24 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
       }
       if (s.has("reset") && s.at("reset").isBool()) {
         out.supports.reset = s.at("reset").asBool();
+      }
+    }
+
+    if(n.has("capabilities")) {
+      const auto& capabilities=n.at("capabilities");
+      if(capabilities.has("features"))for(const auto& [feature,node]:capabilities.at("features").asMap()){
+        const auto state=node.asString();
+        if(state!="supported"&&state!="unsupported"&&state!="unknown")
+          throw std::runtime_error("classical capability status must be supported, unsupported or unknown");
+        out.classicalFeatures[feature]=state;
+      }
+      if(capabilities.has("integer_widths")){
+        std::set<unsigned> widths;
+        for(const auto& node:capabilities.at("integer_widths").asArray()){
+          if(!node.isInt()||node.asInt()<1||node.asInt()>64||!widths.insert(unsigned(node.asInt())).second)
+            throw std::runtime_error("classical integer widths must be unique integers in [1,64]");
+          out.classicalIntegerWidths.push_back(unsigned(node.asInt()));
+        }
       }
     }
 

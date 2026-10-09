@@ -120,7 +120,21 @@ def check_lede(p: Path, body: str) -> list[str]:
 
 def check_links(p: Path, body: str) -> list[str]:
     out = []
-    for m in LINK.finditer(body):
+    # Language casts such as uint[8](value) inside examples are not links.
+    prose = []
+    fence = None
+    for line in body.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            prose.append(re.sub(r"(`+).*?\1", "", line))
+    for m in LINK.finditer("\n".join(prose)):
         target = m.group(1).split("#")[0].split("?")[0]
         if not target or target.endswith("/"):
             continue

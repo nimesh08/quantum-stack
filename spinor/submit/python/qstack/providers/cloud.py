@@ -30,7 +30,19 @@ class IBMAdapter(Adapter):
         return self._service
 
     def discover(self):
-        return [qiskit_target_record(self.route, b, ["qiskit-native"]) for b in self.client().backends()]
+        records = []
+        for backend in self.client().backends():
+            record = qiskit_target_record(self.route, backend, ["qiskit-native"])
+            try:
+                simulator = backend.configuration().simulator
+            except Exception:
+                simulator = None  # Missing classification never becomes a QPU claim.
+            if type(simulator) is bool:
+                record.update(execution_kind="simulator" if simulator else "hardware",
+                    execution_kind_verified=True,
+                    execution_kind_source="IBM BackendConfiguration.simulator")
+            records.append(record)
+        return records
 
     def submit(self, artifact, options):
         self.validate(artifact, options)
@@ -108,12 +120,17 @@ class AWSAdapter(Adapter):
             resource = device.arn.split(":", 5)[-1].split("/")
             if not vendor and len(resource) == 4 and resource[:2] == ["device", "qpu"] and resource[2] in {"ionq", "rigetti", "iqm", "oqc", "aqt"}:
                 vendor = resource[2]
+            # SDK metadata, not ARN/name heuristics, establishes execution type.
+            device_type = str(getattr(device, "type", ""))
+            classification = {"QPU": "hardware", "SIMULATOR": "simulator"}.get(device_type)
             records.append({"route": self.route, "device": device.arn, "vendor": vendor, "qubits": paradigm.get("qubitCount"),
                 "native_gates": [{"zz": "rzz", "xx": "rxx", "prx": "u1q"}.get(g.lower(), g.lower()) for g in native], "coupling": coupling,
                 "all_to_all": connection.get("fullyConnected", False), "directed_connectivity": False,
                 "supports": {"reset": False, "mid_circuit_measure": False, "feedforward": False},
                 "formats": ["openqasm3"], "parameter_units": "radians",
-                "capability_verified": bool(native and connection), "raw": raw})
+                "capability_verified": bool(native and connection), "raw": raw,
+                **({"execution_kind": classification, "execution_kind_verified": True,
+                    "execution_kind_source": "Braket AwsDevice.type"} if classification else {})})
         return records
 
     def estimate(self, artifact, options):

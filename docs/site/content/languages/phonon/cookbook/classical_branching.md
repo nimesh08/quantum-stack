@@ -22,17 +22,15 @@ if (m[0] == 1) {
 
 ## Why it works
 
-The legalisation pass reads `supports.feedforward: true` from the
-chip YAML and emits a real classical-controlled gate. On chips
-without feedforward, the same code post-selects (see
-[post_selection](../rules/post_selection.md)).
+The compiler checks the concrete target capability snapshot and emits a real
+classically controlled gate. Targets without required feedforward support
+receive a compilation error. There is [no automatic postselection](../rules/post_selection.md).
 
 ## Variations
 
 - **Multiple conditions**: separate `if` blocks, each one simple.
-- **Else branch**: `if (m[0] == 1) { ... } else { ... }`. On limited
-  chips (IBM "limited"), only the `if` body is emitted; the `else`
-  becomes the no-op default.
+- **Else branch**: `if (m[0] == 1) { ... } else { ... }` preserves both arms.
+  If a target cannot represent the program, compilation rejects it.
 
 ## Same in Photon
 
@@ -45,10 +43,9 @@ if (mid[0] == 1) { q.x(1) }
 
 ## Side effects on cost
 
-A feedforward branch on a feedforward-supporting chip is essentially
-free in time but adds latency for the classical control. On a chip
-without feedforward, post-selection halves the effective shot count
-per branch.
+Classical-control latency depends on the concrete target and its timing
+metadata. Missing timing data is reported as unavailable; no fixed latency or
+shot reduction is assumed.
 
 ## Where to look
 

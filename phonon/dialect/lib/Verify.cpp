@@ -16,7 +16,7 @@ namespace {
 bool isQuantumType(Type t) { return t.kind == TypeKind::Qubit; }
 bool isClassicalScalar(Type t) {
   return t.kind == TypeKind::Int || t.kind == TypeKind::Angle ||
-         t.kind == TypeKind::Bit;
+         t.kind == TypeKind::Bit || t.kind == TypeKind::UInt;
 }
 
 }  // namespace
@@ -116,6 +116,7 @@ void verify(const Module& m, Diagnostics& diag) {
       // --- classical ops ----------------------------------------------
       case OpKind::ConstInt:
       case OpKind::ConstAngle:
+      case OpKind::ConstUInt:
         // operand-free, exactly one result; producer attribute "value".
         if (!op.operands.empty() || op.results.size() != 1) {
           diag.error("phonon constant op malformed", loc, id);
@@ -130,7 +131,7 @@ void verify(const Module& m, Diagnostics& diag) {
         Type ta = m.typeOf(op.operands[0]);
         Type tb = m.typeOf(op.operands[1]);
         if (!isClassicalScalar(ta) || !isClassicalScalar(tb) ||
-            ta.kind == TypeKind::Bit || tb.kind == TypeKind::Bit) {
+            (ta.kind == TypeKind::Bit && tb.kind != TypeKind::Bit)) {
           diag.error("phonon.binop operands must be numeric int/angle",
                      loc, id);
         }

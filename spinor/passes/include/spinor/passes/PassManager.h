@@ -5,6 +5,7 @@
 #include "spinor/dialect/Spinor.h"
 #include "spinor/registry/Registry.h"
 #include "spinor/passes/OptimizationLevel.h"
+#include "spinor/passes/CompilationReport.h"
 
 namespace spinor::passes {
 
@@ -30,6 +31,10 @@ namespace spinor::passes {
 // semantics; block resynthesis does not flatten them into a unitary.
 bool validateCompiled(const dialect::Module& module, const registry::ChipInfo& chip,
                       dialect::Diagnostics& diag);
+// Canonicalize native angle ranges and symmetric operand order without
+// placement, routing, or changes to physical wire identities.
+dialect::Module canonicalizeNative(const dialect::Module& module,
+                                  const registry::ChipInfo& chip);
 
 class PassManager {
  public:
@@ -38,7 +43,15 @@ class PassManager {
   dialect::Module compile(const dialect::Module& module,
                           const registry::ChipInfo& chip,
                           OptimizationLevel level,
-                          dialect::Diagnostics& diag) const;
+                          dialect::Diagnostics& diag,
+                          CompilationReport* report = nullptr) const;
+  // Internal target-remapping entry: input has already been verified,
+  // individually bounded and logically simplified. Target checks still run.
+  dialect::Module compilePrepared(const dialect::Module& module,
+                          const registry::ChipInfo& chip,
+                          OptimizationLevel level,
+                          dialect::Diagnostics& diag,
+                          CompilationReport* report = nullptr) const;
 };
 
 }  // namespace spinor::passes

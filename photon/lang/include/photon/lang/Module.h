@@ -29,6 +29,7 @@ enum class TypeKind : std::uint8_t {
   Int,
   Angle,
   Bit,
+  UInt,
   Void,
   Oracle,  // forward-declared callable for photon.lib (M2).
 };
@@ -44,6 +45,7 @@ inline constexpr Type voidType()  { return {TypeKind::Void,   0}; }
 inline constexpr Type intType()   { return {TypeKind::Int,    0}; }
 inline constexpr Type angleType() { return {TypeKind::Angle,  0}; }
 inline constexpr Type bitType()   { return {TypeKind::Bit,    0}; }
+inline constexpr Type uintType(std::uint32_t width) { return {TypeKind::UInt, width}; }
 inline constexpr Type oracleType(){ return {TypeKind::Oracle, 0}; }
 inline constexpr Type qregType(std::uint32_t n) {
   return {TypeKind::QReg, n};
@@ -56,10 +58,16 @@ using ExprPtr = std::shared_ptr<const Expr>;
 
 enum class ExprKind : std::uint8_t {
   IntLit,
+  UIntLit,
+  BoolLit,
   RealLit,
   Ident,        // bare name; resolves to a parameter, local var, or QReg.
   BinOp,        // payload: op string, lhs, rhs.
   UnaryMinus,   // payload: rhs.
+  UnaryNot,
+  UnaryBitNot,
+  Index,
+  CastUInt,
   Range,        // payload: lhs..rhs (used in for-loops).
   Call,         // payload: callee identifier or member, args.
   Member,       // payload: receiver, member name (e.g. q.h).
@@ -73,6 +81,7 @@ struct Expr {
   ExprKind kind;
   std::string text;            // identifier name / op / member name.
   std::int64_t int_value = 0;
+  std::uint64_t uint_value = 0;
   double real_value = 0.0;
   std::vector<ExprPtr> children;
   Location loc;
@@ -91,9 +100,12 @@ enum class StmtKind : std::uint8_t {
   MeasureAll,   // q.measure() returns bit register
   MeasureInt,   // q.measure_int() returns int
   ForLoop,
+  WhileLoop,
+  BreakStmt, ContinueStmt, DiscardStmt,
   IfStmt,
   ReturnStmt,
   ExprStmt,
+  OutputStmt,
 };
 
 struct Stmt {

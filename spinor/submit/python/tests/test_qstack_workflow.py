@@ -378,7 +378,7 @@ def test_python_api_requires_explicit_execution_mode():
 
 def test_unknown_typed_contract_versions_are_rejected():
     with pytest.raises(QStackError, match="artifact version"):
-        CompiledArtifact("ibm", "device", "qasm3", "", {}, schema_version=2)
+        CompiledArtifact("ibm", "device", "qasm3", "", {}, schema_version=3)
     with pytest.raises(QStackError, match="options version"):
         SubmissionOptions(mode="live", schema_version=2)
     with pytest.raises(QStackError, match="receipt version"):

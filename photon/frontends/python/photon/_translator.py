@@ -1,9 +1,11 @@
 """@photon.kernel AST translator (M4) - Part 1: framework and gate set."""
 from __future__ import annotations
 import ast
+import copy
 import inspect
 import json
 import math
+import os
 import re
 import textwrap
 from typing import Any, Callable, List, Optional
@@ -87,13 +89,89 @@ class Translator(ast.NodeVisitor):
         self.constants: dict[str, Any] = {}
         self.expanded_iterations = 0
         self.runtime_depth = 0
+        self.runtime_values: dict[str, tuple[str, int]] = {}
+        self.operation_budget = int(os.environ.get("QSTACK_EXPANDED_OPERATION_BUDGET", "100000"))
+        self.normalized_returns = False
+        self.return_signature = None
+        self.return_register = None
+        self.return_value: Optional[tuple[str,int]]=None
+        self.loop_depth=0
+        self.loop_return_mode=False
+        self.may_return=False
+        if self.operation_budget <= 0:
+            raise UnsupportedConstructError("expanded operation budget must be positive")
 
     def _value(self, node: ast.AST) -> Optional[Any]:
         return _const_value(node, self.constants)
 
     # ----- output helpers -------------------------------------------------
     def _emit(self, s: str) -> None:
+        if len(self.lines) >= self.operation_budget:
+            raise UnsupportedConstructError("expanded operation budget exceeded; raise QSTACK_EXPANDED_OPERATION_BUDGET or reduce the program")
         self.lines.append("  " * self.indent + s)
+
+    @staticmethod
+    def _helper_call(node: ast.AST, name: str) -> bool:
+        return isinstance(node, ast.Call) and ((isinstance(node.func, ast.Name) and node.func.id == name) or
+            (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "photon" and node.func.attr == name))
+
+    def _controller(self, node: ast.AST) -> tuple[str, tuple[str, int]]:
+        """Render finite device-controller expressions without evaluating shots on the host."""
+        if isinstance(node, ast.Name) and node.id in self.runtime_values:
+            return node.id, self.runtime_values[node.id]
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in self.measured_bits:
+            register = self.measured_bits[node.value.id]
+            index = self._value(node.slice)
+            if type(index) is not int or not 0 <= index < self.bit_widths[register]:
+                raise self._err("measured bit requires an in-range static index", node)
+            return f"{register}[{index}]", ("bool", 1)
+        if isinstance(node, ast.Name) and node.id in self.measured_bits:
+            register = self.measured_bits[node.id]
+            if self.bit_widths[register] != 1:
+                raise self._err("measured register requires an explicit bit index", node)
+            return f"{register}[0]", ("bool", 1)
+        value = self._value(node)
+        if type(value) is bool:
+            return str(int(value)), ("bool", 1)
+        if type(value) in (int, float) and math.isfinite(value):
+            return repr(value), ("constant", 0)
+        if self._helper_call(node, "uint"):
+            if len(node.args) != 2 or node.keywords:
+                raise self._err("photon.uint expects (width, value)", node)
+            width = self._value(node.args[0])
+            if type(width) is not int or not 1 <= width <= 64:
+                raise self._err("uint width must be a static integer in [1,64]", node)
+            text, _ = self._controller(node.args[1])
+            return f"uint[{width}]({text})", ("uint", width)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            text, type_ = self._controller(node.operand)
+            if type_ != ("bool", 1):
+                raise self._err("not requires a Boolean controller value", node)
+            return f"!({text})", ("bool", 1)
+        if isinstance(node,ast.UnaryOp) and isinstance(node.op,ast.Invert):
+            text,type_=self._controller(node.operand)
+            if type_[0]!="uint":raise self._err("bitwise complement requires photon.uint",node)
+            return f"~({text})",type_
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            operators = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">="}
+            if type(node.ops[0]) not in operators:
+                raise self._err("unsupported controller comparison", node)
+            left, lt = self._controller(node.left); right, rt = self._controller(node.comparators[0])
+            if lt[0] != "constant" and rt[0] != "constant" and lt != rt:
+                raise self._err("controller comparison requires matching widths; use photon.uint to cast", node)
+            return f"{left} {operators[type(node.ops[0])]} {right}", ("bool", 1)
+        if isinstance(node, ast.BinOp):
+            symbols = {ast.Add: "+", ast.Sub: "-", ast.BitAnd: "&", ast.BitOr: "|", ast.BitXor: "^", ast.LShift: "<<", ast.RShift: ">>"}
+            if type(node.op) not in symbols:
+                raise self._err("runtime arithmetic supports +, -, bitwise operators and constant shifts", node)
+            left, lt = self._controller(node.left); right, rt = self._controller(node.right)
+            result = rt if lt[0] == "constant" else lt
+            if result[0] not in ("bool", "uint") or (rt[0] != "constant" and lt != rt):
+                raise self._err("runtime arithmetic requires explicit uint values of matching widths", node)
+            if result[0] == "bool" and type(node.op) not in (ast.BitAnd, ast.BitOr, ast.BitXor):
+                raise self._err("Boolean values support only &, | and ^; cast with photon.uint for arithmetic", node)
+            return f"({left} {symbols[type(node.op)]} {right})", result
+        raise self._err("expression is outside the finite controller language", node)
 
     def _measurement_register(self, qname: str, *, saved: bool) -> str:
         register = f"__c_{qname}"
@@ -178,18 +256,55 @@ class Translator(ast.NodeVisitor):
         # Reset to top-level (no `def { ... }` wrapper at M4; the engine
         # accepts a flat Phonon program).
         self.indent = 0
-        for name, n in declarations:
-            if name in self.qregs:
-                raise UnsupportedConstructError(f"duplicate quantum register '{name}'")
-            self.qregs[name] = n
-            self._emit(f"qubit {name}[{n}]")
-            self._emit(f"bit __c_{name}[{n}]")
-            self.bit_widths[f"__c_{name}"] = n
         self.declaration_end = len(self.lines)
-        for index, stmt in enumerate(fn.body):
-            if isinstance(stmt, ast.Return) and index + 1 != len(fn.body):
-                raise self._err("statements after an early return are unsupported", stmt)
-            self._visit_stmt(stmt)
+        def has_return(statements):
+            return any(isinstance(child,ast.Return) for statement in statements for child in ast.walk(statement))
+
+        def single_exit(statements):
+            if not statements:return []
+            first,*rest=statements
+            if isinstance(first,ast.Return):return [first]
+            if isinstance(first,(ast.For,ast.While)) and has_return(first.body):
+                raise self._err("return inside a loop requires loop-exit normalization",first)
+            if isinstance(first,ast.If) and has_return(first.body+first.orelse):
+                branch=copy.copy(first)
+                branch.body=single_exit(first.body+copy.deepcopy(rest))
+                branch.orelse=single_exit(first.orelse+copy.deepcopy(rest))
+                return [branch]
+            return [first]+single_exit(rest)
+
+        self.normalized_returns=any(has_return([statement]) for statement in fn.body[:-1]) or any(isinstance(statement,ast.If) and has_return(statement.body+statement.orelse) for statement in fn.body)
+        self.loop_return_mode=any(isinstance(child,(ast.For,ast.While)) and has_return(child.body) for child in ast.walk(fn))
+        statements=single_exit(fn.body) if self.normalized_returns and not self.loop_return_mode else fn.body
+        def all_paths_return(block):
+            if not block:return False
+            final=block[-1]
+            if isinstance(final,ast.Return):return final.value is not None
+            if isinstance(final,ast.If):
+                if isinstance(final.test,ast.Compare) and len(final.test.ops)==1:
+                    a,b=_const_value(final.test.left),_const_value(final.test.comparators[0])
+                    if type(a) in (int,float) and type(b) in (int,float):
+                        choices={ast.Eq:a==b,ast.NotEq:a!=b,ast.Lt:a<b,ast.LtE:a<=b,ast.Gt:a>b,ast.GtE:a>=b}
+                        if type(final.test.ops[0]) in choices:return all_paths_return(final.body if choices[type(final.test.ops[0])] else final.orelse)
+                return all_paths_return(final.body) and all_paths_return(final.orelse)
+            return False
+        if self.normalized_returns and not all_paths_return(statements):
+            raise UnsupportedConstructError("conditional return requires every reachable path to return a compatible value")
+        if self.loop_return_mode:
+            if any(isinstance(child,ast.Name) and child.id=="__qstack_returned" for child in ast.walk(fn)):raise UnsupportedConstructError("__qstack_returned is reserved for normalized loop returns")
+            self._emit("bool __qstack_returned = 0");self.runtime_values["__qstack_returned"]=("bool",1)
+        self._visit_sequence(statements)
+        if self.return_value is not None:self._emit(f"output {self.return_value[0]}")
+
+    def _visit_sequence(self,statements):
+        for index,statement in enumerate(statements):
+            if self.loop_return_mode and self.may_return:
+                self._emit("if (__qstack_returned == 0) {");self.indent+=1
+                self.may_return=False
+                self._visit_sequence(statements[index:])
+                self.indent-=1;self._emit("}");self.may_return=True
+                return
+            self._visit_stmt(statement)
 
     def _find_qreg(self, body: List[ast.stmt]) -> Optional[tuple[str, int]]:
         for stmt in body:
@@ -220,12 +335,15 @@ class Translator(ast.NodeVisitor):
             self._visit_if(node); return
         if isinstance(node, ast.Return):
             self._visit_return(node); return
+        if isinstance(node,(ast.Break,ast.Continue)):
+            if not self.loop_depth:raise self._err("break/continue requires a bounded runtime loop",node)
+            self._emit("break" if isinstance(node,ast.Break) else "continue");return
         if isinstance(node, ast.Pass):
             return
         if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
             raise self._err("`import` inside a kernel", node)
         if isinstance(node, ast.While):
-            raise self._err("`while` (use a counted `for` loop)", node)
+            self._visit_bounded_while(node);return
         if isinstance(node, ast.Try):
             raise self._err("`try` / exception handling", node)
         if isinstance(node, ast.With):
@@ -239,18 +357,53 @@ class Translator(ast.NodeVisitor):
         raise self._err(f"statement of kind {type(node).__name__}", node)
 
     def _visit_assign(self, node: ast.Assign) -> None:
-        if self.runtime_depth:
-            raise self._err("runtime branches cannot change classical bindings", node)
         if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             target = node.targets[0].id
             # QReg declaration already handled; skip.
             if (isinstance(node.value, ast.Call) and
                     self._is_qreg_call(node.value)):
-                if target not in self.qregs or self.indent:
-                    raise self._err("QReg must have a positive static size and be declared at kernel scope", node)
+                if self.runtime_depth and target not in self.qregs:
+                    if target in self.runtime_values or target in self.constants or target in self.measured_bits:
+                        raise self._err("branch-local QReg cannot shadow an existing binding",node)
+                    size=self._value(node.value.args[0]) if len(node.value.args)==1 and not node.value.keywords else None
+                    if type(size) is not int or not 0<size<=1000000:
+                        raise self._err("branch-local QReg requires a positive static size",node)
+                    self.qregs[target]=size
+                    self._emit(f"qubit {target}[{size}]")
+                    register=f"__c_{target}"
+                    if register not in self.bit_widths:
+                        self.lines.insert(self.declaration_end,f"bit {register}[{size}]")
+                        self.declaration_end+=1;self.bit_widths[register]=size
+                    return
+                if target not in self.qregs and not self.indent:
+                    size=self._value(node.value.args[0]) if len(node.value.args)==1 and not node.value.keywords else None
+                    if type(size) is not int or not 0<size<=1000000:raise self._err("QReg requires a positive static size",node)
+                    self.qregs[target]=size;self._emit(f"qubit {target}[{size}]")
+                    register=f"__c_{target}"
+                    if register not in self.bit_widths:
+                        self._emit(f"bit {register}[{size}]");self.bit_widths[register]=size;self.declaration_end=len(self.lines)
+                    return
+                if target in self.qregs or self.indent:
+                    raise self._err("QReg redeclaration is forbidden; branch-local QReg requires a new name and static size", node)
                 return
             if target in self.qregs:
                 raise self._err("quantum registers cannot be rebound to classical values", node)
+            controller_expression = target in self.runtime_values or self._helper_call(node.value, "uint") or isinstance(node.value, (ast.Subscript, ast.Compare, ast.UnaryOp, ast.BinOp)) or (isinstance(node.value, ast.Name) and node.value.id in self.runtime_values | self.measured_bits) or isinstance(node.value, ast.Constant) and type(node.value.value) is bool
+            if (controller_expression and (self._value(node.value) is None or type(self._value(node.value)) is bool)) or target in self.runtime_values or self._helper_call(node.value, "uint"):
+                text, type_ = self._controller(node.value)
+                previous = self.runtime_values.get(target)
+                if previous:
+                    if type_[0] != "constant" and previous != type_:
+                        raise self._err("assignment changes controller type or width; cast explicitly", node)
+                    self._emit(f"{target} = {text}")
+                else:
+                    if type_[0] == "constant":
+                        raise self._err("runtime scalar requires bool or explicit photon.uint", node)
+                    declaration = "bool" if type_[0] == "bool" else f"uint[{type_[1]}]"
+                    self._emit(f"{declaration} {target} = {text}")
+                    self.runtime_values[target] = type_
+                self.constants.pop(target, None)
+                return
             # measure() returning a bit list is recorded so future
             # `if c == 1:` can resolve to a phonon bit reference.
             if (isinstance(node.value, ast.Call) and
@@ -261,7 +414,14 @@ class Translator(ast.NodeVisitor):
                 if node.value.args or node.value.keywords:
                     raise self._err("measure() accepts no arguments; index the returned measured bits", node.value)
                 qname = node.value.func.value.id
-                register = self._measurement_register(qname, saved=True)
+                if self.runtime_depth:
+                    if target not in self.measured_bits:
+                        raise self._err("declare a measured register before runtime control; saved scalar bits use explicit snapshots",node)
+                    register = self.measured_bits[target]
+                    if self.bit_widths[register] != self.qregs[qname]:
+                        raise self._err("runtime measurement assignment must preserve register width",node)
+                else:
+                    register = self._measurement_register(qname, saved=True)
                 # Emit per-slot measure into __c_q[i] bits.
                 for i in range(self.qregs[qname]):
                     self._emit(
@@ -269,6 +429,8 @@ class Translator(ast.NodeVisitor):
                 self.measured_bits[target] = register
                 self.constants.pop(target, None)
                 return
+            if self.runtime_depth:
+                raise self._err("runtime branches cannot change classical bindings of compile-time scalars; use photon.uint", node)
             # Plain int/float assignment becomes a Phonon `int` decl.
             v = self._value(node.value)
             if type(v) is int:
@@ -291,6 +453,14 @@ class Translator(ast.NodeVisitor):
 
     def _visit_expr_stmt(self, node: ast.Expr) -> None:
         v = node.value
+        if self._helper_call(v,"discard"):
+            if len(v.args)!=1 or v.keywords or not isinstance(v.args[0],ast.Name) or v.args[0].id not in self.qregs:raise self._err("photon.discard expects one live quantum register",v)
+            name=v.args[0].id;self._emit(f"discard {name}");self.qregs.pop(name);return
+        if self._helper_call(v, "output"):
+            if len(v.args)!=1 or v.keywords or not isinstance(v.args[0],ast.Name) or v.args[0].id not in self.runtime_values:
+                raise self._err("photon.output expects one named controller value",v)
+            self._emit(f"output {v.args[0].id}")
+            return
         if isinstance(v, ast.Call):
             self._emit_call(v); return
         raise self._err("standalone expression", node)
@@ -478,75 +648,81 @@ class Translator(ast.NodeVisitor):
                 raise self._err("static loop expansion exceeds 100000 iterations", node)
             self.constants[var] = value
             self.indent += 1
-            for statement in node.body:
-                self._visit_stmt(statement)
+            self._visit_sequence(node.body)
             self.indent -= 1
 
     def _visit_if(self, node: ast.If) -> None:
-        cmp_ = node.test
-        operators = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<",
-                     ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">="}
-        if not (isinstance(cmp_, ast.Compare) and
-                len(cmp_.ops) == 1 and type(cmp_.ops[0]) in operators):
-            raise self._err("if-predicate requires one numeric or measured-bit comparison", node)
-        left, right = cmp_.left, cmp_.comparators[0]
-        lhs, rhs = self._value(left), self._value(right)
-        operator = operators[type(cmp_.ops[0])]
-        if type(lhs) in (int, float) and type(rhs) in (int, float):
-            take = {"==": lhs == rhs, "!=": lhs != rhs, "<": lhs < rhs,
-                    "<=": lhs <= rhs, ">": lhs > rhs, ">=": lhs >= rhs}[operator]
-            self.indent += 1
-            for statement in node.body if take else node.orelse:
-                self._visit_stmt(statement)
-            self.indent -= 1
-            return
-
-        def operand(expression, value):
-            if type(value) in (int, float) and math.isfinite(value):
-                return repr(value)
-            if isinstance(expression, ast.Subscript) and isinstance(expression.value, ast.Name):
-                var, index = expression.value.id, self._value(expression.slice)
-                if var not in self.measured_bits or type(index) is not int:
-                    raise self._err("condition requires a measured bit with a static index", node)
-                register = self.measured_bits[var]
-                width = self.bit_widths[register]
-                if not 0 <= index < width:
-                    raise self._err("measured bit index out of range", node)
-                return f"{register}[{index}]"
-            if isinstance(expression, ast.Name) and expression.id in self.measured_bits:
-                register = self.measured_bits[expression.id]
-                if self.bit_widths[register] != 1:
-                    raise self._err("comparison of a measured register requires an explicit bit index", node)
-                return f"{register}[0]"
-            raise self._err("condition requires a measured bit and a compile-time numeric value", node)
-
-        if type(lhs) not in (int, float) and type(rhs) not in (int, float):
-            raise self._err("runtime comparison requires one measured bit and one constant", node)
-        self._emit(f"if ({operand(left, lhs)} {operator} {operand(right, rhs)}) {{")
-        constants_before = self.constants.copy()
+        if isinstance(node.test, ast.Compare) and len(node.test.ops) == 1:
+            lhs, rhs = self._value(node.test.left), self._value(node.test.comparators[0])
+            if type(lhs) in (int, float) and type(rhs) in (int, float):
+                comparisons = {ast.Eq: lhs == rhs, ast.NotEq: lhs != rhs, ast.Lt: lhs < rhs,
+                               ast.LtE: lhs <= rhs, ast.Gt: lhs > rhs, ast.GtE: lhs >= rhs}
+                if type(node.test.ops[0]) not in comparisons:
+                    raise self._err("unsupported static comparison", node)
+                self.indent += 1
+                self._visit_sequence(node.body if comparisons[type(node.test.ops[0])] else node.orelse)
+                self.indent -= 1
+                return
+        condition, type_ = self._controller(node.test)
+        if type_ != ("bool", 1):
+            raise self._err("if requires a Boolean condition; compare uint explicitly", node)
+        self._emit(f"if ({condition}) {{")
+        constants_before, values_before = self.constants.copy(), self.runtime_values.copy()
+        qregs_before=self.qregs.copy()
+        return_before=self.may_return
         self.runtime_depth += 1
         self.indent += 1
-        for s in node.body:
-            self._visit_stmt(s)
+        self._visit_sequence(node.body)
+        return_then=self.may_return
         self.indent -= 1
         self._emit("}")
-        self.constants = constants_before.copy()
+        self.constants, self.runtime_values = constants_before.copy(), values_before.copy()
+        self.qregs=qregs_before.copy()
+        self.may_return=return_before
         if node.orelse:
             self._emit("else {")
             self.indent += 1
-            for s in node.orelse:
-                self._visit_stmt(s)
+            self._visit_sequence(node.orelse)
             self.indent -= 1
             self._emit("}")
         self.runtime_depth -= 1
-        self.constants = constants_before
+        self.constants, self.runtime_values = constants_before, values_before
+        self.qregs=qregs_before
+        self.may_return=self.may_return or return_then
+
+    def _visit_bounded_while(self,node:ast.While)->None:
+        call=node.test
+        if not self._helper_call(call,"bounded"):
+            raise self._err("`while` requires photon.bounded(condition, max_iterations=N)",node)
+        if len(call.args)!=1 or len(call.keywords)!=1 or call.keywords[0].arg!="max_iterations" or node.orelse:
+            raise self._err("bounded while expects one condition, max_iterations=N and no else clause",node)
+        bound=self._value(call.keywords[0].value)
+        if type(bound) is not int or not 0<bound<=self.operation_budget:
+            raise self._err("max_iterations must be a positive static integer within the operation budget",node)
+        condition,type_=self._controller(call.args[0])
+        if type_!=("bool",1):
+            raise self._err("bounded while requires a Boolean predicate",node)
+        if self.loop_return_mode:condition=f"({condition}) & (__qstack_returned == 0)"
+        self._emit(f"while ({condition}) max_iterations {bound} {{")
+        constants_before,values_before=self.constants.copy(),self.runtime_values.copy()
+        qregs_before=self.qregs.copy()
+        self.runtime_depth+=1;self.indent+=1;self.loop_depth+=1
+        self._visit_sequence(node.body)
+        self.indent-=1;self.runtime_depth-=1;self.loop_depth-=1
+        self.constants,self.runtime_values=constants_before,values_before
+        self.qregs=qregs_before
+        self._emit("}")
 
     def _visit_return(self, node: ast.Return) -> None:
-        if self.indent:
+        if self.indent and not self.normalized_returns and not self.loop_return_mode:
             raise self._err("return inside a loop or conditional is unsupported", node)
         if node.value is None:
             return
         v = node.value
+        def mark_return():
+            if self.loop_return_mode:
+                self._emit("__qstack_returned = 1");self.may_return=True
+                if self.loop_depth:self._emit("break")
         # Allow `return q.measure_int()` and `return q.measure()`.
         if (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and
                 isinstance(v.func.value, ast.Name) and
@@ -555,18 +731,34 @@ class Translator(ast.NodeVisitor):
             if v.args or v.keywords:
                 raise self._err(f"{v.func.attr}() accepts no arguments", v)
             qname = v.func.value.id
+            signature=(self.qregs[qname],v.func.attr)
+            if self.return_signature is not None and self.return_signature!=signature:
+                raise self._err("all return paths must use the same width and return representation",node)
+            self.return_signature=signature
+            if self.return_register is None:self.return_register=f"__c_{qname}"
             offset = 0
             for register, width in self.bit_widths.items():
-                if register == f"__c_{qname}":
+                if register == self.return_register:
                     self.return_bits = list(range(offset, offset + width))
                     break
                 offset += width
             for i in range(self.qregs[qname]):
-                self._emit(f"__c_{qname}[{i}] = measure {qname}[{i}]")
+                self._emit(f"{self.return_register}[{i}] = measure {qname}[{i}]")
+            mark_return()
             return
-        raise self._err(
-            "`return` value must be `q.measure_int()` or `q.measure()`",
-            node)
+        text,type_=self._controller(v)
+        if type_[0] not in ("bool","uint"):raise self._err("classical returns require bool or explicit photon.uint",node)
+        signature=("controller",type_)
+        if self.return_signature is not None and self.return_signature!=signature:raise self._err("all return paths must have the same classical type and width",node)
+        self.return_signature=signature
+        if self.return_value is None:
+            name="__qstack_return_value"
+            if name in self.runtime_values or name in self.constants or name in self.qregs:raise self._err("__qstack_return_value is reserved for normalized returns",node)
+            declaration="bool" if type_[0]=="bool" else f"uint[{type_[1]}]"
+            self.lines.insert(self.declaration_end,f"{declaration} {name} = 0");self.declaration_end+=1
+            self.return_value=(name,type_[1])
+        self._emit(f"{self.return_value[0]} = {text}")
+        mark_return()
 
 
 def translate(fn: Callable[..., Any], target: str = "generic", *,

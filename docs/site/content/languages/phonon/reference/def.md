@@ -13,8 +13,8 @@ def <name> ( <param>* ) <block>
 | Form | Meaning |
 |---|---|
 | `qubit q` | qubit operand (linear; consumed-and-returned by gates inside) |
-| `bit c[N]` | bit register parameter |
-| `int n` | integer parameter (compile-time constant or runtime) |
+| `bit c` | one measured-bit slot parameter |
+| `int n` | exact signed integer parameter (compile-time constant) |
 | `angle theta` | angle parameter (passed into rotation gates) |
 
 ## Semantics
@@ -26,6 +26,10 @@ sees a flat program.
 ## Legality
 
 - All `qubit` parameters are passed by linear reference.
+- Numeric parameters are bound before compilation; general runtime UInt/Boolean
+  helper-call parameters and expression-valued classical returns are not implemented.
+- Helpers return one live qubit per quantum parameter, with distinct aliases.
+  See [return](return.md) for conditional state transfer.
 - A function cannot be re-defined.
 - Calling a function not yet declared is an error (forward declarations
   not supported).

@@ -1,5 +1,6 @@
 #include "spinor/passes/KakResynthesis.h"
 #include "TwoQubitMath.h"
+#include "spinor/passes/CompilationReport.h"
 #include <map>
 #include <set>
 
@@ -18,6 +19,8 @@ dialect::Module KakResynthesis::run(const dialect::Module& m,
   const auto indices=twoq::instructionIndices(m);
   std::map<std::size_t,KakResult> replacements;
   std::set<std::size_t> removed;
+  std::vector<std::size_t> regionFor(circuit.instructions.size());
+  for(std::size_t i=0,region=0;i<circuit.instructions.size();++i){regionFor[i]=region;if(isNumericalRegionBoundary(circuit.instructions[i]))++region;}
   for(const auto& consolidated:blocks){
     const auto& block=consolidated.block;
     if(block.ops.empty())continue;
@@ -30,10 +33,22 @@ dialect::Module KakResynthesis::run(const dialect::Module& m,
       }
     }
     try {
-      const auto candidate=TwoQubitDecomposer{}.decompose(consolidated.unitary,traits,chip?&localChip:nullptr);
+      const auto candidate=[&]{CompilationReportScope temporary(nullptr);
+        return TwoQubitDecomposer{}.decompose(consolidated.unitary,traits,chip?&localChip:nullptr);}();
+      if(auto* report=currentCompilationReport()){
+        ++report->counters["two_qubit_synthesis_trials"];
+        ++report->counters["two_qubit_construction_"+candidate.construction];
+        if(candidate.analyticalAttempted){
+          ++report->counters["analytical_native_trials"];
+          ++report->counters[candidate.analyticalRejection.empty()?"analytical_native_selected":"analytical_native_rejected_"+candidate.analyticalRejection];
+        }
+      }
       const auto candidateCost=std::pair{std::size_t(candidate.entanglerUses),candidate.operations.size()};
       const auto originalCost=std::pair{consolidated.entanglerUses,block.ops.size()};
-      if(candidateCost>=originalCost||candidate.operations.size()>block.ops.size())continue;
+      if(candidateCost>=originalCost||candidate.operations.size()>block.ops.size()){
+        if(auto* report=currentCompilationReport())++report->counters["two_qubit_rewrite_non_improving"];
+        continue;
+      }
       // Do not trust a stale side table: verify against the current block.
       auto original=la::identity4();
       for(auto id:block.ops){
@@ -49,9 +64,14 @@ dialect::Module KakResynthesis::run(const dialect::Module& m,
         op.loc=circuit.instructions[indices[block.ops.front().v]].loc;
       }
       const auto first=indices.at(block.ops.front().v);
+      std::vector<dialect::WireOp> originalOps;
+      for(auto id:block.ops)originalOps.push_back(circuit.instructions.at(indices.at(id.v)));
+      observeRewrite("two-qubit-kak","native-block",originalOps,placed.operations,0,placed.globalPhase,1e-9,numericalRegion(regionFor[first]));
+      if(auto* report=currentCompilationReport())++report->counters["two_qubit_rewrites_accepted"];
       replacements.emplace(first,std::move(placed));
       for(auto id:block.ops)removed.insert(indices.at(id.v));
     }catch(const std::runtime_error&){
+      if(auto* report=currentCompilationReport())++report->counters["two_qubit_synthesis_fallbacks"];
       // Optimization is optional: a nonrepresentable exact candidate (for
       // example a discrete Clifford+T target) keeps the existing native block.
       // The original compilation remains valid; no approximate fallback.

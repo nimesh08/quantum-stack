@@ -23,6 +23,10 @@ enum class Tok : std::uint8_t {
   Def,
   Return,
   For,
+  While,
+  MaxIterations,
+  Output,
+  Bounded, Break, Continue, Discard,
   If,
   Else,
   In,
@@ -30,6 +34,8 @@ enum class Tok : std::uint8_t {
   Int,
   Angle,
   Bit,
+  UInt,
+  True, False,
   QReg,    // matches the literal identifier "QReg" so the AST can
            // distinguish constructor calls from generic identifiers.
   // Built-ins
@@ -54,6 +60,7 @@ enum class Tok : std::uint8_t {
   NotEq,
   Lt, Gt, Le, Ge,
   Plus, Minus, Star, Slash,
+  Amp, Pipe, Caret, Bang, Tilde, ShiftLeft, ShiftRight,
   DotDot,          // .. (range)
   // Layout
   Newline,

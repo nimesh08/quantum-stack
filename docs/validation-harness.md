@@ -1,0 +1,29 @@
+# Manual provider validation
+
+The harness consumes an immutable compiled artifact and uses the same configuration, dry-run, authentication, submission, cost-cap and persistent-job services as `qstack`. It defaults to offline operation. SDK contract success, account access and hardware evidence are recorded separately.
+
+```text
+python -m qstack.validation_harness build/bell --output evidence/offline.json
+python -m qstack.validation_harness build/bell --level account --env-file "C:\quantum\research.env" --output evidence/account.json
+python -m qstack.validation_harness build/bell --level hardware --shots 128 --cost-cap-usd 1 --env-file "C:\quantum\research.env" --output evidence/live.json
+```
+
+The explicit `hardware` level creates a live job. If a requested dollar cap cannot be estimated, the existing submission service rejects the job. Omitting the cap preserves the public CLI's uncapped execution behavior. The harness never retries creation. Receipts are saved before waiting, and later retrieval uses `qstack jobs results JOB_REF`; do not rerun the harness to retrieve a pending job.
+
+Qibolab has no cloud account. Its exact `authenticated: null, configured: true` result is recorded as `laboratory_configured: true`, with `account_access_verified: false`; explicitly selected live laboratory execution still passes the same fresh capability checks. Merely loading the laboratory configuration does not establish hardware identity or calibration quality. Other providers cannot substitute this laboratory configuration result for authentication.
+
+Prepare separate artifacts for zero/one states, Bell/GHZ states, sparse readout destinations and supported reset or conditional operations. A Z-basis Bell histogram alone does not demonstrate entanglement: use separately compiled complementary-basis experiments when that property is being assessed. Only use features admitted by the concrete device and format contracts.
+
+`--expected-bitstring 00 --expected-bitstring 11` records the observed fraction of accepted outcomes and a two-sided 95% Wilson interval. `--minimum-success-probability 0.9` compares that interval's lower bound to a criterion supplied before execution. It does not assert ideal noise-free hardware. Probability-only provider responses remain raw probabilities and cannot satisfy an integer-shot histogram check. The process exits unsuccessfully if requested sampling validation cannot run or falls below its threshold, while retaining the completed execution evidence separately.
+
+Evidence includes artifact/snapshot hashes, compiler/source identity when present, installed SDK versions, timestamps, exact receipts, raw results, ordering and redacted errors. A completed live job is labelled hardware-verified only if the fresh submission receipt explicitly has `device_execution_kind: hardware` and `device_execution_kind_verified: true`. These fields are separate from an adapter's transport marker, such as Qibolab's `execution_kind: synchronous-lab`, which remains necessary for later result retrieval. The old artifact does not establish device classification. Unknown devices, emulators and syntax checkers do not automatically become hardware evidence.
+
+IBM discovery classifies a backend only from its strict Boolean `BackendConfiguration.simulator` field; Braket uses `AwsDevice.type` with the documented `QPU` or `SIMULATOR` values. Missing or unfamiliar values remain unknown, regardless of the backend name or ARN. Other routes need an explicit verified discovery/laboratory contract with `execution_kind`, `execution_kind_verified` and a source reference before the harness records hardware evidence. This classification identifies the execution service; it does not certify fidelity or pulse calibration. Sources: [IBM configuration](https://quantum.cloud.ibm.com/docs/en/api/qiskit-ibm-runtime/models-backend-configuration), [Braket device types](https://amazon-braket-sdk-python.readthedocs.io/en/latest/_apidoc/braket.aws.aws_device.html).
+
+Provider SDK failures retain redacted failure evidence and any previously saved receipt. Raw SDK exception text is omitted because it may include session credentials. An ambiguous submission is never automatically retried.
+
+Optional supplied timing models use `schema_version: 1`, exact `route` and `device`, the recorded `capability_hash`, and provenance with `kind`, `source` and optional timezone-qualified `observed_at`/`valid_until`. They may supply `calibration.instruction_durations` in nanoseconds and `scheduling.feedback_latency_ns`, `exclusive_qubit_groups`, or named capacity-one resources plus exact `instruction_resources`. Parameter-specific duration entries apply only to their recorded parameters. Models remain advisory; missing durations or runtime feedback latency suppress duration estimates, and supplied data is not a physical calibration certification.
+
+Operation calibration uses ordered physical loci: a symmetric gate matrix does not establish equal durations for opposite operand orders. Reused classical storage slots, SSA data dependencies and named resources constrain the schedule. Quality changes have a separate fingerprint from capability changes; a fresh quality fingerprint can mark an artifact's old performance estimates stale without changing the artifact. No provider is claimed to obey this advisory schedule or its supplied resource assumptions.
+
+Reports record `model_validity_at_compile.as_of` and the status of every supplied validity interval. Expired data or observations dated after that time suppress duration and start-time estimates. Missing time bounds stay `unknown`; an operator's declared interval does not certify its source. Tests can supply a fixed `as_of` to reproduce this decision. Offline `contract_tested` in this manual report means this artifact passed target and serialization checks; the provider adapter contract suite has separate release evidence.

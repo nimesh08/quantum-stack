@@ -28,6 +28,9 @@ def compile_qir(tmp_path):
         artifact = compile_file(path, target=target, optimization_level=0, format="qir-text")
         module = pyqir.Module.from_ir(pyqir.Context(), artifact.program_text())
         assert module.verify() is None
+        from qstack.verification import verify_artifact
+        evidence = verify_artifact(artifact, store=False)
+        assert evidence["status"] == "passed", evidence
         return artifact, module
 
     return compile_source

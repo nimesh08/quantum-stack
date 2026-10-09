@@ -589,6 +589,12 @@ class Driver {
 
 ParseResult parse(std::string_view text, std::string_view filename) {
   ParseResult r;
+  // Typed controller programs use the lossless dialect spelling. Legacy
+  // source syntax remains unchanged; no metadata is hidden in comments.
+  const auto first=text.find_first_not_of(" \t\r\n");
+  if(first!=std::string_view::npos&&text.substr(first).starts_with("spinor.module")){
+    r.module=spinor::dialect::parse(text,r.diag);return r;
+  }
   Lexer lx(text);
   std::vector<Token> toks = lx.tokenize();
   r.module = Module();

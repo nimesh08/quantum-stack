@@ -67,6 +67,8 @@ struct Flags {
 
   std::optional<int>           shots;
   int                         optimization_level = 2;
+  std::optional<std::string>   numerical_report;
+  std::optional<std::string>   logical_ir_output;
   std::optional<double>        cost_cap_usd;
 
   Mode                         mode = Mode::Cassette;

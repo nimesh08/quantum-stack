@@ -39,7 +39,8 @@ aqt = ["aqt-connector==0.4"]
 qir = ["pyqir==0.12.6"]
 keyring = ["keyring==25.7.0"]
 qibolab = ["qibolab==0.2.17"]
-test = ["pytest>=9.0"]
+test = ["pytest>=9.0", "numpy==2.5.3"]
+verify = ["numpy==2.5.3", "pyqir==0.12.6"]
 
 [project.urls]
 Homepage = "https://nimesh08.github.io/quantum-stack/"

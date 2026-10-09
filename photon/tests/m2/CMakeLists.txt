@@ -23,3 +23,5 @@ photon_add_m2_test(photon_m2_lib_test  lib_test.cpp)
 photon_add_m2_test(photon_m2_semantic_test semantic_test.cpp)
 target_link_libraries(photon_m2_semantic_test PRIVATE
   phonon::lower phonon::parser spinor::parser spinor::passes spinor::sim)
+photon_add_m2_test(photon_controller_test controller_test.cpp)
+target_link_libraries(photon_controller_test PRIVATE phonon::lower spinor::sim)

@@ -2,8 +2,8 @@
 //
 // OptimizationLoop — generic fixed-point / minimum-point loop
 // over a body functor. *Pure pipeline scheduling — vendor-
-// independent.* Identical to Qiskit's DoWhileController (fixed
-// point) and MinimumPoint controller.
+// independent.* Fixed-point convergence and bounded best-candidate selection
+// are owned pipeline scheduling operations; no provider compiler is involved.
 //
 // Templated on a Criterion so the same loop body serves O1/O2
 // (FixedPointCriterion) and O3 (MinimumPointCriterion).
@@ -20,7 +20,7 @@ namespace spinor::passes {
 // Cheap circuit metric used by both criteria.
 struct CircuitMetric {
   std::size_t size = 0;
-  std::size_t depth = 0;  // Phase A: approximated as `size`.
+  std::size_t depth = 0;  // Wire dependency depth with conservative hard fences.
   bool operator==(const CircuitMetric& o) const {
     return size == o.size && depth == o.depth;
   }
@@ -28,10 +28,9 @@ struct CircuitMetric {
 
 CircuitMetric computeMetric(const dialect::Module& m);
 
-// FixedPointCriterion: stop when (size, depth) stops changing
-// for one full iteration. Identical to Qiskit's
-// DoWhileController(do_while = lambda ps: not converged).
-// Vendor-independent — only inspects metric values.
+// FixedPointCriterion exposes metric convergence for public callers. The
+// pipeline loop additionally compares complete serialized IR so equal resource
+// counts alone cannot hide a still-changing circuit.
 class FixedPointCriterion {
  public:
   bool shouldStop(const CircuitMetric& prev,
@@ -40,9 +39,8 @@ class FixedPointCriterion {
 };
 
 // MinimumPointCriterion: stop when no improvement after N
-// consecutive iterations, OR maxIters reached. Identical to
-// Qiskit's MinimumPoint controller. More aggressive than fixed-
-// point — allows temporary worsening if it leads to a deeper
+// consecutive iterations, OR maxIters reached. Allows temporary worsening
+// if it leads to a deeper
 // minimum. Vendor-independent.
 class MinimumPointCriterion {
  public:

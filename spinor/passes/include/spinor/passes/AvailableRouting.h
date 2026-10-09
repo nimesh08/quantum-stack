@@ -7,6 +7,7 @@ namespace spinor::passes {
 // Compile on a usable subgraph, then restore the provider's physical indices.
 // A missing result means the original target needs no restricted subgraph.
 std::optional<dialect::Module> compileAvailableCircuit(const dialect::Module&,
-    const registry::ChipInfo&, OptimizationLevel, dialect::Diagnostics&);
+    const registry::ChipInfo&, OptimizationLevel, dialect::Diagnostics&,
+    CompilationReport* report = nullptr);
 void validateAvailableCircuit(const dialect::WireCircuit&, const registry::ChipInfo&);
 }

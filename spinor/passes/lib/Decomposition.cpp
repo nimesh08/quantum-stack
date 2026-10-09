@@ -1,5 +1,6 @@
 #include "spinor/passes/Decomposition.h"
 #include "NativeSynthesis.h"
+#include "spinor/passes/CompilationReport.h"
 #include <functional>
 
 namespace spinor::passes {
@@ -78,13 +79,15 @@ Module Decomposition::run(const Module& input,const registry::ChipInfo& chip,Dia
     return matrix;
   };
   int depth=0;
+  std::size_t region=0;
   for(const auto& op:in.instructions)try{
     if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){
       out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;continue;
     }
     double phaseBefore=out.globalPhase;
+    const auto instructionStart=out.instructions.size();
     auto emitOperation=[&]{
-    if(op.kind==OpKind::Measure||op.kind==OpKind::Reset||op.kind==OpKind::Barrier){out.instructions.push_back(op);return;}
+    if(isClassical(op.kind)||op.kind==OpKind::Measure||op.kind==OpKind::Reset||op.kind==OpKind::Barrier){out.instructions.push_back(op);return;}
     std::string name(opMnemonic(op.kind));name=name.substr(7);
     bool halfXOnly=op.kind==OpKind::Rx&&chip.decompose.oneQubitPi2Gate=="rx";
     bool needsFixedX=halfXOnly&&std::abs(parameter(op)/(M_PI/2)-std::round(parameter(op)/(M_PI/2)))>kRecognitionTolerance;
@@ -114,6 +117,10 @@ Module Decomposition::run(const Module& input,const registry::ChipInfo& chip,Dia
       double localPhase=out.globalPhase-phaseBefore;out.globalPhase=phaseBefore;
       if(std::abs(localPhase)>kRecognitionTolerance)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(localPhase)},op.loc});
     }
+    observeRewrite("decomposition","native-operation",{op},
+      std::vector<WireOp>(out.instructions.begin()+instructionStart,out.instructions.end()),
+      0,out.globalPhase-phaseBefore,1e-9,numericalRegion(region));
+    if(isNumericalRegionBoundary(op))++region;
   }catch(const std::exception& e){diag.error("decompose: "+std::string(e.what())+" on "+chip.id,op.loc);return input;}
   return rebuild(out);
 }

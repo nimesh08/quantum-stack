@@ -8,8 +8,8 @@ compiler invariants; passing them is not a proof of a program's overall physics.
 A gate consumes its input SSA value and returns the next value on the same
 wire. A helper can return distinct qubit values. Inside a runtime branch, a
 returned permutation is materialized as SWAP operations so caller wire
-identities agree at the branch join. Substituting freshly allocated wires at
-such a join is unsupported and produces an error.
+identities agree at the branch join. Fresh-wire replacements use the same fixed-wire state transfer. Reserved
+ancillas start in zero; discarded/reused pool slots are explicitly reset.
 
 ## Measurement preserves a projected quantum state
 
@@ -41,10 +41,10 @@ this ideal gate-level contract.
 
 ## Supported classical storage
 
-Named `bit` registers are mutable measurement destinations. Numeric scalars
-support compile-time calculations. Copying measured data into a numeric scalar
-is currently unsupported: use a separate measurement destination for data that
-must remain available after another destination is overwritten.
+Named `bit` registers are mutable measurement destinations. `bool saved=c[0]`
+and `int saved=c[0]` make immutable snapshots, preserving the saved result after
+a later measurement overwrites c[0]. Runtime arithmetic requires explicit
+`uint[W]` values. See the [controller language](../../../../language/controller.md).
 
 See [measurement capability](../spinor/rules/W4_no_op_after_measure.md),
 [`reset`](../spinor/reference/reset.md), and

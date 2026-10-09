@@ -2,10 +2,13 @@
 
 #include "phonon/lower/Lowering.h"
 #include "spinor/dialect/Circuit.h"
+#include "spinor/dialect/ExactInteger.h"
+#include "spinor/dialect/Classical.h"
 
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -39,6 +42,10 @@ struct Lowerer {
   std::unordered_map<std::uint32_t, sd::ValueId> vmap;
   // Compile-time integer values for classical scalars + for-vars.
   std::unordered_map<std::uint32_t, double> ctMap;
+  std::unordered_map<std::uint32_t, std::int64_t> exactMap;
+  std::unordered_map<std::uint32_t,std::string> runtimeValues;
+  bool controller=false;
+  std::unordered_map<std::string,std::string> loopOutputs;
 
   // Function index.
   std::unordered_map<std::string, FuncRange> funcs;
@@ -77,6 +84,56 @@ struct Lowerer {
     }
     nextAnonymousBit = std::max(nextAnonymousBit, declaredBits);
     out.numClbits = nextAnonymousBit;
+    for(const auto& op:m.ops())if(op.kind==pd::OpKind::Copy||op.kind==pd::OpKind::ConstUInt||op.kind==pd::OpKind::Output||(op.kind==pd::OpKind::Select&&std::none_of(op.attributes.begin(),op.attributes.end(),[](const auto& attr){return attr.name=="mutable_clbit";})))controller=true;
+    if(controller)for(std::size_t bit=0;bit<out.numClbits;++bit){
+      out.classicalStorage.push_back({"s"+std::to_string(bit),1,{static_cast<int>(bit)},"exported",true,"0"});
+      out.exportedClbits.push_back(static_cast<int>(bit));
+    }
+    if(controller)for(const auto& op:m.ops())if(op.kind==pd::OpKind::Output){
+      std::string name,role;for(const auto& attr:op.attributes){if(attr.name=="name")name=std::get<std::string>(attr.value);if(attr.name=="role")role=std::get<std::string>(attr.value);}
+      if(role=="loop_exhausted"&&!loopOutputs.count(name))loopOutputs[name]=emitController(sd::OpKind::CConst,pd::bitType(),{},op.loc,"0");
+    }
+  }
+
+  std::string newValue(pd::Type type,std::optional<int> existing=std::nullopt,bool initialized=false){
+    const auto width=type.kind==pd::TypeKind::UInt?type.width:1u;
+    if(width<1||width>64)throw std::invalid_argument("classical width must be in [1,64]");
+    sd::ClassicalValue value;value.id="v"+std::to_string(out.classicalValues.size());
+    value.type=type.kind==pd::TypeKind::UInt?"uint":"bool";value.width=width;value.visibility="private";value.initialized=initialized;if(initialized)value.initialValue="0";
+    if(existing)value.storage={*existing};
+    else{
+      for(unsigned i=0;i<width;++i)value.storage.push_back(static_cast<int>(out.numClbits++));
+      out.classicalStorage.push_back({"s"+std::to_string(out.classicalStorage.size()),width,value.storage,"private",false,{}});
+      nextAnonymousBit=out.numClbits;
+    }
+    out.classicalValues.push_back(value);return value.id;
+  }
+  const sd::ClassicalValue& valueInfo(const std::string& id)const{
+    for(const auto& value:out.classicalValues)if(value.id==id)return value;
+    throw std::invalid_argument("unknown classical value: "+id);
+  }
+  std::string emitController(sd::OpKind kind,pd::Type type,const std::vector<std::string>& inputs,const pd::Location& loc,std::string literal={}){
+    const auto result=newValue(type);sd::Op op;op.kind=kind;op.loc=loc;op.attributes.push_back({"result",result});
+    for(const auto& input:inputs)op.attributes.push_back({"input",input});
+    if(kind==sd::OpKind::CConst)op.attributes.push_back({"value",std::move(literal)});
+    out.addOp(std::move(op));return result;
+  }
+  std::string runtimeValue(pd::ValueId value,std::optional<pd::Type> desired=std::nullopt){
+    if(auto found=runtimeValues.find(value.v);found!=runtimeValues.end())return found->second;
+    const auto type=desired.value_or(src.typeOf(value));
+    if(type.kind==pd::TypeKind::Bit){
+      if(auto found=ctMap.find(value.v);found!=ctMap.end()&&(found->second==0||found->second==1))return emitController(sd::OpKind::CConst,type,{},src.op(src.producerOf(value)).loc,found->second==0?"0":"1");
+    }
+    if(auto found=exactMap.find(value.v);found!=exactMap.end()){
+      if(found->second<0||(type.kind!=pd::TypeKind::UInt&&found->second>1))throw std::invalid_argument("runtime int arithmetic requires an explicit uint[width]; bit snapshots contain only 0 or 1");
+      if(type.kind==pd::TypeKind::UInt&&static_cast<std::uint64_t>(found->second)>sd::classicalMask(type.width))throw std::invalid_argument("integer literal does not fit controller width");
+      return emitController(sd::OpKind::CConst,type,{},src.op(src.producerOf(value)).loc,std::to_string(found->second));
+    }
+    if(auto found=vmap.find(value.v);found!=vmap.end()&&out.typeOf(found->second)==sd::bitType()){
+      const auto result=newValue(pd::bitType(),static_cast<int>(sd::classicalIndex(out,found->second)),true);
+      runtimeValues[value.v]=result;return result;
+    }
+    throw std::invalid_argument("runtime value is undefined or is an unsupported floating-point/int expression");
   }
 
   sd::ValueId mapValue(pd::ValueId pv) {
@@ -141,8 +198,8 @@ struct Lowerer {
   void emitSpinorOp(pd::OpId pid) {
     const pd::Op& op = src.op(pid);
     sd::OpKind sk = pd::toSpinorKind(op.kind);
-    if (runtimeDepth && (sk == sd::OpKind::AllocQubit || sk == sd::OpKind::AllocBit)) {
-      diag.error("runtime branches cannot allocate or redeclare registers; declare the register before the branch", op.loc);
+    if (runtimeDepth && sk == sd::OpKind::AllocBit) {
+      diag.error("runtime branches cannot allocate classical registers; declare the register before the branch", op.loc);
       return;
     }
     sd::Op sop;
@@ -213,7 +270,11 @@ struct Lowerer {
       const auto wire = sk == sd::OpKind::AllocQubit ? wireValue.size()
           : quantumWire.at(live.operands.at(k).v);
       quantumWire[outResults[k].v] = wire;
-      if (wire == wireValue.size()) wireValue.push_back(outResults[k]);
+      if (wire == wireValue.size()) {
+        wireValue.push_back(outResults[k]);
+        bool fresh=runtimeDepth||!callStack.empty();for(const auto& attr:op.attributes)if(attr.name=="fresh")fresh=true;
+        (fresh?out.reservedPool:out.quantumInputs).push_back(static_cast<int>(wire));
+      }
       else wireValue[wire] = outResults[k];
     }
     // Map Phonon results to the freshly emitted Spinor results.
@@ -236,6 +297,13 @@ struct Lowerer {
         out.setName(outResults[k], n);
       }
     }
+    if(controller&&sk==sd::OpKind::Measure){
+      const auto bit=static_cast<int>(sd::classicalIndex(out,outResults.at(0)));
+      const auto measured=newValue(pd::bitType(),bit);
+      out.opMut(sid).attributes.push_back({"result",measured});
+      const auto snapshot=emitController(sd::OpKind::CCopy,pd::bitType(),{measured},op.loc);
+      for(auto result:op.results)runtimeValues[result.v]=snapshot;
+    }
   }
 
   // The source builders thread mutable register slots through both branches.
@@ -245,7 +313,8 @@ struct Lowerer {
   void aliasSkippedRange(std::uint32_t lo, std::uint32_t hi) {
     for (std::uint32_t i = lo; i < hi && !diag.hasErrors(); ++i) {
       const auto& op = src.op(pd::OpId{i});
-      if (op.kind == pd::OpKind::AllocQubit || op.kind == pd::OpKind::AllocBit) {
+      if(op.kind==pd::OpKind::AllocQubit){emitSpinorOp(pd::OpId{i});continue;}
+      if (op.kind == pd::OpKind::AllocBit) {
         diag.error("conditional branches cannot allocate or redeclare registers; declare the register before the branch", op.loc);
         return;
       }
@@ -288,10 +357,57 @@ struct Lowerer {
       }
 
       switch (op.kind) {
+        case pd::OpKind::ConstUInt:{
+          const auto type=src.typeOf(op.results.at(0));std::uint64_t value=0;
+          for(const auto& attr:op.attributes)if(attr.name=="value")value=std::get<std::uint64_t>(attr.value);
+          if(value>sd::classicalMask(type.width)){diag.error("uint literal does not fit its width",op.loc);return;}
+          const auto result=emitController(sd::OpKind::CConst,type,{},op.loc,std::to_string(value));
+          for(auto valueId:op.results)runtimeValues[valueId.v]=result;++i;break;
+        }
+        case pd::OpKind::Copy:{
+          const auto type=src.typeOf(op.results.at(0));
+          const auto input=runtimeValue(op.operands.at(0),type);
+          const auto& info=valueInfo(input);
+          const bool same=info.width==(type.kind==pd::TypeKind::UInt?type.width:1)&&info.type==(type.kind==pd::TypeKind::UInt?"uint":"bool");
+          const bool complement=std::any_of(op.attributes.begin(),op.attributes.end(),[](const auto& attr){return attr.name=="complement";});
+          const auto result=emitController(complement?sd::OpKind::CNot:same?sd::OpKind::CCopy:sd::OpKind::CCast,type,{input},op.loc);
+          for(auto valueId:op.results)runtimeValues[valueId.v]=result;++i;break;
+        }
+        case pd::OpKind::Select:{
+          if(!controller){
+            for(const auto& attr:op.attributes)if(attr.name=="mutable_clbit"){
+              const auto bit=static_cast<std::size_t>(std::get<double>(attr.value));
+              for(const auto& [_,mapped]:vmap)if(out.typeOf(mapped)==sd::bitType()&&sd::classicalIndex(out,mapped)==bit){vmap[op.results.at(0).v]=mapped;break;}
+            }
+            ++i;break;
+          }
+          const auto type=src.typeOf(op.results.at(0));
+          auto condition=ctMap.find(op.operands.at(0).v);
+          if(condition!=ctMap.end())runtimeValues[op.results.at(0).v]=runtimeValue(op.operands.at(condition->second?1:2),type);
+          else runtimeValues[op.results.at(0).v]=emitController(sd::OpKind::CSelect,type,{runtimeValue(op.operands.at(0),pd::bitType()),runtimeValue(op.operands.at(1),type),runtimeValue(op.operands.at(2),type)},op.loc);
+          ++i;break;
+        }
+        case pd::OpKind::Output:{
+          const auto result=runtimeValue(op.operands.at(0));const auto info=valueInfo(result);std::string name,role="value";
+          for(const auto& attr:op.attributes){if(attr.name=="name")name=std::get<std::string>(attr.value);if(attr.name=="role")role=std::get<std::string>(attr.value);}
+          if(role=="loop_exhausted"){
+            // A structured function can be called more than once. Exhaustion
+            // is cumulative over those executions, never overwritten by a
+            // later successful invocation of the same lexical loop.
+            const auto previous=loopOutputs.find(name);
+            loopOutputs[name]=previous==loopOutputs.end()?result:
+              emitController(sd::OpKind::COr,pd::bitType(),{previous->second,result},op.loc);
+          }
+          else out.classicalOutputs.push_back({name,result,info.type,info.width,role});++i;break;
+        }
         case pd::OpKind::ConstInt: {
-          double v = 0.0;
-          for (const auto& a : op.attributes) if (a.name == "value") v = std::get<double>(a.value);
-          for (pd::ValueId r : op.results) ctMap[r.v] = v;
+          std::optional<std::int64_t> value;
+          for (const auto& a : op.attributes) if (a.name == "value") {
+            if(const auto* exact=std::get_if<std::int64_t>(&a.value))value=*exact;
+            else if(const auto* old=std::get_if<double>(&a.value);old&&std::isfinite(*old)&&std::floor(*old)==*old&&std::abs(*old)<=9007199254740991.0)value=static_cast<std::int64_t>(*old);
+          }
+          if(!value){diag.error("integer constant requires an exact int64 attribute",op.loc);return;}
+          for (pd::ValueId r : op.results) {exactMap[r.v]=*value;ctMap[r.v]=static_cast<double>(*value);}
           ++i; break;
         }
         case pd::OpKind::ConstAngle: {
@@ -301,6 +417,36 @@ struct Lowerer {
           ++i; break;
         }
         case pd::OpKind::BinOp: {
+          if(controller&&(runtimeValues.count(op.operands[0].v)||runtimeValues.count(op.operands[1].v)||src.typeOf(op.results.at(0)).kind==pd::TypeKind::UInt)){
+            std::string symbol;for(const auto& attr:op.attributes)if(attr.name=="op")symbol=std::get<std::string>(attr.value);
+            auto type=src.typeOf(op.results.at(0));
+            if(type.kind==pd::TypeKind::Int){diag.error("runtime arithmetic requires explicit uint[width] values",op.loc);return;}
+            if(type.kind==pd::TypeKind::Bit&&symbol!="&"&&symbol!="|"&&symbol!="^"){diag.error("Boolean arithmetic requires an explicit uint cast; bool supports only &, | and ^",op.loc);return;}
+            sd::OpKind kind;
+            if(symbol=="+")kind=sd::OpKind::CAdd;else if(symbol=="-")kind=sd::OpKind::CSub;
+            else if(symbol=="&")kind=sd::OpKind::CAnd;else if(symbol=="|")kind=sd::OpKind::COr;else if(symbol=="^")kind=sd::OpKind::CXor;
+            else if(symbol=="<<")kind=sd::OpKind::CShl;else if(symbol==">>")kind=sd::OpKind::CShr;
+            else{diag.error("runtime controller operator is unsupported: "+symbol,op.loc);return;}
+            if(kind==sd::OpKind::CShl||kind==sd::OpKind::CShr){
+              std::optional<std::uint64_t> shift;const auto& producer=src.op(src.producerOf(op.operands[1]));
+              if(auto exact=exactMap.find(op.operands[1].v);exact!=exactMap.end()&&exact->second>=0)shift=static_cast<std::uint64_t>(exact->second);
+              if(producer.kind==pd::OpKind::ConstUInt)for(const auto& attr:producer.attributes)if(attr.name=="value")shift=std::get<std::uint64_t>(attr.value);
+              if(!shift||*shift>=type.width){diag.error("shift count must be a constant in [0, width)",op.loc);return;}
+            }
+            const auto left=runtimeValue(op.operands[0],type),right=runtimeValue(op.operands[1],type);
+            if(valueInfo(left).type!=valueInfo(right).type||valueInfo(left).width!=valueInfo(right).width){diag.error("runtime arithmetic operands require identical types and widths; cast explicitly",op.loc);return;}
+            runtimeValues[op.results.at(0).v]=emitController(kind,type,{left,right},op.loc);++i;break;
+          }
+          const auto ai=exactMap.find(op.operands[0].v),bi=exactMap.find(op.operands[1].v);
+          if(ai!=exactMap.end()&&bi!=exactMap.end()){
+            std::string symbol;for(const auto& attr:op.attributes)if(attr.name=="op")symbol=std::get<std::string>(attr.value);
+            try{
+              if(symbol!="/"|| !bi->second || (ai->second==std::numeric_limits<std::int64_t>::min()&&bi->second==-1)||ai->second%bi->second==0){
+                const auto value=sd::checkedInteger(symbol,ai->second,bi->second);
+                for(auto result:op.results){exactMap[result.v]=value;ctMap[result.v]=static_cast<double>(value);}++i;break;
+              }
+            }catch(const std::exception& error){diag.error(error.what(),op.loc);return;}
+          }
           // Evaluate symbolically if both operands have ct values.
           auto a = ctMap.find(op.operands[0].v);
           auto b_ = ctMap.find(op.operands[1].v);
@@ -319,6 +465,36 @@ struct Lowerer {
           ++i; break;
         }
         case pd::OpKind::Cmp: {
+          if(controller&&(runtimeValues.count(op.operands[0].v)||runtimeValues.count(op.operands[1].v)||src.typeOf(op.operands[0]).kind==pd::TypeKind::Bit||src.typeOf(op.operands[1]).kind==pd::TypeKind::Bit)){
+            std::string symbol;for(const auto& attr:op.attributes)if(attr.name=="op")symbol=std::get<std::string>(attr.value);
+            if(symbol!="=="&&symbol!="!="&&symbol!="<"&&symbol!="<="&&symbol!=">"&&symbol!=">="){
+              diag.error("unsupported comparison predicate: "+symbol,op.loc);return;
+            }
+            // A measured bit has the exact domain {0,1}; preserve comparisons
+            // with arbitrary finite constants without coercing the constant
+            // into a one-bit integer (which would truncate or reject it).
+            bool reduced=false;
+            for(unsigned side=0;side<2&&!reduced;++side){
+              const auto bit=op.operands[side],constant=op.operands[1-side];
+              const auto known=ctMap.find(constant.v);const auto runtime=runtimeValues.find(bit.v);
+              const bool isBit=src.typeOf(bit).kind==pd::TypeKind::Bit||(runtime!=runtimeValues.end()&&valueInfo(runtime->second).type=="bool");
+              if(!isBit||known==ctMap.end())continue;
+              auto truth=[&](double value){const double a=side?known->second:value,b=side?value:known->second;
+                if(symbol=="==")return a==b;if(symbol=="!=")return a!=b;if(symbol=="<")return a<b;
+                if(symbol=="<=")return a<=b;if(symbol==">")return a>b;if(symbol==">=")return a>=b;
+                throw std::invalid_argument("unsupported comparison predicate");};
+              const bool zero=truth(0),one=truth(1);
+              runtimeValues[op.results.at(0).v]=zero==one?emitController(sd::OpKind::CConst,pd::bitType(),{},op.loc,zero?"1":"0"):
+                emitController(one?sd::OpKind::CCopy:sd::OpKind::CNot,pd::bitType(),{runtimeValue(bit,pd::bitType())},op.loc);
+              reduced=true;
+            }
+            if(reduced){++i;break;}
+            auto type=src.typeOf(op.operands[0]);if(type.kind==pd::TypeKind::Int)type=src.typeOf(op.operands[1]);
+            sd::OpKind kind=symbol=="=="?sd::OpKind::CEq:symbol=="!="?sd::OpKind::CNe:symbol=="<"?sd::OpKind::CLt:symbol=="<="?sd::OpKind::CLe:symbol==">"?sd::OpKind::CGt:sd::OpKind::CGe;
+            const auto left=runtimeValue(op.operands[0],type),right=runtimeValue(op.operands[1],type);
+            if(valueInfo(left).type!=valueInfo(right).type||valueInfo(left).width!=valueInfo(right).width){diag.error("runtime comparisons require identical types and widths; cast explicitly",op.loc);return;}
+            runtimeValues[op.results.at(0).v]=emitController(kind,pd::bitType(),{left,right},op.loc);++i;break;
+          }
           auto lhs = ctMap.find(op.operands.at(0).v);
           auto rhs = ctMap.find(op.operands.at(1).v);
           if (lhs != ctMap.end() && rhs != ctMap.end()) {
@@ -327,7 +503,15 @@ struct Lowerer {
               if (attr.name == "op") predicate = std::get<std::string>(attr.value);
             const double a = lhs->second, b = rhs->second;
             bool result;
-            if (predicate == "==") result = a == b;
+            const auto ai=exactMap.find(op.operands[0].v),bi=exactMap.find(op.operands[1].v);
+            if(ai!=exactMap.end()&&bi!=exactMap.end()) {
+              const auto x=ai->second,y=bi->second;
+              if(predicate=="==")result=x==y;else if(predicate=="!=")result=x!=y;
+              else if(predicate=="<")result=x<y;else if(predicate==">")result=x>y;
+              else if(predicate=="<=")result=x<=y;else if(predicate==">=")result=x>=y;
+              else{diag.error("unsupported comparison predicate",op.loc);return;}
+            }
+            else if (predicate == "==") result = a == b;
             else if (predicate == "!=") result = a != b;
             else if (predicate == "<") result = a < b;
             else if (predicate == ">") result = a > b;
@@ -387,9 +571,12 @@ struct Lowerer {
           std::vector<std::pair<std::uint32_t, std::optional<sd::ValueId>>> savedV;
           std::vector<std::size_t> argumentWires;
           auto savedCt = ctMap;
+          auto savedExact = exactMap;
+          auto savedRuntime = runtimeValues;
           for (std::size_t k = 0; k < fr.paramValues.size() &&
                                    k < op.operands.size(); ++k) {
             std::uint32_t pv = fr.paramValues[k].v;
+            runtimeValues.erase(pv);
             auto sv = vmap.find(pv);
             savedV.push_back({pv, sv != vmap.end() ? std::optional<sd::ValueId>{sv->second} : std::nullopt});
             if (fr.paramTypes[k].kind == pd::TypeKind::Int ||
@@ -401,8 +588,13 @@ struct Lowerer {
                 diag.error("function argument must match its finite numeric parameter type", op.loc); return;
               }
               ctMap[pv] = value->second;
+              if(auto exact=exactMap.find(op.operands[k].v);exact!=exactMap.end())exactMap[pv]=exact->second;
+              else exactMap.erase(pv);
             } else {
               vmap[pv] = mapValue(op.operands[k]);
+              if(fr.paramTypes[k].kind==pd::TypeKind::Bit){
+                if(auto value=savedRuntime.find(op.operands[k].v);value!=savedRuntime.end())runtimeValues[pv]=value->second;
+              }
               if (fr.paramTypes[k].kind == pd::TypeKind::Qubit)
                 argumentWires.push_back(quantumWire.at(vmap[pv].v));
             }
@@ -430,6 +622,8 @@ struct Lowerer {
           returning = false;
           callStack.pop_back();
           ctMap = std::move(savedCt);
+          exactMap = std::move(savedExact);
+          runtimeValues = std::move(savedRuntime);
           std::vector<std::size_t> returnedWires;
           for (auto value : returnValues) {
             if (out.typeOf(value).kind != sd::TypeKind::Qubit) {
@@ -444,17 +638,14 @@ struct Lowerer {
           if (runtimeDepth && returnValues.size() == argumentWires.size()) {
             // Represent conditional return aliases as actual state transfers,
             // leaving caller slot identities invariant across the branch join.
-            auto stateAt = argumentWires;
-            for (auto wire : returnedWires)
-              if (std::find(argumentWires.begin(), argumentWires.end(), wire) == argumentWires.end()) {
-                diag.error("runtime function return must be a permutation of its input qubits; fresh-wire substitution needs branch value merging", op.loc);
-                return;
-              }
-            for (std::size_t k = 0; k < stateAt.size(); ++k) {
+            auto locations=argumentWires;
+            for(auto wire:returnedWires)if(std::find(locations.begin(),locations.end(),wire)==locations.end())locations.push_back(wire);
+            auto stateAt=locations;
+            for (std::size_t k = 0; k < argumentWires.size(); ++k) {
               auto found = std::find(stateAt.begin() + k, stateAt.end(), returnedWires[k]);
               const auto j = static_cast<std::size_t>(found - stateAt.begin());
               if (k == j) continue;
-              const auto a = argumentWires[k], b_ = argumentWires[j];
+              const auto a = locations[k], b_ = locations[j];
               auto swapped = b.swap(wireValue[a], wireValue[b_], op.loc);
               quantumWire[swapped.first.v] = a; quantumWire[swapped.second.v] = b_;
               wireValue[a] = swapped.first; wireValue[b_] = swapped.second;
@@ -536,7 +727,23 @@ struct Lowerer {
             if (a.name == "else_count") elseCount = static_cast<std::uint32_t>(std::get<double>(a.value));
           }
           auto condition = op.operands.empty() ? ctMap.end() : ctMap.find(op.operands.front().v);
-          if (condition == ctMap.end()) {
+          if(controller&&runtimeValues.count(op.operands.at(0).v)){
+            const auto predicate=runtimeValues.at(op.operands[0].v);const auto info=valueInfo(predicate);
+            if(info.width!=1){diag.error("if predicate must be Boolean; compare uint values explicitly",op.loc);return;}
+            const auto marker=out.numOps();b.beginIf(info.storage.at(0),true,op.loc);
+            out.opMut(sd::OpId{static_cast<std::uint32_t>(marker)}).attributes.push_back({"condition",predicate});
+            const auto outputsBefore=loopOutputs;
+            ++runtimeDepth;emitRange(bodyStart,bodyStart+thenCount);
+            if(returning){diag.error("raw conditional return markers require source return normalization before lowering",op.loc);return;}
+            const auto thenOutputs=loopOutputs;loopOutputs=outputsBefore;
+            if(elseCount){b.elseBranch(op.loc);emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);
+              if(returning){diag.error("raw conditional return markers require source return normalization before lowering",op.loc);return;}}
+            --runtimeDepth;b.endIf(op.loc);
+            for(const auto& [name,before]:outputsBefore){
+              const auto yes=thenOutputs.at(name),no=loopOutputs.at(name);
+              if(yes!=no)loopOutputs[name]=emitController(sd::OpKind::CSelect,pd::bitType(),{predicate,yes,no},op.loc);
+            }
+          } else if (condition == ctMap.end()) {
             auto predicate=op.operands.front();
             const auto& cmp=src.op(src.producerOf(predicate));
             pd::ValueId bit=predicate;double constant=1;std::string comparison="==";bool reverse=false;
@@ -615,7 +822,10 @@ Result lower(const pd::Module& m,
              const spinor::verify::TargetInfo* target) {
   Lowerer lo(m, target);
   lo.indexFunctions();
-  lo.emitRange(0, m.numOps());
+  try{lo.emitRange(0, m.numOps());}
+  catch(const std::exception& error){lo.diag.error(std::string("classical lowering: ")+error.what());}
+  std::vector<std::string> outputNames;for(const auto& [name,_]:lo.loopOutputs)outputNames.push_back(name);std::sort(outputNames.begin(),outputNames.end());
+  for(const auto& name:outputNames)lo.out.classicalOutputs.push_back({name,lo.loopOutputs.at(name),"bool",1,"loop_exhausted"});
   Result r;
   r.diag = std::move(lo.diag);
   if (!r.diag.hasErrors()) r.module = std::move(lo.out);

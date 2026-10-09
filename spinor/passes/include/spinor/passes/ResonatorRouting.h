@@ -6,5 +6,6 @@ namespace spinor::passes {
 // CZ into the calibrated MOVE/CZ/MOVE protocol without exposing resonators as
 // logical storage or feeding their partial operation into KAK synthesis.
 dialect::Module compileResonatorCircuit(const dialect::Module& input,
-    const registry::ChipInfo& chip, OptimizationLevel level, dialect::Diagnostics& diagnostics);
+    const registry::ChipInfo& chip, OptimizationLevel level, dialect::Diagnostics& diagnostics,
+    CompilationReport* report = nullptr);
 }

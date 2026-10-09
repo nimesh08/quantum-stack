@@ -42,6 +42,11 @@ def test_discovered_snapshot_to_native_artifact_to_real_simulation(route, vendor
     source.write_text("target generic\nkernel sample() -> int {\n QReg q(" + ("1" if single else "2") +
                       ")\n q." + ("x(0)" if single else "bell_pair(0, 1)") + "\n return q.measure_int()\n}\n")
     artifact = compile_file(source, target=snapshot["device"], config={"provider": route}, output=tmp_path / "bundle")
+    from qstack.verification import verify_artifact
+    evidence = verify_artifact(artifact)
+    assert evidence["status"] == "passed", evidence
+    assert evidence["artifact_hash"] == artifact.manifest["artifact_hash"]
+    assert evidence["network_used"] is False
     result = submit_artifact(artifact, SubmissionOptions(mode="local", shots=64), wait=True)
     assert set(result.counts) == ({"1"} if single else {"00", "11"})
     assert sum(result.counts.values()) == 64

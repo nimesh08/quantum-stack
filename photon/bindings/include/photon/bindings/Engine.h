@@ -20,6 +20,10 @@ struct ResourceEstimate {
   std::size_t depth = 0;
   std::size_t two_qubit_count = 0;
   std::size_t t_count = 0;
+  std::size_t logical_operation_count = 0;
+  std::string stage = "logical";
+  std::string depth_kind = "operation_count_proxy";
+  bool target_verified = false;
 };
 
 class CompiledProgram {
@@ -39,6 +43,8 @@ class CompiledProgram {
                                           std::string_view target);
 
   bool ok() const { return ok_; }
+  std::string_view stage() const { return "logical"; }
+  bool targetVerified() const { return false; }
   const std::string& error() const { return error_; }
   std::string dumpPhonon() const;
   std::string dumpSpinor() const;
@@ -57,5 +63,9 @@ class CompiledProgram {
   phonon::dialect::Module phn_;
   std::optional<spinor::dialect::Module> spn_;
 };
+
+// The legacy name remains an ABI/source-compatible alias. Neither class
+// promises target-native compilation, physical scheduling, or execution.
+using LogicalProgram = CompiledProgram;
 
 }  // namespace photon::bindings
