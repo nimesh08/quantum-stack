@@ -33,6 +33,8 @@ enum class Tok : std::uint8_t {
   Identifier,
   Integer,
   Real,
+  String,
+  Invalid,
   // structural punctuation (Spinor + Phonon)
   LBracket, RBracket,
   LParen, RParen,

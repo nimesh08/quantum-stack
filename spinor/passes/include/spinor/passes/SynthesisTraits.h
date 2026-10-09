@@ -55,6 +55,7 @@ enum class EulerBasis {
 // every optimization pass. Populated once per chip at registry
 // load time (or lazily on first access).
 struct SynthesisTraits {
+  std::vector<std::string> nativeGates;
   // 2-qubit (KAK basis-gate) section.
   std::string entanglerName;     // "cz" | "ecr" | "ms" | "rzz" | "cx"
   WeylCoord   entanglerWeyl;     // (π/4, 0, 0) for cx/cz/ecr/ms;

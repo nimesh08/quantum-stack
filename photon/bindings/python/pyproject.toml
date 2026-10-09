@@ -13,15 +13,22 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Physics",
 ]
-dynamic = ["version"]
+version = "0.6.0"
 
-dependencies = []
+dependencies = ["heisenberg-spinor-submit==0.6.0"]
+
+[project.scripts]
+photonc = "photon._cli:photonc"
+phononc = "photon._cli:phononc"
+spinorc = "photon._cli:spinorc"
+photonc-cxx = "photon._cli:photonc_cxx"
 
 [project.optional-dependencies]
 test = [
@@ -34,13 +41,13 @@ Repository = "https://github.com/nimesh08/quantum-stack"
 Documentation = "https://nimesh08.github.io/quantum-stack/"
 Issues = "https://github.com/nimesh08/quantum-stack/issues"
 
-# Scikit-build-core drives CMake to build photon._engine + spinorc + photonc,
-# then copies them into the wheel as package data. CMake reads the
+# Scikit-build-core drives CMake to build photon._engine and all four CLIs,
+# then installs them into the wheel as package data. CMake reads the
 # parent repo's CMakeLists.txt; we point it at the right source tree
 # via the cmake.source-dir setting below.
 
 [build-system]
-requires = ["scikit-build-core>=0.10", "nanobind>=2.12"]
+requires = ["scikit-build-core>=0.10", "nanobind==2.12.0"]
 build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
@@ -49,10 +56,11 @@ build-backend = "scikit_build_core.build"
 cmake.source-dir = "../../.."
 cmake.version = ">=3.28"
 cmake.build-type = "Release"
-cmake.verbose = false
+build.verbose = false
+minimum-version = "build-system.requires"
 
 # Where the wheel's contents come from.
-wheel.packages = ["photon"]
+wheel.packages = []
 wheel.install-dir = "."
 
 # Pass-throughs that select what CMake emits into the wheel.
@@ -63,16 +71,14 @@ QSTACK_BUILD_PHONON = "ON"
 QSTACK_BUILD_PHOTON = "ON"
 QSTACK_ENABLE_TESTS = "OFF"
 
-# Files copied into the wheel at install-time (relative to the build
-# tree). The CMake target `photon_wheel_assets` (added below) stages:
+# The deferred CMake install rules in photon/bindings/CMakeLists.txt ship:
 #   - photon/_engine.<abi>.so    (nanobind extension)
 #   - photon/__init__.py + facade .py files
 #   - photon/registry/chips/*.yaml + topologies/*.yaml
 #   - photon/bin/spinorc
+#   - photon/bin/phononc
 #   - photon/bin/photonc
-
-[tool.setuptools]
-# scikit-build-core handles packaging; this stub satisfies tooling.
+#   - photon/bin/photonc-cxx
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

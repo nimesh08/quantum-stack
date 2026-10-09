@@ -2,6 +2,17 @@
 
 id: anyon_yukon
 provider: anyon
+
+schema_version: 2
+vendor: anyon
+readiness: needs_refresh
+readiness_reason: "Live submission requires a discovered, concrete capability snapshot."
+routes: [anyon]
+formats: [native-json]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 8
 native_gates: [cz, rx, rz]
 

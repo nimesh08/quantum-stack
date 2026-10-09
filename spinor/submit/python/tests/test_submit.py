@@ -88,7 +88,7 @@ def test_step2_live_mode_raises(provider, chip, monkeypatch):
     through to a fabricated endpoint.
     """
     monkeypatch.setenv("SPINOR_SUBMIT_MODE", "live")
-    with pytest.raises(RuntimeError, match="not wired"):
+    with pytest.raises(RuntimeError, match="contract|Refresh|requires|refresh"):
         submit(BELL_QASM, chip=chip, provider=provider,
                shots=10, program_name="bell")
 

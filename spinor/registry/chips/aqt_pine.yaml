@@ -1,12 +1,23 @@
 # spinor/registry/chips/aqt_pine.yaml
 
 id: aqt_pine
-provider: local
+provider: aqt
+
+schema_version: 2
+vendor: aqt
+readiness: needs_refresh
+readiness_reason: "Live submission requires a discovered, concrete capability snapshot."
+routes: [aqt]
+formats: [native-json]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 8
-native_gates: [gpi, gpi2, ms]
+native_gates: [u1q, rz, rxx]
 
 coupling_map:
-  topology: linear_n
+  topology: all_to_all
   size: 8
 
 supports:
@@ -22,19 +33,18 @@ calibration:
 decomposition:
   one_qubit:
     recipe: euler_zyz
-    rotation_gate: gpi
-    pi_2_gate: gpi2
+    rotation_gate: rz
+    pi_2_gate: ""
   two_qubit:
     recipe: kak
-    entangler: ms
+    entangler: rxx
     entangler_count_max: 3
 
 pricing:
   per_shot_usd: 0.0
 
 notes: |
-  AQT Pine: 8-qubit trapped-ion linear chain (Innsbruck).
-  Provider 'local' until the AQT API submission adapter
-  ships; cassette mode covers the round-trip in tests.
-  source: https://www.aqt.eu/products/
-  verified-upstream: 2026-06-16
+  Historical AQT Pine profile, retained for offline compilation. Device name,
+  capacity and calibration must be refreshed from Arnica before live use.
+  Native R/RZ/RXX operations use radians internally and pi units at the API.
+  source: https://arnica.aqt.eu/api/v1/docs

@@ -127,6 +127,17 @@ TEST(M8_equiv, deliberate_break_caught) {
   EXPECT_FALSE(e.equivalent);
 }
 
+TEST(M8_equiv, equal_zero_state_does_not_prove_equivalence) {
+  Module a,b;Builder ba(a),bb(b);ba.allocQubit();bb.z(bb.allocQubit());
+  EXPECT_FALSE(equivalent(a,b).equivalent);
+}
+
+TEST(M8_equiv, one_phase_for_all_basis_columns) {
+  Module a,b;Builder ba(a),bb(b);ba.x(ba.allocQubit());bb.x(bb.allocQubit());
+  b.globalPhase=0.7;
+  EXPECT_TRUE(equivalent(a,b).equivalent);
+}
+
 // =============================================================
 // M8_resource: resource estimator
 // =============================================================
@@ -143,7 +154,7 @@ TEST(M8_resource, bell_counts) {
   EXPECT_EQ(static_cast<int>(est.depth), 2);
 }
 
-TEST(M8_resource, with_chip_fills_cost_and_error) {
+TEST(M8_resource, unknown_calibration_does_not_invent_error) {
   auto r = parser::parse(slurp(corpus("bell")));
   EXPECT_TRUE(r.module.has_value());
   registry::ChipInfo c;
@@ -151,9 +162,14 @@ TEST(M8_resource, with_chip_fills_cost_and_error) {
   c.qubits = 4;
   c.pricePerShotUsd = 0.001;
   ResourceEstimate est = estimate(*r.module, &c, /*shots=*/1000);
-  EXPECT_TRUE(est.totalErrorEstimate.has_value());
+  EXPECT_FALSE(est.totalErrorEstimate.has_value());
   EXPECT_TRUE(est.shotCostUsd.has_value());
   EXPECT_TRUE(*est.shotCostUsd > 0.0);
+  c.calibrationOneQubitError={{0,.001}};c.calibrationTwoQubitError={{{0,1},.01}};
+  c.calibrationReadoutError={{0,.02},{1,.03}};
+  est=estimate(*r.module,&c);
+  EXPECT_TRUE(est.totalErrorEstimate.has_value());
+  EXPECT_TRUE(std::abs(*est.totalErrorEstimate-(1-.999*.99*.98*.97))<1e-12);
 }
 
 TEST(M8_resource, full_corpus_loads) {

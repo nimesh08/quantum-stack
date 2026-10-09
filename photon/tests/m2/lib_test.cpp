@@ -76,16 +76,11 @@ TEST(M2_lib, qft_n3) {
   EXPECT_EQ(countOps(*m, "spinor.swap"), 1);
 }
 
-TEST(M2_lib, grover_rounds2_emits_oracle_calls) {
+TEST(M2_lib, grover_rejects_unbound_oracle) {
+  // This fixture declares an oracle symbol without supplying its definition.
+  // It must not compile to a placeholder call or an identity operation.
   auto m = lowerOrFail(corpus("lib_grover.pho"));
-  EXPECT_TRUE(m.has_value());
-  // 2 oracle calls + 2 diffusion blocks.
-  EXPECT_EQ(countOps(*m, "phonon.call"), 2);
-  // Diffusion has H^N · X^N · ... · X^N · H^N. With rounds=2 and
-  // n=3, expect at least 2*2*3 = 12 H ops and 2*2*3 = 12 X ops, plus
-  // the initial 3 H's = 15 H total minimum.
-  EXPECT_TRUE(countOps(*m, "spinor.h") >= 15);
-  EXPECT_TRUE(countOps(*m, "spinor.x") >= 12);
+  EXPECT_TRUE(!m.has_value());
 }
 
 TEST(M2_lib, teleport_emits_corrections) {
@@ -113,6 +108,40 @@ TEST(M2_lib, e2e_verifies) {
   for (const auto& it : d.items())
     if (it.severity == pd::DiagSeverity::Error) errored = true;
   EXPECT_FALSE(errored);
+}
+
+TEST(M2_lib, invalid_arity_indices_and_depth_never_compile) {
+  for (const auto* call : {
+      "bell_pair(1)", "bell_pair(0, 1, 2)", "bell_pair(0, 0)",
+      "bell_pair(-1, 1)", "bell_pair(0, 3)", "bell_pair(0.5, 1)",
+      "ghz(1)", "qft(1)", "iqft(1)",
+      "teleport(1)", "teleport(0, 1)", "teleport(0, 1, 2, 3)",
+      "teleport(0, 1, 1)", "teleport(0, 1, 3)", "teleport(0, -1, 2)",
+      "vqe_ansatz(1, 2)", "vqe_ansatz(-1)", "vqe_ansatz(0)",
+      "vqe_ansatz(0.5)", "vqe_ansatz(100001)", "grover()", "grover(1)"}) {
+    const auto source = std::string("target generic\nkernel invalid() -> int {\nQReg q(3)\nq.") +
+        call + "\nreturn q.measure_int()\n}\n";
+    auto parsed = parse(source);
+    EXPECT_TRUE(parsed.module.has_value());
+    if (!parsed.module) continue;
+    auto lowered = lowerToPhonon(*parsed.module);
+    EXPECT_FALSE(lowered.module.has_value());
+    EXPECT_TRUE(lowered.diag.hasErrors());
+  }
+}
+
+TEST(M2_lib, documented_defaults_and_integer_expressions_remain_valid) {
+  for (const auto* call : {"bell_pair()", "bell_pair(0, 1 + 1)", "ghz()",
+                         "qft()", "iqft()", "teleport()", "teleport(2, 0, 1)",
+                         "vqe_ansatz()", "vqe_ansatz(1 + 1)"}) {
+    const auto source = std::string("target generic\nkernel valid() -> void {\nQReg q(3)\nq.") + call + "\n}\n";
+    auto parsed = parse(source);
+    EXPECT_TRUE(parsed.module.has_value());
+    if (!parsed.module) continue;
+    auto lowered = lowerToPhonon(*parsed.module);
+    EXPECT_TRUE(lowered.module.has_value());
+    EXPECT_FALSE(lowered.diag.hasErrors());
+  }
 }
 
 SPINOR_TEST_MAIN()

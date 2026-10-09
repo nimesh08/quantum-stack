@@ -98,11 +98,11 @@ enum class OpKind : std::uint16_t {
   // two-qubit standard gates (spinor.*)
   Cx, Cz, Swap,
   // native gates (spinor.*)
-  Ecr, Ms, Rzz,
+  Ecr, Ms, Rzz, Rxx,
   Sx, Sxdg,
   Gpi, Gpi2, U1q,
   // measurement / reset / barrier (spinor.*)
-  Measure, Reset, Barrier,
+  Measure, Reset, Barrier, GlobalPhase,
   // -- Phonon additions ---------------------------------------------------
   ConstInt,    // attr "value" : double (stored as int64 cast)
   ConstAngle,  // attr "value" : double (radians)
@@ -184,6 +184,7 @@ class Builder {
   // Spinor-kind ops (every gate the Spinor dialect has).
   ValueId allocQubit(Location loc = {});
   ValueId allocBit(Location loc = {});
+  void globalPhase(double angle, Location loc = {});
   ValueId h(ValueId q, Location loc = {});
   ValueId x(ValueId q, Location loc = {});
   ValueId y(ValueId q, Location loc = {});
@@ -207,6 +208,7 @@ class Builder {
   std::pair<ValueId, ValueId> ms(ValueId a, ValueId b, Location loc = {});
   std::pair<ValueId, ValueId> rzz(double angle, ValueId a, ValueId b,
                                   Location loc = {});
+  std::pair<ValueId, ValueId> rxx(double angle, ValueId a, ValueId b, Location loc = {});
   ValueId measure(ValueId q, Location loc = {});
   ValueId reset(ValueId q, Location loc = {});
   void barrier(std::span<const ValueId> qs, Location loc = {});

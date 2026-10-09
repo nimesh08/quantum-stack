@@ -154,14 +154,14 @@ inline Mat4 SWAP() {
 inline Mat4 ECR() {
   Mat4 m;
   cdbl one(1, 0), i(0, 1);
-  // ECR = (1/√2) [ [0,1,0,i], [1,0,-i,0], [0,i,0,1], [-i,0,1,0] ]
-  // (one canonical form; may differ by phase between vendors.
-  // We test up to global phase, so any consistent ECR form works.)
+  // IBM/Qiskit ECR with operand 0 as the HIGH tensor factor, like CX()
+  // and apply2q(). Qiskit's displayed little-endian matrix must have both
+  // row and column bit order exchanged before use in this convention.
   cdbl s = cdbl(1.0/std::sqrt(2.0), 0);
-  m(0,0)=0; m(0,1)=s*one; m(0,2)=0; m(0,3)=s*i;
-  m(1,0)=s*one; m(1,1)=0; m(1,2)=s*(-i); m(1,3)=0;
-  m(2,0)=0; m(2,1)=s*i; m(2,2)=0; m(2,3)=s*one;
-  m(3,0)=s*(-i); m(3,1)=0; m(3,2)=s*one; m(3,3)=0;
+  m(0,0)=0; m(0,1)=0; m(0,2)=s*one; m(0,3)=s*i;
+  m(1,0)=0; m(1,1)=0; m(1,2)=s*i; m(1,3)=s*one;
+  m(2,0)=s*one; m(2,1)=s*(-i); m(2,2)=0; m(2,3)=0;
+  m(3,0)=s*(-i); m(3,1)=s*one; m(3,2)=0; m(3,3)=0;
   return m;
 }
 

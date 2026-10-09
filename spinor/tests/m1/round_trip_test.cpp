@@ -6,6 +6,8 @@
 #include "spinor/dialect/Spinor.h"
 #include "test_main.h"
 
+#include <cmath>
+#include <locale>
 #include <random>
 
 using namespace spinor::dialect;
@@ -75,6 +77,40 @@ TEST(M1_round_trip, rotations) {
   auto c = b.rz(3.14, bb);
   (void)b.t(c);
   expectFixedPoint(m);
+}
+
+TEST(M1_round_trip, floating_attributes_are_portable_and_locale_independent) {
+  struct CommaDecimal : std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+  };
+  struct RestoreLocale {
+    std::locale previous = std::locale();
+    ~RestoreLocale() { std::locale::global(previous); }
+  } restore;
+  std::locale::global(std::locale(std::locale::classic(), new CommaDecimal));
+
+  for (const auto& [literal, expected] : std::vector<std::pair<std::string, double>>{
+           {"0.25", 0.25}, {"-1.5e-4", -1.5e-4}, {"+2.5E+3", 2500.0},
+           {".125", 0.125}, {"1.", 1.0}, {"1.25e+200", 1.25e+200}, {"-0.0", -0.0}}) {
+    const auto text = "spinor.module @main attributes {target = \"generic\", global_phase = " +
+                      literal + "} {\n}\n";
+    Diagnostics d;
+    auto m = parse(text, d);
+    EXPECT_TRUE(m.has_value());
+    EXPECT_FALSE(d.hasErrors());
+    EXPECT_EQ(m->globalPhase, expected);
+    EXPECT_EQ(std::signbit(m->globalPhase), std::signbit(expected));
+  }
+}
+
+TEST(M1_round_trip, floating_attributes_reject_partial_or_out_of_range_numbers) {
+  for (const auto* literal : {"+", "-", ".", "1e+", "1.2.3", "1e-3+2", "1e9999"}) {
+    const auto text = std::string("spinor.module @main attributes {target = \"generic\", global_phase = ") +
+                      literal + "} {\n}\n";
+    Diagnostics d;
+    EXPECT_FALSE(parse(text, d).has_value());
+    EXPECT_TRUE(d.hasErrors());
+  }
 }
 
 TEST(M1_round_trip, fuzz) {

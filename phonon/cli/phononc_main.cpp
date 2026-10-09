@@ -14,6 +14,9 @@
 // common::cli::runPython helper.
 
 #include "qs/common/cli/Flags.h"
+#include "phonon/parser/Parser.h"
+#include "phonon/lower/Lowering.h"
+#include "phonon/types/LinearTypeChecker.h"
 #include "qs/common/cli/Manifest.h"
 #include "qs/common/cli/Providers.h"
 #include "qs/common/cli/Submit.h"
@@ -75,8 +78,19 @@ std::string findSpinorc() {
   const char* path = std::getenv("PATH");
   if (path) {
     std::string s = path; std::string token; std::stringstream ss(s);
-    while (std::getline(ss, token, ':')) {
-      fs::path cand = fs::path(token) / "spinorc";
+    while (std::getline(ss, token,
+#ifdef _WIN32
+        ';'
+#else
+        ':'
+#endif
+        )) {
+      fs::path cand = fs::path(token) /
+#ifdef _WIN32
+          "spinorc.exe";
+#else
+          "spinorc";
+#endif
       if (fs::exists(cand)) return cand.string();
     }
   }
@@ -87,24 +101,12 @@ std::string findSpinorc() {
 
 struct ProcResult { int rc = 0; std::string out; };
 ProcResult runProc(const std::vector<std::string>& argv) {
-  std::ostringstream cmd;
-  for (size_t i = 0; i < argv.size(); ++i) {
-    if (i) cmd << ' ';
-    cmd << '"' << argv[i] << '"';
-  }
-  ProcResult res;
-  std::string full = cmd.str() + " 2>&1";
-  FILE* p = ::popen(full.c_str(), "r");
-  if (!p) { res.rc = 127; return res; }
-  char buf[4096];
-  while (std::fgets(buf, sizeof(buf), p)) res.out += buf;
-  int rc = ::pclose(p);
-#ifdef WEXITSTATUS
-  res.rc = WIFEXITED(rc) ? WEXITSTATUS(rc) : rc;
-#else
-  res.rc = rc;
-#endif
-  return res;
+  auto result = runProcess(argv);
+  if (!result.stderr_text.empty()) std::cerr << result.stderr_text;
+  ProcResult out;
+  out.rc = result.exit_code;
+  out.out = std::move(result.stdout_text);
+  return out;
 }
 
 int cmdTargets(const Flags&) {
@@ -135,12 +137,37 @@ int cmdVersion(const Flags&) {
   return 0;
 }
 
+std::string prepareSpinorFile(const std::string& input, const std::string& target) {
+  auto parsed = phonon::parser::parse(slurp(input), input);
+  if (!parsed.module) {
+    for (const auto& d : parsed.diag.items()) std::cerr << d.message << "\n";
+    std::exit(1);
+  }
+  parsed.module->targetAttr = target;
+  phonon::dialect::Diagnostics diag;
+  phonon::types::Options options;
+  options.midCircuitMeasure = true;
+  if (!phonon::types::typecheck(*parsed.module, options, diag)) {
+    for (const auto& d : diag.items()) std::cerr << d.message << "\n";
+    std::exit(1);
+  }
+  auto lowered = phonon::lower::lower(*parsed.module);
+  if (!lowered.module) {
+    for (const auto& d : lowered.diag.items()) std::cerr << d.message << "\n";
+    std::exit(1);
+  }
+  auto tmp = fs::temp_directory_path() /
+      (std::string("phononc_") + std::to_string(_qs_pid()) + ".spn");
+  writeFile(tmp, phonon::lower::emitSpinorSource(*lowered.module));
+  return tmp.string();
+}
+
 int cmdCompile(const Flags& f) {
   if (!f.target) { std::cerr << "compile: --target required\n"; return 2; }
   if (f.positionals.empty()) {
     std::cerr << "compile: missing input file\n"; return 2;
   }
-  std::string in = f.positionals[0];
+  std::string in = prepareSpinorFile(f.positionals[0], *f.target);
   auto sc = findSpinorc();
 
   std::string outPath = f.output_path.value_or("");
@@ -150,16 +177,14 @@ int cmdCompile(const Flags& f) {
     if (outPath.empty()) std::cout << body;
     else writeFile(outPath, body);
   } else if (f.emit == EmitFormat::Spinor) {
-    auto r = runProc({sc, "compile", "-t", *f.target, in});
+    auto r = runProc({sc, "compile", "-t", *f.target, "-O", std::to_string(f.optimization_level), in});
     if (r.rc != 0) { std::cerr << r.out; return r.rc; }
     if (outPath.empty()) std::cout << r.out;
     else writeFile(outPath, r.out);
   } else {
-    std::string fmt = (f.emit == EmitFormat::Qasm3) ? "qasm3"
-                    : (f.emit == EmitFormat::Qir)   ? "qir"
-                                                    : "quil";
+    std::string fmt = toString(f.emit);
     std::vector<std::string> argv =
-        {sc, "emit", "-t", *f.target, "-f", fmt};
+        {sc, "emit", "-t", *f.target, "-f", fmt, "-O", std::to_string(f.optimization_level)};
     if (f.verbatim) argv.emplace_back("--verbatim");
     argv.emplace_back(in);
     auto r = runProc(argv);
@@ -199,7 +224,8 @@ int cmdEstimate(const Flags& f) {
     std::cerr << "estimate: missing input file\n"; return 2;
   }
   auto sc = findSpinorc();
-  auto r = runProc({sc, "check", "-t", *f.target, f.positionals[0]});
+  auto in = prepareSpinorFile(f.positionals[0], *f.target);
+  auto r = runProc({sc, "check", "-t", *f.target, "-O", std::to_string(f.optimization_level), in});
   std::cout << r.out;
   return r.rc;
 }
@@ -274,6 +300,14 @@ int cmdRun(const Flags& f) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && (std::string_view(argv[1]) == "run" ||
+                   std::string_view(argv[1]) == "submit")) {
+    std::vector<std::string> args(argv + 1, argv + argc);
+    auto result = runQstack(args);
+    std::cout << result.stdout_text;
+    std::cerr << result.stderr_text;
+    return result.exit_code;
+  }
   auto f = parseArgv(argc, argv);
   if (!f.errors.empty()) {
     for (const auto& e : f.errors) std::cerr << "phononc: " << e << "\n";

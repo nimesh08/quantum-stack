@@ -1,0 +1,24 @@
+id: iqm_move_test
+provider: iqm
+vendor: iqm
+qubits: 5
+computational_qubits: [0, 2, 3]
+resonator_qubits: [1, 4]
+native_gates: [u1q, rz, cz, move]
+move_loci: [[0, 1], [2, 1], [2, 4], [3, 4]]
+cz_loci: [[0, 1], [2, 1], [2, 4], [3, 4]]
+coupling_map:
+  topology: two_stars
+  size: 5
+decomposition:
+  one_qubit:
+    recipe: euler_zyz
+    rotation_gate: rz
+  two_qubit:
+    recipe: kak
+    entangler: cz
+    entangler_count_max: 3
+supports:
+  mid_circuit_measure: true
+  feedforward: full
+  reset: true

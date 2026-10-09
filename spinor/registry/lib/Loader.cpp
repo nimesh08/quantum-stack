@@ -3,10 +3,12 @@
 // Validates and assembles ChipInfo records from YAML files.
 
 #include "spinor/registry/Registry.h"
+#include "spinor/registry/ComponentTopology.h"
 
 #include "Yaml.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <set>
@@ -29,8 +31,8 @@ const std::set<std::string>& knownNativeGates() {
   static const std::set<std::string> s = {
       "h",    "x",    "y",    "z",   "s",    "sdg",  "t",    "tdg",
       "rx",   "ry",   "rz",
-      "cx",   "cz",   "swap",
-      "ecr",  "ms",   "rzz",  "sx",  "sxdg",
+      "cx",   "cz",   "swap", "move",
+      "ecr",  "ms",   "rzz", "rxx", "sx",  "sxdg", "phased_xz", "sqrt_iswap", "sqrt_iswap_inv", "syc", "iswap",
       "gpi",  "gpi2", "u1q",
   };
   return s;
@@ -48,6 +50,7 @@ fs::path expandTilde(const std::string& s) {
 struct ResolvedTopology {
   bool ok = false;
   bool allToAll = false;
+  bool directed = false;
   std::size_t qubits = 0;
   std::vector<std::pair<int, int>> edges;
   std::string error;
@@ -93,6 +96,7 @@ ResolvedTopology resolveTopology(const fs::path& topologiesDir,
       r.error = "topology " + name + ": top-level must be a map";
       return r;
     }
+    if (n.has("directed") && n.at("directed").isBool()) r.directed = n.at("directed").asBool();
     if (n.has("qubits") && n.at("qubits").isNumber()) {
       r.qubits = static_cast<std::size_t>(n.at("qubits").asInt());
     } else {
@@ -128,8 +132,8 @@ ResolvedTopology resolveTopology(const fs::path& topologiesDir,
                   std::to_string(a) + ", " + std::to_string(b) + ")";
         return r;
       }
-      int lo = std::min(a, b);
-      int hi = std::max(a, b);
+      int lo = r.directed ? a : std::min(a, b);
+      int hi = r.directed ? b : std::max(a, b);
       r.edges.push_back({lo, hi});
     }
     std::sort(r.edges.begin(), r.edges.end());
@@ -149,6 +153,8 @@ ResolvedTopology resolveTopology(const fs::path& topologiesDir,
 bool validateChip(ChipInfo& chip, dialect::Diagnostics& diag,
                   const std::string& sourcePath) {
   bool ok = true;
+  try { (void)computationalComponents(chip); }
+  catch (const std::exception& error) { diag.error("chip " + chip.id + ": " + error.what()); ok=false; }
   if (chip.id.empty()) {
     diag.error("chip at " + sourcePath + ": missing 'id'");
     ok = false;
@@ -203,7 +209,68 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
     }
     if (n.has("id")) out.id = n.at("id").asString();
     if (n.has("provider")) out.provider = n.at("provider").asString();
+    if (n.has("qir_platform")) out.qirPlatform = n.at("qir_platform").asString();
+    if (out.qirPlatform != "standard" && out.qirPlatform != "quantinuum-h2" && out.qirPlatform != "quantinuum-helios")
+      throw std::runtime_error("Unsupported qir_platform: " + out.qirPlatform);
+    if (n.has("vendor")) out.vendor = n.at("vendor").asString();
+    if (n.has("readiness")) out.readiness = n.at("readiness").asString();
+    if (n.has("readiness_reason")) out.readinessReason = n.at("readiness_reason").asString();
+    if (n.has("capability_provenance")) out.capabilityProvenance = n.at("capability_provenance").asString();
+    if (n.has("capability_verified")) out.capabilityVerified = n.at("capability_verified").asBool();
+    if (n.has("directed_connectivity")) out.directedConnectivity = n.at("directed_connectivity").asBool();
+    if (n.has("routes") && n.at("routes").isArray())
+      for (const auto& value : n.at("routes").asArray()) out.routes.push_back(value.asString());
+    if (n.has("formats") && n.at("formats").isArray())
+      for (const auto& value : n.at("formats").asArray()) out.formats.push_back(value.asString());
     if (n.has("qubits")) out.qubits = static_cast<std::size_t>(n.at("qubits").asInt());
+    auto componentIndex = [&](const Node& value) {
+      if (!value.isInt() || value.asInt() < 0 || static_cast<std::size_t>(value.asInt()) >= out.qubits)
+        throw std::runtime_error("physical component index must be an in-range integer");
+      return static_cast<int>(value.asInt());
+    };
+    auto indices = [&](const char* key, auto& destination) {
+      if (!n.has(key)) return;
+      std::set<int> unique;
+      for (const auto& value : n.at(key).asArray()) {
+        int index = componentIndex(value);
+        if (!unique.insert(index).second) throw std::runtime_error(std::string("duplicate component in ") + key);
+        destination.push_back(index);
+      }
+    };
+    indices("computational_qubits", out.computationalQubits);
+    indices("resonator_qubits", out.resonatorQubits);
+    if (n.has("available_qubits")) {
+      out.availableQubits.emplace();
+      indices("available_qubits", *out.availableQubits);
+    }
+    indices("unavailable_qubits", out.unavailableQubits);
+    if (n.has("single_qubit_gate_loci")) {
+      for (const auto& [gate, values] : n.at("single_qubit_gate_loci").asMap()) {
+        if (!knownNativeGates().contains(gate) && gate != "measure" && gate != "reset")
+          throw std::runtime_error("unknown single-qubit operation locus: " + gate);
+        auto& destination = out.singleQubitGateLoci[gate];
+        std::set<int> unique;
+        for (const auto& value : values.asArray()) {
+          int index = componentIndex(value);
+          if (!unique.insert(index).second) throw std::runtime_error("duplicate single-qubit operation locus");
+          destination.push_back(index);
+        }
+      }
+    }
+    auto operationLoci = [&](const char* key, auto& destination) {
+      if (!n.has(key)) return;
+      std::set<std::pair<int,int>> unique;
+      for (const auto& value : n.at(key).asArray()) {
+        const auto& row = value.asArray();
+        if (row.size() != 2) throw std::runtime_error(std::string(key) + " requires two-component loci");
+        auto pair = std::pair{componentIndex(row[0]), componentIndex(row[1])};
+        if (pair.first == pair.second || !unique.insert(pair).second)
+          throw std::runtime_error(std::string("duplicate or self locus in ") + key);
+        destination.push_back(pair);
+      }
+    };
+    operationLoci("move_loci", out.moveLoci);
+    operationLoci("cz_loci", out.czLoci);
     if (n.has("native_gates") && n.at("native_gates").isArray()) {
       for (const auto& g : n.at("native_gates").asArray()) {
         out.nativeGates.push_back(g.asString());
@@ -227,6 +294,7 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
           return false;
         }
         out.allToAll = rt.allToAll;
+        out.directedConnectivity = out.directedConnectivity || rt.directed;
         out.coupling = rt.edges;
         if (rt.qubits > 0 && rt.qubits != out.qubits) {
           diag.error("chip " + out.id + ": qubits=" +
@@ -308,6 +376,46 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
       if (c.has("refresh")) out.calibrationRefresh = c.at("refresh").asString();
       if (c.has("store"))
         out.calibrationStore = expandTilde(c.at("store").asString());
+      auto index = [&](const Node& value) {
+        if (!value.isInt() || value.asInt() < 0 ||
+            static_cast<unsigned long long>(value.asInt()) >= out.qubits)
+          throw std::runtime_error("calibration qubit index must be an in-range integer");
+        return static_cast<int>(value.asInt());
+      };
+      auto probability = [](const Node& value) {
+        const double error = value.asDouble();
+        if (!std::isfinite(error) || error < 0 || error >= 1)
+          throw std::runtime_error("calibration error probability must be finite and in [0, 1)");
+        return error;
+      };
+      auto nodes = [&](const std::string& key, auto& errors) {
+        if (!c.has(key)) return;
+        for (const auto& entry : c.at(key).asArray()) {
+          if (!entry.isArray() || entry.asArray().size() != 2)
+            throw std::runtime_error("calibration " + key + " entries must be [qubit, error]");
+          const auto& row = entry.asArray();
+          if (!errors.emplace(index(row[0]), probability(row[1])).second)
+            throw std::runtime_error("duplicate calibration qubit in " + key);
+        }
+      };
+      nodes("one_qubit_errors", out.calibrationOneQubitError);
+      nodes("readout_errors", out.calibrationReadoutError);
+      if (c.has("two_qubit_errors")) {
+        for (const auto& entry : c.at("two_qubit_errors").asArray()) {
+          if (!entry.isArray() || entry.asArray().size() != 3)
+            throw std::runtime_error("calibration two_qubit_errors entries must be [source, target, error]");
+          const auto& row = entry.asArray();
+          const int a = index(row[0]), b = index(row[1]);
+          if (a == b) throw std::runtime_error("calibration two-qubit edge must have distinct qubits");
+          if (!out.allToAll &&
+              std::find(out.coupling.begin(), out.coupling.end(), std::pair{a, b}) == out.coupling.end() &&
+              (out.directedConnectivity ||
+               std::find(out.coupling.begin(), out.coupling.end(), std::pair{b, a}) == out.coupling.end()))
+            throw std::runtime_error("calibration two-qubit edge is absent from target connectivity");
+          if (!out.calibrationTwoQubitError.emplace(std::pair{a, b}, probability(row[2])).second)
+            throw std::runtime_error("duplicate two-qubit calibration edge");
+        }
+      }
     }
 
     if (n.has("notes") && n.at("notes").isString()) {
@@ -369,12 +477,13 @@ std::vector<std::string> Registry::ids() const {
 verify::TargetInfo Registry::targetInfo(const std::string& id) const {
   verify::TargetInfo t;
   auto it = chips_.find(id);
-  if (it == chips_.end()) return t;  // generic fallback if unknown
+  if (it == chips_.end()) throw std::invalid_argument("unknown target: " + id);
   const ChipInfo& c = it->second;
   t.id = c.id;
   t.generic = false;
   t.nativeGates = c.nativeGates;
   t.allToAll = c.allToAll;
+  t.directedConnectivity = c.directedConnectivity;
   t.coupling = c.coupling;
   t.qubitCount = c.qubits;
   t.midCircuitMeasure = c.supports.midCircuitMeasure;

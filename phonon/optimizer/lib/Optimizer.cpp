@@ -17,6 +17,7 @@
 // fresh module while remapping operand IDs through a vmap.
 
 #include "phonon/optimizer/Optimizer.h"
+#include "spinor/dialect/Numerics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -32,8 +33,6 @@ namespace phonon::optimizer {
 namespace pd = phonon::dialect;
 
 namespace {
-
-constexpr double kTwoPi = 6.283185307179586476925286766559;
 
 // Carry over only those attributes the kind requires.
 std::vector<pd::Attribute> filterAttrs(const pd::Op& op) {
@@ -306,14 +305,19 @@ Stats mergeRotations(pd::Module& m) {
       auto it = prevOpForValue.find(op.operands[0].v);
       if (it != prevOpForValue.end() && !dead[it->second]) {
         const pd::Op& prev = m.op(pd::OpId{it->second});
-        if (prev.kind == op.kind) {
+        if (prev.kind == op.kind && prev.operands.size() == 1) {
           double pA = mergedAngles.count(it->second) ? mergedAngles[it->second]
                                                        : opAngle(prev);
           double cA = opAngle(op);
-          double sum = std::fmod(pA + cA, kTwoPi);
-          if (sum > kTwoPi / 2)  sum -= kTwoPi;
-          if (sum < -kTwoPi / 2) sum += kTwoPi;
-          if (std::abs(sum) < 1e-12) {
+          // RX/RY/RZ have a 4*pi SU(2) period. Reducing modulo 2*pi
+          // discards the -I phase, which cannot be dropped from a reusable
+          // quantum operation. Bound each input before addition as well:
+          // pA=1e16, cA=1 would otherwise lose cA completely in double.
+          auto bounded=[](double angle){
+            return 2*std::atan2(std::sin(angle/2),std::cos(angle/2));
+          };
+          double sum = bounded(bounded(pA) + bounded(cA));
+          if (std::abs(sum) < spinor::dialect::kMatrixRecognitionTolerance) {
             // Both drop.
             dead[it->second] = true;
             dead[i] = true;

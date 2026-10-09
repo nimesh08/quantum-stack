@@ -24,4 +24,9 @@ struct Result {
 Result lower(const dialect::Module& m,
              const spinor::verify::TargetInfo* target = nullptr);
 
+// Serialize a lowered module into the source grammar accepted by spinorc.
+// Preserves gate parameters and explicit classical measurement destinations.
+// Throws on an unmapped value or unsupported operation instead of omitting it.
+std::string emitSpinorSource(const spinor::dialect::Module& m);
+
 }  // namespace phonon::lower

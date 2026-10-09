@@ -63,8 +63,8 @@ const std::unordered_set<std::string>& gateMethods() {
       "h", "x", "y", "z", "s", "sdg", "t", "tdg",
       "rx", "ry", "rz",
       "cx", "cz", "swap",
-      "sx", "sxdg",
-      "ecr", "ms", "rzz",
+      "sx", "sxdg", "reset",
+      "ecr", "ms", "rzz", "rxx",
       "gpi", "gpi2", "u1q",
       // Photon convenience aliases:
       "cnot",        // alias for cx

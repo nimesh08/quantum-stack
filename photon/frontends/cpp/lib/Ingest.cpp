@@ -28,7 +28,7 @@ enum class Tok {
   AttrOpen, AttrClose,   // [[ and ]]
   Eq, EqEq, NotEq, Lt, Gt, Le, Ge,
   Plus, Minus, Star, Slash,
-  PlusPlus, MinusMinus,
+  PlusPlus, MinusMinus, PlusEq, MinusEq,
   ColonColon,
   Eof,
   Unknown,
@@ -137,6 +137,8 @@ struct Lex {
     if (c == ']' && peek(1) == ']') return pop2(Tok::AttrClose, "]]");
     if (c == '+' && peek(1) == '+') return pop2(Tok::PlusPlus, "++");
     if (c == '-' && peek(1) == '-') return pop2(Tok::MinusMinus, "--");
+    if (c == '+' && peek(1) == '=') return pop2(Tok::PlusEq, "+=");
+    if (c == '-' && peek(1) == '=') return pop2(Tok::MinusEq, "-=");
     if (c == '-' && peek(1) == '>') return pop2(Tok::Arrow, "->");
     if (c == ':' && peek(1) == ':') return pop2(Tok::ColonColon, "::");
     if (c == '=' && peek(1) == '=') return pop2(Tok::EqEq, "==");
@@ -452,13 +454,44 @@ pl::StmtPtr Parser::parseStmt() {
       return nullptr;
     }
     consume();  // var
-    expect(Tok::Lt, "'<'");
+    const auto comparison = cur().kind;
+    if (comparison != Tok::Lt && comparison != Tok::Le &&
+        comparison != Tok::Gt && comparison != Tok::Ge) {
+      err("for-loop requires <, <=, >, or >= continuation"); return nullptr;
+    }
+    const auto comparisonText = consume().text;
     auto hi = parseExpr();
     expect(Tok::Semi, "';'");
-    // Tolerate any of: ++i / i++ / i = i + 1.
-    if (cur().kind == Tok::PlusPlus) consume();
-    if (cur().kind == Tok::Ident) consume();
-    if (cur().kind == Tok::PlusPlus) consume();
+    pl::ExprPtr step;
+    auto requireInductionVariable = [&]() {
+      if (cur().kind != Tok::Ident || cur().text != var) {
+        err("for-loop increment must update '" + var + "'"); return false;
+      }
+      consume(); return true;
+    };
+    if (cur().kind == Tok::PlusPlus || cur().kind == Tok::MinusMinus) {
+      step = pl::mkInt(consume().kind == Tok::PlusPlus ? 1 : -1, L);
+      if (!requireInductionVariable()) return nullptr;
+    } else {
+      if (!requireInductionVariable()) return nullptr;
+      if (cur().kind == Tok::PlusPlus || cur().kind == Tok::MinusMinus) {
+        step = pl::mkInt(consume().kind == Tok::PlusPlus ? 1 : -1, L);
+      } else if (cur().kind == Tok::PlusEq || cur().kind == Tok::MinusEq) {
+        const bool subtract = consume().kind == Tok::MinusEq;
+        step = parseExpr();
+        if (subtract) step = pl::mkBinOp("-", pl::mkInt(0, L), step, L);
+      } else if (accept(Tok::Eq)) {
+        if (!requireInductionVariable()) return nullptr;
+        if (cur().kind != Tok::Plus && cur().kind != Tok::Minus) {
+          err("for-loop increment requires induction variable plus or minus a static step"); return nullptr;
+        }
+        const bool subtract = consume().kind == Tok::Minus;
+        step = parseExpr();
+        if (subtract) step = pl::mkBinOp("-", pl::mkInt(0, L), step, L);
+      } else {
+        err("for-loop requires an explicit increment or decrement"); return nullptr;
+      }
+    }
     expect(Tok::RParen, "')'");
     expect(Tok::LBrace, "'{'");
     auto s = std::make_shared<pl::Stmt>();
@@ -467,6 +500,8 @@ pl::StmtPtr Parser::parseStmt() {
     s->for_var = var;
     s->for_lo = lo;
     s->for_hi = hi;
+    s->for_step = step;
+    s->for_comparison = comparisonText;
     parseBlock(s->body);
     return s;
   }
@@ -474,12 +509,17 @@ pl::StmtPtr Parser::parseStmt() {
     consume();
     expect(Tok::LParen, "'('");
     auto pred = parseExpr();
-    // Allow `c == k` shape.
-    if (cur().kind == Tok::EqEq) {
-      consume();
+    if (cur().kind == Tok::EqEq || cur().kind == Tok::NotEq ||
+        cur().kind == Tok::Lt || cur().kind == Tok::Le ||
+        cur().kind == Tok::Gt || cur().kind == Tok::Ge) {
+      const auto comparison = consume().kind;
       auto rhs = parseExpr();
       auto cmp = std::make_shared<pl::Expr>();
-      cmp->kind = pl::ExprKind::CmpEq;
+      cmp->kind = comparison == Tok::EqEq ? pl::ExprKind::CmpEq :
+          comparison == Tok::NotEq ? pl::ExprKind::CmpNeq :
+          comparison == Tok::Lt ? pl::ExprKind::CmpLt :
+          comparison == Tok::Le ? pl::ExprKind::CmpLe :
+          comparison == Tok::Gt ? pl::ExprKind::CmpGt : pl::ExprKind::CmpGe;
       cmp->children = {pred, rhs};
       cmp->loc = L;
       pred = cmp;

@@ -6,6 +6,7 @@
 #include "photon/lang/Library.h"
 
 #include <cmath>
+#include <numbers>
 #include <unordered_set>
 
 namespace photon::lang {
@@ -67,9 +68,8 @@ void applySwap(std::vector<pd::ValueId>& slots, std::size_t a, std::size_t b_,
   slots[b_] = r.second;
 }
 
-// Controlled-rz approximation: standard decomposition is
-//   cx(c, t); rz(-theta/2, t); cx(c, t); rz(theta/2, t); rz(theta/2, c)
-// We pick that exact identity (Nielsen & Chuang Ex. 4.34).
+// Exact controlled phase diag(1, 1, 1, exp(i theta)), as required by QFT.
+// The Rz/CX sequence alone contributes an unwanted scalar exp(-i theta/4).
 void applyCRz(std::vector<pd::ValueId>& slots, std::size_t c, std::size_t t,
               double theta, pd::Builder& b, pd::Location L) {
   applyRz(slots, c, theta / 2.0, b, L);
@@ -77,6 +77,7 @@ void applyCRz(std::vector<pd::ValueId>& slots, std::size_t c, std::size_t t,
   applyRz(slots, t, -theta / 2.0, b, L);
   applyCx(slots, c, t, b, L);
   applyRz(slots, t, theta / 2.0, b, L);
+  b.globalPhase(theta / 4.0, L);
 }
 
 // --- bell_pair(q, a, b) ---------------------------------------------------
@@ -95,6 +96,9 @@ bool expandBellPair(const std::string& recv,
   }
   auto* slots = slotsOf(ctx, recv);
   if (!slots) { emitErr(ctx, "bell_pair: unknown qreg '" + recv + "'", loc); return false; }
+  if (aIdx >= slots->size() || bIdx >= slots->size() || aIdx == bIdx) {
+    emitErr(ctx, "bell_pair requires two distinct in-range qubits", loc); return false;
+  }
   pd::Location L = ctx.loc;
   applyH(*slots, aIdx, *ctx.builder, L);
   applyCx(*slots, aIdx, bIdx, *ctx.builder, L);
@@ -123,7 +127,7 @@ bool expandQft(const std::string& recv, const std::vector<ExprPtr>&,
   for (std::size_t j = 0; j < n; ++j) {
     applyH(*slots, j, *ctx.builder, ctx.loc);
     for (std::size_t k = j + 1; k < n; ++k) {
-      double theta = M_PI / std::pow(2.0, static_cast<double>(k - j));
+      double theta = std::numbers::pi / std::pow(2.0, static_cast<double>(k - j));
       applyCRz(*slots, k, j, theta, *ctx.builder, ctx.loc);
     }
   }
@@ -143,7 +147,7 @@ bool expandIqft(const std::string& recv, const std::vector<ExprPtr>&,
   }
   for (std::size_t j = n; j-- > 0;) {
     for (std::size_t k = n; k-- > j + 1;) {
-      double theta = -M_PI / std::pow(2.0, static_cast<double>(k - j));
+      double theta = -std::numbers::pi / std::pow(2.0, static_cast<double>(k - j));
       applyCRz(*slots, k, j, theta, *ctx.builder, ctx.loc);
     }
     applyH(*slots, j, *ctx.builder, ctx.loc);
@@ -151,55 +155,13 @@ bool expandIqft(const std::string& recv, const std::vector<ExprPtr>&,
   return true;
 }
 
-// --- grover(q, oracle, rounds) -------------------------------------------
-// The oracle is a callable received as a kernel parameter; we call it
-// via phonon.call "oracle" with the qreg slots as operands. Diffusion
-// is H^N · X^N · multi-CZ · X^N · H^N.
-void diffusion(std::vector<pd::ValueId>& slots, pd::Builder& b,
-               pd::Location L) {
-  std::size_t n = slots.size();
-  for (std::size_t i = 0; i < n; ++i) applyH(slots, i, b, L);
-  for (std::size_t i = 0; i < n; ++i) applyX(slots, i, b, L);
-  // Multi-controlled-Z on n qubits, target = last qubit. Trivial for
-  // n=1 (z) and n=2 (cz). For n>=3 we cascade: a chain of CZs to the
-  // last qubit; the result is not the literal multi-CZ but for M2 it
-  // suffices — Phase D will swap in tweedledum's exact synthesis.
-  if (n == 1) applyZ(slots, 0, b, L);
-  else if (n == 2) {
-    auto r = b.cz(slots[0], slots[1], L);
-    slots[0] = r.first; slots[1] = r.second;
-  } else {
-    for (std::size_t i = 0; i + 1 < n; ++i) {
-      auto r = b.cz(slots[i], slots[n - 1], L);
-      slots[i] = r.first; slots[n - 1] = r.second;
-    }
-  }
-  for (std::size_t i = 0; i < n; ++i) applyX(slots, i, b, L);
-  for (std::size_t i = 0; i < n; ++i) applyH(slots, i, b, L);
-}
-
-bool expandGrover(const std::string& recv, const std::vector<ExprPtr>& args,
+// Grover needs a bound oracle and exact multi-controlled diffusion. The
+// language does not represent that callable contract yet; never replace
+// either operation with a placeholder or a different diagonal circuit.
+bool expandGrover(const std::string&, const std::vector<ExprPtr>&,
                   const Location& loc, ExpandCtx& ctx) {
-  auto* slots = slotsOf(ctx, recv);
-  if (!slots) { emitErr(ctx, "grover: unknown qreg '" + recv + "'", loc); return false; }
-  std::int64_t rounds = 1;
-  // Args order: oracle, rounds. (Or just rounds when oracle is the
-  // kernel parameter referenced by name.)
-  for (const auto& a : args) {
-    if (auto v = ctx.foldInt(a)) rounds = *v;
-  }
-  if (rounds < 1) rounds = 1;
-
-  for (std::size_t i = 0; i < slots->size(); ++i)
-    applyH(*slots, i, *ctx.builder, ctx.loc);
-
-  for (std::int64_t r = 0; r < rounds; ++r) {
-    // oracle call: emit phonon.call "oracle" with no operands (M2
-    // contract; the platform driver will inline).
-    ctx.builder->call("oracle", {}, {}, ctx.loc);
-    diffusion(*slots, *ctx.builder, ctx.loc);
-  }
-  return true;
+  emitErr(ctx, "grover requires a bound oracle and exact diffusion; callable oracle lowering is unsupported", loc);
+  return false;
 }
 
 // --- teleport(q, src, anc, dst) ------------------------------------------
@@ -216,6 +178,10 @@ bool expandTeleport(const std::string& recv,
       emitErr(ctx, "teleport: slot indices must fold", loc); return false;
     }
     src = *a; anc = *b_; dst = *c;
+  }
+  if (src >= slots->size() || anc >= slots->size() || dst >= slots->size() ||
+      src == anc || src == dst || anc == dst) {
+    emitErr(ctx, "teleport requires three distinct in-range qubits", loc); return false;
   }
   pd::Builder& b = *ctx.builder;
   pd::Location L = ctx.loc;
@@ -251,6 +217,10 @@ bool expandVqeAnsatz(const std::string& recv,
     depth = *v;
   }
   std::size_t n = slots->size();
+  if (depth < 1 || n == 0 || static_cast<std::uint64_t>(depth) > 100000 / n) {
+    emitErr(ctx, "vqe_ansatz: depth must be positive and expansion must not exceed 100000 qubit-layers", loc);
+    return false;
+  }
   for (std::int64_t d = 0; d < depth; ++d) {
     for (std::size_t i = 0; i < n; ++i) {
       double theta = 0.1 * static_cast<double>(d * static_cast<std::int64_t>(n) +
@@ -276,6 +246,18 @@ bool expandLibrary(const std::string& name,
                    const Location& loc,
                    ExpandCtx& ctx) {
   if (!isLibraryRoutine(name)) return false;
+  if (name == "bell_pair" && args.size() != 0 && args.size() != 2) {
+    emitErr(ctx, "bell_pair expects zero or two slot indices", loc); return false;
+  }
+  if (name == "teleport" && args.size() != 0 && args.size() != 3) {
+    emitErr(ctx, "teleport expects zero or three slot indices", loc); return false;
+  }
+  if ((name == "ghz" || name == "qft" || name == "iqft") && !args.empty()) {
+    emitErr(ctx, name + " expects no arguments", loc); return false;
+  }
+  if (name == "vqe_ansatz" && args.size() > 1) {
+    emitErr(ctx, "vqe_ansatz expects zero or one depth argument", loc); return false;
+  }
   if (name == "bell_pair")  return expandBellPair(recv, args, loc, ctx);
   if (name == "ghz")        return expandGhz(recv, args, loc, ctx);
   if (name == "qft")        return expandQft(recv, args, loc, ctx);

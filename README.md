@@ -2,7 +2,8 @@
 
 > A four-layer quantum compiler — **Photon · Phonon · Spinor** —
 > packaged for Python and shipped as signed binaries. Write a
-> quantum program once; compile it for any of 27 chips.
+> quantum program once; compile supported operations using 31 hardware profiles
+> across 11 vendors. Live use requires a concrete, verified device snapshot.
 
 [![docs](https://img.shields.io/badge/docs-nimesh08.github.io%2Fquantum--stack-4f46e5?style=flat-square)](https://nimesh08.github.io/quantum-stack/)
 [![release](https://github.com/nimesh08/quantum-stack/actions/workflows/release.yml/badge.svg)](https://github.com/nimesh08/quantum-stack/actions/workflows/release.yml)
@@ -37,7 +38,7 @@ by **Nimesh Cheedella**.
 | Artefact | What it is |
 |---|---|
 | **`heisenberg-photon`** (PyPI wheel) | The compiler engine + Python facade. Bundles `photon._engine`, the chip registry, and the `spinorc` + `photonc` CLI binaries (which land on `$PATH` after `pip install`). |
-| **`heisenberg-spinor-submit`** (PyPI wheel) | Provider adapters: IBM, AWS Braket, Azure Quantum, plus four cassette-only adapters. Verbatim submission only (RULE 5). |
+| **`heisenberg-spinor-submit`** (PyPI wheel) | `qstack` CLI, typed compiled artifacts, shared credentials/configuration, persistent jobs, 12 cloud routes and a configured Qibolab lab bridge. |
 | Signed CLI binaries on GitHub Releases | `spinorc`, `phononc`, `photonc`, `photonc-cxx` for linux-x86_64, linux-arm64, darwin-arm64. Cosign keyless + syft SBOM. |
 | C++ libraries (`cmake --install`) | `libspinor`, `libphonon`, `libphoton` + headers. Use when embedding the engine in your own C++ app. |
 
@@ -45,6 +46,12 @@ The full contract — pin policy, ABI promise, distribution channels —
 is in [INTEGRATION.md](INTEGRATION.md).
 
 ## Try it in 30 seconds
+
+The 0.6 compiler/submission interface is documented in
+[the qstack guide](docs/qstack.md), with [provider setup examples](examples/qstack/qstack.env.example).
+Provider libraries are optional extras; compilation and real local simulation
+do not require a cloud account. See [readiness and migration](docs/qstack.md#readiness-and-migration)
+before moving from the earlier cassette defaults.
 
 ```bash
 pip install heisenberg-photon
@@ -64,7 +71,8 @@ c = measure q
 Compile it for IBM Heron r2:
 
 ```bash
-spinorc compile -t ibm_heron_r2 bell.spn
+qstack compile bell.spn --target ibm_fez --out build/bell
+qstack submit build/bell --mode local --shots 1024 --wait
 ```
 
 Or write the same program in Photon (the OO language) from a Python
@@ -91,9 +99,9 @@ flowchart TB
   inputs[".spn / .pho / @photon.kernel / [[photon::kernel]] C++"]
   inputs --> photon["Photon front-end\n  parses + lowers to Phonon"]
   photon --> phonon["Phonon\n  - linear types (no-cloning)\n  - optimizer (cancel / merge / ZX / schedule)"]
-  phonon --> spinor["Spinor\n  - placement\n  - SABRE routing\n  - KAK + Euler-ZYZ decomposition\n  - cleanup\n  - emit QASM3 / QIR / Quil"]
+  phonon --> spinor["Spinor physical compiler\n  native synthesis, placement, routing\n  exact block optimization and legality checks"]
   spinor --> qasm["chip-locked OpenQASM 3 / QIR / Quil text"]
-  qasm --> submit["spinor_submit\n  IBM / AWS Braket / Azure / 4 cassette-only"]
+  qasm --> submit["qstack\n  authenticated adapters, persistent jobs and results"]
   submit --> hardware["Real chip silicon"]
 ```
 
@@ -141,11 +149,11 @@ quantum-stack/
 ## The seven critical rules
 
 > 1. **Build bottom-up.** Spinor → Phonon → Photon.
-> 2. **Optimization lives in Phonon, never in Spinor.**
+> 2. **Logical and physical optimization are owned by this compiler.**
 > 3. **One C++ engine, one source of truth.**
 > 4. **Re-verify and pin every version before coding.**
-> 5. **Submit to providers in verbatim / pass-through mode only.**
-> 6. **Auto-synthesis is out of scope.**
+> 5. **Provider SDKs transport already-native circuits; required service processing is recorded.**
+> 6. **Native synthesis is exact unless an explicit approximation contract is added.**
 > 7. **Photon, Phonon, Spinor are working names; trademark search before public use.**
 
 Full rationale at

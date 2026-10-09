@@ -79,20 +79,18 @@ bool typecheck(const pd::Module& m, const Options& opt,
           diag.error("E1: qubit value " + m.nameOf(operand) +
                      " used more than once (no-cloning)",
                      op.loc, id);
-        } else if (s.measured && !isReset) {
-          if (!opt.midCircuitMeasure) {
-            diag.error("E2: qubit " + m.nameOf(operand) +
-                       " used after measurement (chip lacks "
-                       "mid-circuit measurement)",
-                       op.loc, id);
-          } else {
-            diag.error("E2: qubit " + m.nameOf(operand) +
-                       " used after measurement; insert 'reset' "
-                       "first",
-                       op.loc, id);
-          }
+        } else if (s.measured && !isReset && !opt.midCircuitMeasure) {
+          diag.error("E2: qubit " + m.nameOf(operand) +
+                     " used after measurement (chip lacks "
+                     "mid-circuit measurement)",
+                     op.loc, id);
         }
-        s.consumed = true;
+        // Measurement projects the state on this existing wire; it neither
+        // destroys the physical qubit nor creates another quantum value. The
+        // IR measure operation returns only classical data, so a supported
+        // mid-circuit measurement leaves its quantum operand available for a
+        // subsequent gate, reset, or repeated measurement.
+        s.consumed = !(isMeasure && opt.midCircuitMeasure);
         if (isMeasure) s.measured = true;
         if (isReset) s.measured = false;
       }

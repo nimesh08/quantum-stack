@@ -2,6 +2,17 @@
 
 id: rigetti_ankaa_3
 provider: aws
+
+schema_version: 2
+vendor: rigetti
+readiness: needs_refresh
+readiness_reason: "Live submission requires a discovered, concrete capability snapshot."
+routes: [aws, rigetti]
+formats: [quil, qasm3]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 82
 native_gates: [cz, rx, rz]
 

@@ -80,8 +80,36 @@ void printOpHeader(std::ostream& os, const Module& m, OpId id) {
 
 std::string print(const Module& m) {
   std::ostringstream os;
-  os << "spinor.module @" << m.name
-     << " attributes {target = \"" << m.targetAttr << "\"} {\n";
+  os << "spinor.module @" << m.name << " attributes {target = \"" << m.targetAttr << "\"";
+  std::size_t declaredBits = 0;
+  for (const auto& op : m.ops()) if (op.kind == OpKind::AllocBit) ++declaredBits;
+  if (m.numClbits > declaredBits) os << ", num_clbits = " << m.numClbits;
+  if (m.globalPhase != 0.0) os << ", global_phase = " << formatDouble(m.globalPhase);
+  if (!m.finalLayout.empty()) {
+    os << ", final_layout = \"";
+    for (std::size_t i=0;i<m.finalLayout.size();++i) {
+      if(i) os << ',';
+      os << m.finalLayout[i];
+    }
+    os << '\"';
+  }
+  if (!m.initialLayout.empty()) {
+    os << ", initial_layout = \"";
+    for (std::size_t i=0;i<m.initialLayout.size();++i) {
+      if(i) os << ',';
+      os << m.initialLayout[i];
+    }
+    os << '\"';
+  }
+  if (!m.resonatorQubits.empty()) {
+    os << ", resonator_qubits = \"";
+    for (std::size_t i=0;i<m.resonatorQubits.size();++i) {
+      if(i) os << ',';
+      os << m.resonatorQubits[i];
+    }
+    os << '\"';
+  }
+  os << "} {\n";
   for (std::uint32_t i = 0; i < m.numOps(); ++i) {
     OpId id{i};
     os << "  ";

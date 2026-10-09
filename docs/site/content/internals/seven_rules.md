@@ -15,16 +15,14 @@ level without touching the compiler at all.
 In practice: do not start a feature in Photon that requires a
 Phonon change without landing the Phonon change first.
 
-## RULE 2 — Optimization lives in Phonon, never in Spinor
+## RULE 2 — Optimize at the layer that has the required information
 
-Spinor specialises a program to one chip. It places, routes,
-decomposes, and emits. It does **not** rewrite gate sequences for
-fewer gates or shallower depth — that is Phonon's job, run once
-above all chips so every back-end benefits.
-
-If a circuit-shrinking optimiser appears in Spinor, that is an
-architectural error: stop the change, push the rewrite up to Phonon,
-and ship the right thing instead.
+Logical simplification operates on Phonon operations before physical layout.
+Spinor owns native synthesis, placement, routing, native gate optimization and
+resource scheduling. Both preserve measurements, reset, classical control,
+phase and readout mappings. Exact transformations are the default; any future
+approximate synthesis requires an explicit error budget. Provider SDKs do not
+replace either compiler stage.
 
 ## RULE 3 — One C++ engine, one source of truth
 
@@ -47,19 +45,14 @@ recorded next to the pin.
 This is why the project does not break on a quiet upstream release:
 nothing floats.
 
-## RULE 5 — Submit to providers in verbatim / pass-through mode only
+## RULE 5 — Own compilation and record mandatory provider processing
 
-When Heisenberg hands a chip-locked artefact to IBM, AWS Braket,
-Azure Quantum, QCI, Anyon, TII, or Alice and Bob, the provider
-runs it **as written**. No silent re-transpilation, no backend-side
-optimisation that would change the semantics of the program the user
-asked for.
-
-Concretely: every provider adapter passes the appropriate
-`skip_transpilation=True` / `#pragma braket verbatim` /
-QIR-Adaptive-pragma / equivalent flag to the vendor SDK. If a
-vendor cannot honour verbatim mode, the chip lands on the
-[unsupported-chips ledger](chips_unsupported.md) until they can.
+Adapters serialize already-native programs, authenticate, submit and retrieve
+results. They must not call SDK transpilers or silently substitute another
+device. Use documented native/verbatim controls where supported. Mandatory
+service processing, such as QCS translation or QAT lowering, is allowed and
+recorded in the job receipt. Never invent a bypass option a provider does not
+document. Missing or incompatible device contracts block live submission.
 
 ## RULE 6 — Auto-synthesis is out of scope
 
@@ -69,6 +62,9 @@ four layers. It is a planner / search problem that *uses* a
 compiler, not a compiler. The right move is to treat it as a
 standalone product on top of the finished stack; the
 [future plan](futureplan.md) explains why.
+
+Exact synthesis of an existing unitary into a target's native gates is part
+of the compiler and is covered by Rule 2.
 
 ## RULE 7 — *Photon*, *Phonon*, *Spinor* are working names
 

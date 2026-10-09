@@ -55,6 +55,7 @@ registry::ChipInfo ibm() {
 }
 registry::ChipInfo quantinuum() {
   registry::ChipInfo c; c.id = "quantinuum_test"; c.qubits = 4;
+  c.qirPlatform = "quantinuum-h2";
   c.allToAll = true;
   c.nativeGates = {"u1q", "rzz"};
   c.decompose.oneQubitRotationGate = "u1q";
@@ -101,6 +102,17 @@ TEST(M9_qasm3, round_trip_with_qasm_importer) {
   EXPECT_EQ(reim.module->numOps(), r.module->numOps());
 }
 
+TEST(M9_qasm3, importer_preserves_native_parameters_and_rejects_invalid_input) {
+  auto native=parser::qasm::import("OPENQASM 3.0;qubit[2] q;u1q(0.3,0.4) q[0];rxx(0.7) q[0],q[1];rzz(-0.9) q[1],q[0];");
+  EXPECT_TRUE(native.module.has_value());
+  EXPECT_CONTAINS(print(*native.module),"theta = 0.3");
+  EXPECT_CONTAINS(print(*native.module),"angle = -0.9");
+  for(auto statement:{"x(1) q[0]","rx(0.3foo) q[0]","cx q[0],q[0]","x q[2]","x q[-1]"}){
+    auto bad=parser::qasm::import(std::string("OPENQASM 3.0;qubit[2] q;")+statement+";");
+    EXPECT_FALSE(bad.module.has_value());
+  }
+}
+
 // =============================================================
 // QIR
 // =============================================================
@@ -108,11 +120,26 @@ TEST(M9_qasm3, round_trip_with_qasm_importer) {
 TEST(M9_qir, bell_emits_base_profile) {
   auto r = parser::parse(slurp(corpus("bell")));
   std::string out = emitQir(*r.module);
-  EXPECT_CONTAINS(out, "%Qubit  = type opaque");
+  EXPECT_CONTAINS(out, "@__quantum__qis__h__body(ptr)");
+  EXPECT_CONTAINS(out, "!llvm.module.flags");
+  EXPECT_CONTAINS(out, "@__quantum__rt__result_record_output");
   EXPECT_CONTAINS(out, "@__quantum__qis__h__body");
   EXPECT_CONTAINS(out, "@__quantum__qis__cnot__body");
   EXPECT_CONTAINS(out, "@__quantum__qis__mz__body");
   EXPECT_CONTAINS(out, "base_profile");
+  // QIR 1.0 base profile: initialization, transformations, irreversible
+  // operations, output. Labels are required by the labeled output schema.
+  EXPECT_CONTAINS(out, "define i64 @main()");
+  EXPECT_CONTAINS(out, "ret i64 0");
+  EXPECT_CONTAINS(out, "entry:\n");
+  EXPECT_CONTAINS(out, "body:\n");
+  EXPECT_CONTAINS(out, "measurements:\n");
+  EXPECT_CONTAINS(out, "output:\n");
+  EXPECT_CONTAINS(out, "ptr writeonly");
+  EXPECT_CONTAINS(out, "\"irreversible\"");
+  EXPECT_CONTAINS(out, "\"output_labeling_schema\"=\"labeled\"");
+  EXPECT_CONTAINS(out, "@output_label0 = private constant");
+  EXPECT_TRUE(out.find("bool_record_output") == std::string::npos);
 }
 
 TEST(M9_qir, quantinuum_emits_adaptive_profile) {

@@ -11,6 +11,23 @@ Author: Nimesh Cheedella.
 
 ### Added
 
+- `qstack` compiler/submission CLI with explicit execution modes, dotenv paths,
+  typed artifacts, persistent job receipts, authentication and twelve cloud
+  adapters. See [the 0.6 guide](docs/qstack.md) for setup and migration.
+- Owned native synthesis, bounded layout search and physical optimization;
+  exact matrix, semantic, registry and provider contract tests.
+- Readiness metadata for all 31 profiles, authenticated target snapshots, and
+  an optional bridge for configured Qibolab laboratory platforms.
+
+### Fixed
+
+- Indexed loops, branch lowering, gate parameters, phase and readout mappings.
+  Unsupported constructs now fail instead of reporting a fabricated success.
+- IBM compilation no longer generates Python that invokes a Qiskit transpiler.
+  Python execution uses the real compiler and simulator.
+
+### Added (documentation)
+
 - New top-level docs pages
   ([Vision](https://nimesh08.github.io/quantum-stack/vision/),
   [Plan](https://nimesh08.github.io/quantum-stack/plan/),

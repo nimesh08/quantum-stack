@@ -2,6 +2,17 @@
 
 id: tii_falcon
 provider: tii
+
+schema_version: 2
+vendor: tii
+readiness: unavailable
+readiness_reason: "No verified public cloud submission contract."
+routes: [tii, qibolab]
+formats: [pulse-sequence]
+parameter_units: radians
+directed_connectivity: false
+capability_verified: false
+capability_provenance: historical_registry
 qubits: 5
 native_gates: [cz, rx, rz]
 

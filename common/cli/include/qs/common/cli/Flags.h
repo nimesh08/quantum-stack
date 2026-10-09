@@ -42,7 +42,7 @@ std::string toString(Mode m);
 std::optional<Mode> parseMode(std::string_view word);
 
 // Output format the user selected for `compile`.
-enum class EmitFormat { Qasm3, Qir, Quil, Phonon, Spinor };
+enum class EmitFormat { Qasm3, Qir, Quil, Phonon, Spinor, Json };
 std::string toString(EmitFormat f);
 std::optional<EmitFormat> parseEmitFormat(std::string_view word);
 
@@ -66,6 +66,7 @@ struct Flags {
   std::optional<std::string> config_file;
 
   std::optional<int>           shots;
+  int                         optimization_level = 2;
   std::optional<double>        cost_cap_usd;
 
   Mode                         mode = Mode::Cassette;

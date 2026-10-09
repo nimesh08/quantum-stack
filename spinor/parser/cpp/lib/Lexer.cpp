@@ -14,8 +14,8 @@ const std::set<std::string>& gateMnemonics() {
       "h",    "x",    "y",    "z",    "s",    "sdg",  "t",    "tdg",
       "rx",   "ry",   "rz",
       "cx",   "cz",   "swap",
-      "ecr",  "ms",   "rzz",  "sx",   "sxdg",
-      "gpi",  "gpi2", "u1q",
+      "ecr",  "ms",   "rzz", "rxx",  "sx",   "sxdg",
+      "gpi",  "gpi2", "u1q", "gphase", "phased_xz", "sqrt_iswap", "sqrt_iswap_inv", "syc", "iswap",
   };
   return s;
 }
@@ -61,6 +61,8 @@ Token Lexer::readWord() {
   }
   t.text = word;
   if (word == "target")       t.kind = Tok::Target;
+  else if (word == "if") t.kind=Tok::If;
+  else if (word == "else") t.kind=Tok::Else;
   else if (word == "generic") t.kind = Tok::Generic;
   else if (word == "qubit")   t.kind = Tok::Qubit;
   else if (word == "bit")     t.kind = Tok::Bit;
@@ -145,6 +147,8 @@ std::vector<Token> Lexer::tokenize() {
     Token t; t.line = line_; t.column = col_;
     t.text = std::string(1, c);
     switch (c) {
+      case '{': t.kind=Tok::LBrace; break;
+      case '}': t.kind=Tok::RBrace; break;
       case '[': t.kind = Tok::LBracket; break;
       case ']': t.kind = Tok::RBracket; break;
       case '(': t.kind = Tok::LParen;   break;
@@ -153,7 +157,7 @@ std::vector<Token> Lexer::tokenize() {
       case '=': t.kind = Tok::Equals;   break;
       case '*': t.kind = Tok::Star;     break;
       case '/': t.kind = Tok::Slash;    break;
-      default:  t.kind = Tok::Eof;      break;  // unknown char
+      default:  t.kind = Tok::Unknown;      break;  // unknown char
     }
     get();
     if (t.kind != Tok::Eof) {

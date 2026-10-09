@@ -37,10 +37,10 @@ endforeach()
 find_package(Python COMPONENTS Interpreter Development.Module QUIET)
 
 find_package(nanobind ${QSTACK_NANOBIND_VERSION} CONFIG QUIET)
-if(NOT nanobind_FOUND)
+if(NOT nanobind_FOUND AND Python_Interpreter_FOUND)
   # Try the pip-installed nanobind cmake dir.
   execute_process(
-    COMMAND ${CMAKE_COMMAND} -E env python3 -c "import nanobind, sys; sys.stdout.write(nanobind.cmake_dir())"
+    COMMAND ${Python_EXECUTABLE} -c "import nanobind, sys; sys.stdout.write(nanobind.cmake_dir())"
     OUTPUT_VARIABLE _NB_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
     RESULT_VARIABLE _NB_RC)
@@ -58,11 +58,15 @@ if(nanobind_FOUND)
   )
   set_target_properties(photon_engine_pymod PROPERTIES
     OUTPUT_NAME "_engine"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/photon/bindings/python/photon"
+    # A generator expression prevents Visual Studio and other multi-config
+    # generators from appending Release/Debug after the staged package path.
+    LIBRARY_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/photon/bindings/python/photon>"
+    RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/photon/bindings/python/photon>"
   )
   target_link_libraries(photon_engine_pymod PRIVATE photon_engine_cpp)
-  set(QSTACK_HAVE_NANOBIND ON CACHE INTERNAL "nanobind extension built")
+  set(QSTACK_HAVE_NANOBIND ON CACHE INTERNAL "nanobind extension built" FORCE)
 else()
+  set(QSTACK_HAVE_NANOBIND OFF CACHE INTERNAL "nanobind extension built" FORCE)
   message(STATUS "photon: nanobind not found; skipping photon._engine extension. "
                  "Pass -Dnanobind_DIR=$(python3 -c 'import nanobind; print(nanobind.cmake_dir())') to enable.")
 endif()
@@ -97,45 +101,30 @@ if(TARGET photon_engine_pymod)
   add_dependencies(photon_engine_pymod photon_python_stage)
 endif()
 
-# ----------------------------------------------------------------------------
-# Wheel-only assets: when scikit-build-core drives the build with
-# QSTACK_BUILD_PYTHON_WHEEL=ON, we additionally:
-#   1. Copy the chip registry into photon/registry/ inside the wheel layout.
-#   2. Drop the `spinorc` and `photonc` CLI binaries into photon/bin/ so
-#      `pip install heisenberg-photon` puts them on $PATH automatically.
-# ----------------------------------------------------------------------------
+
+# A wheel is populated by CMake install rules, not by copying files into a
+# build directory. Defer until all three frontend targets have been created.
 if(QSTACK_BUILD_PYTHON_WHEEL)
-  message(STATUS "photon: building Python wheel assets (registry + spinorc + photonc)")
-
-  set(_PHOTON_REGISTRY_SRC ${CMAKE_SOURCE_DIR}/spinor/registry)
-  set(_PHOTON_REGISTRY_DST ${_PHOTON_PY_DEST}/registry)
-  add_custom_command(
-    OUTPUT ${_PHOTON_REGISTRY_DST}/.staged
-    COMMAND ${CMAKE_COMMAND} -E rm -rf ${_PHOTON_REGISTRY_DST}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_PHOTON_REGISTRY_SRC} ${_PHOTON_REGISTRY_DST}
-    COMMAND ${CMAKE_COMMAND} -E touch ${_PHOTON_REGISTRY_DST}/.staged
-    DEPENDS ${_PHOTON_REGISTRY_SRC}
-    COMMENT "Stage chip registry into the photon wheel layout"
-    VERBATIM)
-  add_custom_target(photon_wheel_registry ALL
-    DEPENDS ${_PHOTON_REGISTRY_DST}/.staged)
-  add_dependencies(photon_python_stage photon_wheel_registry)
-
-  set(_PHOTON_BIN_DST ${_PHOTON_PY_DEST}/bin)
-  file(MAKE_DIRECTORY ${_PHOTON_BIN_DST})
-
-  # Copy spinorc + photonc once they are built. We use POST_BUILD on the
-  # CLI targets so the staging follows the link step automatically.
-  if(TARGET spinorc)
-    add_custom_command(TARGET spinorc POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              $<TARGET_FILE:spinorc> ${_PHOTON_BIN_DST}/spinorc
-      COMMENT "Stage spinorc binary into the photon wheel layout")
-  endif()
-  if(TARGET photonc)
-    add_custom_command(TARGET photonc POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              $<TARGET_FILE:photonc> ${_PHOTON_BIN_DST}/photonc
-      COMMENT "Stage photonc binary into the photon wheel layout")
-  endif()
+  function(qstack_install_photon_wheel)
+    if(NOT TARGET photon_engine_pymod)
+      message(FATAL_ERROR "A Photon wheel requires the nanobind extension")
+    endif()
+    install(TARGETS photon_engine_pymod
+      LIBRARY DESTINATION photon
+      RUNTIME DESTINATION photon)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/photon/frontends/python/photon/"
+      DESTINATION photon FILES_MATCHING PATTERN "*.py")
+    install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION photon)
+    foreach(directory IN ITEMS chips topologies)
+      install(DIRECTORY "${CMAKE_SOURCE_DIR}/spinor/registry/${directory}"
+        DESTINATION photon/registry FILES_MATCHING PATTERN "*.yaml")
+    endforeach()
+    foreach(compiler IN ITEMS spinorc phononc photonc photonc-cxx)
+      if(NOT TARGET ${compiler})
+        message(FATAL_ERROR "A Photon wheel requires ${compiler}")
+      endif()
+      install(TARGETS ${compiler} RUNTIME DESTINATION photon/bin)
+    endforeach()
+  endfunction()
+  cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL qstack_install_photon_wheel)
 endif()

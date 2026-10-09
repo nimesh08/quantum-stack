@@ -1,65 +1,69 @@
 # heisenberg-spinor-submit
 
-Provider submission adapters for the Heisenberg Quantum Stack — three
-provider adapters with a uniform interface, all submitting in
-**verbatim / pass-through** mode (Rule 5):
+The qstack runtime authenticates provider connections, discovers target
+capabilities, compiles through the native Photon/Phonon/Spinor tools, and
+executes saved artifacts. Provider SDKs handle transport; the owned C++
+compiler produces the native circuit.
 
-- `ibm`   — Qiskit Runtime (`qiskit-ibm-runtime`)
-- `aws`   — Braket SDK (`amazon-braket-sdk`)
-- `azure` — Azure Quantum (`azure-quantum`)
-- `local` — runs `spinorc` + the C++ statevector simulator
-- `qci` / `anyon` / `tii` / `alicebob` — cassette-only today
+## Install
 
-```bash
-pip install heisenberg-spinor-submit
+```console
+python -m pip install heisenberg-photon
 ```
 
-The Python import name is still `spinor_submit`:
+This installs the native compiler wheel and its matching runtime dependency.
+For a separately installed C++ toolchain, install only the runtime:
+
+```console
+python -m pip install heisenberg-spinor-submit
+```
+
+The runtime wheel includes all 31 historical target profiles, their topology
+data, and cassette fixtures. Compilation also requires the native compiler
+binaries on PATH, or explicit QSTACK_SPINORC, QSTACK_PHONONC and QSTACK_PHOTONC
+paths. Historical profiles are suitable for offline compilation; live runs
+use verified provider discovery snapshots.
+
+## Compile and run
+
+```console
+qstack compile program.pho --target ibm_heron_r2 --output program.qstack -O 2
+qstack run program.pho --target ibm_heron_r2 --mode local --shots 1024
+qstack providers --json
+```
+
+Local runs use the C++ simulator. Live runs require an explicit mode, route,
+credentials, and current target capabilities. Install only the provider extra
+you use, for example `heisenberg-spinor-submit[ibm]`. SDKs with incompatible
+dependencies can use separate environments and the configured SDK Python path.
 
 ```python
-from spinor_submit import submit
+import qstack
+
+result = qstack.run_source(
+    source, language="phonon", target="ibm_heron_r2",
+    mode="local", shots=1024,
+)
+print(result.counts)
 ```
 
-## Modes
+Use `qstack --help` and the subcommand help for authentication, configuration,
+selectable environment files, saved artifacts, and job status/results.
+[Provider contracts](qstack/providers/CONTRACTS.md) describe each route's
+actual SDK/wire format and restrictions.
 
-Set `SPINOR_SUBMIT_MODE` to one of:
+The legacy `spinor_submit` import and `python -m spinor_submit` entry point
+remain available for compatibility. Cassette mode replays explicitly labeled
+fixtures; it does not execute a new circuit.
 
-- `cassette` (default) — replay recorded histograms from
-  `cassettes/<provider>/<program>.json`. Used in CI; no
-  credentials required.
-- `live` — talk to the real provider. Requires the SDK's standard
-  credential mechanism (env vars / config file). Slow; runs only
-  when explicitly requested.
-- `local` — runs the C++ `spinorc` binary; useful for
-  end-to-end smoke testing without provider tokens.
+## Development checks
 
-## Usage
-
-```python
-from spinor_submit import submit
-
-with open("bell.qasm") as f:
-    qasm = f.read()
-
-# Cassette (default; no credentials):
-hist = submit(qasm, chip="ibm_heron_r2",
-              provider="ibm", shots=1000, program_name="bell")
-print(hist.counts)
-
-# Live (needs credentials in env):
-import os
-os.environ["SPINOR_SUBMIT_MODE"] = "live"
-hist = submit(qasm, chip="ibm_heron_r2",
-              provider="ibm", shots=1000)
+```console
+python -m pytest tests
+python -m build
+python tests/check_distribution.py dist/heisenberg_spinor_submit-0.6.0-py3-none-any.whl
 ```
 
-## Recording new cassettes
-
-```
-SPINOR_SUBMIT_MODE=live python -m spinor_submit.record \
-    --provider ibm --chip ibm_heron_r2 --program bell \
-    --qasm bell.qasm --shots 1000
-```
-
-(Recorder helper not yet written; recording is a one-time manual
-step done by maintainers when first integrating with a provider.)
+The distribution check installs into a fresh environment outside the checkout.
+It verifies registry and topology data, provider imports and the qstack command.
+It does not submit provider jobs.

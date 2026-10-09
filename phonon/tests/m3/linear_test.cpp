@@ -60,17 +60,34 @@ TEST(M3_linear, use_after_measure_caught) {
   auto q0 = b.allocQubit();
   auto m0 = b.measure(q0);
   (void)m0;
-  // use q0 again after measure (stale value): bug
+  // A target without mid-circuit measurement cannot execute this sequence.
   (void)b.h(q0);
   pd::Diagnostics d;
   pt::Options o;
+  o.midCircuitMeasure = false;
   o.warnImplicitDiscard = false;
   bool ok = pt::typecheck(m, o, d);
   EXPECT_FALSE(ok);
-  // Either E1 (cloning, since q0 was already consumed by measure) or
-  // E2 (use after measure). Both indicate the pattern is wrong.
+  // Either the terminal-use marker E1 or the target capability marker E2
+  // must reject this target-incompatible sequence.
   bool hasE1OrE2 = hasErrorWithCode(d, "E1") || hasErrorWithCode(d, "E2");
   EXPECT_TRUE(hasE1OrE2);
+}
+
+TEST(M3_linear, projected_state_can_be_reused_without_reset) {
+  pd::Module m;
+  pd::Builder b(m);
+  auto a = b.allocQubit(), q = b.allocQubit();
+  auto pair = b.cx(b.h(a), q);
+  b.measure(pair.first);
+  b.measure(pair.first);  // repeated projective measurement, not cloning
+  auto next = b.x(pair.first);
+  b.cx(next, pair.second);
+  pd::Diagnostics d;
+  pt::Options o;
+  o.midCircuitMeasure = true;
+  o.warnImplicitDiscard = false;
+  EXPECT_TRUE(pt::typecheck(m, o, d));
 }
 
 TEST(M3_linear, reset_after_measure_ok) {

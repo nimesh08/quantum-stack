@@ -152,7 +152,7 @@ bool verify(const dialect::Module& m, const TargetInfo& target,
           if (la && lb && la->physIdx && lb->physIdx) {
             int a = static_cast<int>(la->physIdx) - 1;
             int b = static_cast<int>(lb->physIdx) - 1;
-            if (!target.connected(a, b)) {
+            if (!target.connected(a, b) || ((op.kind==OpKind::Cx || op.kind==OpKind::Ecr) && !target.directedEdge(a,b))) {
               std::ostringstream os;
               os << "W6: two-qubit gate '" << bareMn << "' on q[" << a
                  << "], q[" << b

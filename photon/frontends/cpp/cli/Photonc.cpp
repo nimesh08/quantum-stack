@@ -88,6 +88,11 @@ std::string readFile(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+    std::cout << "usage: photonc-cxx <build.yaml>\n"
+                 "Compile the supported C++ quantum subset using a build configuration.\n";
+    return 0;
+  }
   if (argc < 2) {
     std::cerr << "usage: photonc-cxx <build.yaml>\n";
     return 2;

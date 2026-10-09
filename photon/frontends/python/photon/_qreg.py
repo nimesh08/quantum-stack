@@ -9,6 +9,7 @@ import and run kernels eagerly for testing.
 from __future__ import annotations
 
 from typing import List
+from ._errors import PhotonKernelError
 
 
 class QReg:
@@ -33,6 +34,7 @@ class QReg:
     def z(self, i: int) -> None: self._recorded.append(f"z {i}")
     def s(self, i: int) -> None: self._recorded.append(f"s {i}")
     def t(self, i: int) -> None: self._recorded.append(f"t {i}")
+    def reset(self, i: int) -> None: self._recorded.append(f"reset {i}")
     def cx(self, a: int, b: int) -> None:
         self._recorded.append(f"cx {a},{b}")
     def cz(self, a: int, b: int) -> None:
@@ -47,10 +49,10 @@ class QReg:
 
     # ----- measurement -----------------------------------------------------
     def measure(self) -> List[int]:
-        return [0] * self.size  # placeholder for runtime stub
+        raise PhotonKernelError("measurement requires a compiled @photon.kernel execution")
 
     def measure_int(self) -> int:
-        return 0  # placeholder
+        raise PhotonKernelError("measurement requires a compiled @photon.kernel execution")
 
     # ----- introspection (used by tests) -----------------------------------
     @property

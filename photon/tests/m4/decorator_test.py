@@ -1,6 +1,8 @@
 """M4 decorator + e2e tests."""
 from __future__ import annotations
 import os, sys, unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 PY_PKG_DIR = os.environ.get("PHOTON_PY_PKG_DIR", "")
 if PY_PKG_DIR: sys.path.insert(0, PY_PKG_DIR)
@@ -49,7 +51,7 @@ class M4Decorator(unittest.TestCase):
         self.assertEqual(e.num_qubits, 3)
         self.assertEqual(e.two_qubit_count, 2)
 
-    def test_run_returns_histogram_shape(self) -> None:
+    def test_run_delegates_and_returns_actual_counts(self) -> None:
         import photon
 
         @photon.kernel
@@ -59,9 +61,56 @@ class M4Decorator(unittest.TestCase):
             q.cx(0, 1)
             return q.measure_int()
 
-        h = bell.run(shots=100)
-        self.assertEqual(isinstance(h, dict), True)
-        self.assertEqual(sum(h.values()), 100)
+        service = Mock(return_value=SimpleNamespace(counts={"00": 47, "11": 53}))
+        with patch.dict(sys.modules, {"qstack": SimpleNamespace(run_source=service)}):
+            h = bell.run(shots=100, target="ibm_fez", env_file="test.env")
+        self.assertEqual(h, {"00": 47, "11": 53})
+        source = service.call_args.args[0]
+        self.assertTrue(source.startswith("target ibm_fez"))
+        self.assertIn("cx q[0], q[1]", source)
+        self.assertEqual(service.call_args.kwargs,
+                         dict(language="phonon", target="ibm_fez", mode="local",
+                              shots=100, env_file="test.env"))
+
+    def test_runtime_error_is_not_replaced_with_fake_counts(self) -> None:
+        import photon
+        @photon.kernel
+        def sample():
+            q = photon.QReg(1)
+            return q.measure_int()
+        service = Mock(side_effect=RuntimeError("backend rejected the request"))
+        with patch.dict(sys.modules, {"qstack": SimpleNamespace(run_source=service)}):
+            with self.assertRaisesRegex(RuntimeError, "backend rejected"):
+                sample.run()
+
+    def test_numeric_parameters_bind_before_execution(self) -> None:
+        import photon
+        @photon.kernel
+        def rotate(theta, width=2):
+            q = photon.QReg(width)
+            q.rx(theta, 1)
+            return q.measure_int()
+        service = Mock(return_value=SimpleNamespace(counts={"10": 8}))
+        with patch.dict(sys.modules, {"qstack": SimpleNamespace(run_source=service)}):
+            result = rotate.run(shots=8, parameters={"theta": 0.75})
+        self.assertEqual(result, {"10": 8})
+        self.assertIn("rx(0.75) q[1]", service.call_args.args[0])
+        self.assertIn("qubit q[2]", service.call_args.args[0])
+        from photon._errors import CompilationError
+        with self.assertRaisesRegex(CompilationError, "theta"):
+            rotate.run()
+
+    def test_call_uses_execution_service_not_python_qreg_stub(self) -> None:
+        import photon
+        @photon.kernel
+        def sample():
+            q = photon.QReg(1)
+            q.x(0)
+            return q.measure_int()
+        service = Mock(return_value=SimpleNamespace(counts={"1": 1}))
+        with patch.dict(sys.modules, {"qstack": SimpleNamespace(run_source=service)}):
+            self.assertEqual(sample(), {"1": 1})
+        self.assertEqual(service.call_args.kwargs["shots"], 1)
 
     def test_target_kwarg(self) -> None:
         import photon

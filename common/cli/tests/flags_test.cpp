@@ -6,6 +6,8 @@
 #include "qs/common/cli/Submit.h"
 #include "test_main.h"
 
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -17,6 +19,25 @@ Flags parse(std::initializer_list<const char*> argv) {
   std::vector<const char*> a(argv);
   return parseArgv(static_cast<int>(a.size()), a.data());
 }
+
+struct ManifestFixture {
+  std::filesystem::path path = std::filesystem::temp_directory_path() /
+      ("qs_manifest_test_" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
+
+  explicit ManifestFixture(const std::string& contents) {
+    std::ofstream file(path, std::ios::binary);
+    EXPECT_TRUE(file.is_open());
+    file << contents;
+    file.close();
+    EXPECT_TRUE(!file.fail());
+  }
+
+  ~ManifestFixture() {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+  }
+};
 
 }  // namespace
 
@@ -207,17 +228,15 @@ TEST(M1_submit, build_argv_with_api_key_file_and_extras) {
 
 TEST(M1_manifest, sha256_known_vector) {
   // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-  std::string tmp = "/tmp/qs_manifest_test_abc.txt";
-  { std::ofstream f(tmp); f << "abc"; }
-  auto h = sha256OfFile(tmp);
+  const ManifestFixture file("abc");
+  auto h = sha256OfFile(file.path.string());
   EXPECT_TRUE(h ==
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 }
 
 TEST(M1_manifest, sha256_empty_file) {
-  std::string tmp = "/tmp/qs_manifest_test_empty.txt";
-  { std::ofstream f(tmp); }
-  auto h = sha256OfFile(tmp);
+  const ManifestFixture file("");
+  auto h = sha256OfFile(file.path.string());
   // SHA-256 of empty input.
   EXPECT_TRUE(h ==
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");

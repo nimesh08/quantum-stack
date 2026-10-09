@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
+import inspect
 
 from ._errors import CompilationError, PhotonKernelError
-from ._translator import translate
+from ._translator import Translator, translate
 
 
 class _PhotonKernel:
@@ -28,8 +29,9 @@ class _PhotonKernel:
         self.__name__ = getattr(func, "__name__", "<kernel>")
         self.__doc__ = func.__doc__
         self.target = target
-        self.phonon_text = translate(func, target=target)
-        self.compiled = self._compile_now()
+        self._signature = inspect.signature(func)
+        self.phonon_text = "" if self._signature.parameters else translate(func, target=target)
+        self.compiled = None if self._signature.parameters else self._compile_now()
 
     def _compile_now(self):
         try:
@@ -43,31 +45,54 @@ class _PhotonKernel:
         # we handle both cases here.
         if _engine is None or not hasattr(_engine, "compile_phonon"):
             return None
-        return _engine.compile_phonon(self.phonon_text, self.target)
+        compiled = _engine.compile_phonon(self.phonon_text, self.target)
+        if not compiled.ok:
+            raise CompilationError(compiled.error)
+        return compiled
 
     def __call__(self, *args, **kwargs) -> Any:
-        # Direct execution falls back to the Python source body. The
-        # full path (engine -> simulator / submit) lands at M6.
-        return self._func(*args, **kwargs)
+        """Run a single local shot using bound kernel parameters."""
+        bound = self._signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        return self.run(shots=1, parameters=bound.arguments)
 
     def run(self, shots: int = 1024,
-            target: Optional[str] = None) -> dict:
-        """Simulator/submit entry. M4 returns a stubbed histogram so
-        the API shape is testable; M6 wires real execution.
+            target: Optional[str] = None, *, mode: str = "local",
+            parameters: Optional[dict[str, Any]] = None, **options) -> dict[str, int]:
+        """Execute through qstack and return its measured counts.
+
+        Local simulation is the default. Select ``mode='live'`` and pass
+        provider/configuration options explicitly for hardware execution.
+        Numeric kernel parameters are bound before translation/compilation.
         """
-        # Simple deterministic stub: every shot yields '0'*N.
-        n = 0
-        # Probe phonon_text for `qubit q[N]` declaration.
-        for line in self.phonon_text.splitlines():
-            line = line.strip()
-            if line.startswith("qubit "):
-                # `qubit q[N]`
-                lb, rb = line.find("["), line.find("]")
-                if lb > 0 and rb > lb:
-                    n = int(line[lb + 1:rb])
-                    break
-        outcome = "0" * max(n, 1)
-        return {outcome: shots}
+        if isinstance(shots, bool) or not isinstance(shots, int) or shots <= 0:
+            raise ValueError("shots must be a positive integer")
+        try:
+            bound = self._signature.bind(**(parameters or {}))
+        except TypeError as error:
+            raise CompilationError(f"kernel parameters: {error}") from error
+        bound.apply_defaults()
+        selected_target = target or self.target
+        translation = Translator(target=selected_target)
+        source = translation.translate(self._func, bindings=bound.arguments)
+        try:
+            import qstack
+        except ImportError as error:
+            raise PhotonKernelError("execution requires the qstack runtime package") from error
+        result = qstack.run_source(source, language="phonon", target=selected_target,
+                                  mode=mode, shots=shots, **options)
+        counts = result.counts
+        if counts is None:
+            raise PhotonKernelError("execution completed without measurement counts")
+        if translation.return_bits is not None:
+            selected = {}
+            for bits, count in counts.items():
+                if any(bit >= len(bits) for bit in translation.return_bits):
+                    raise PhotonKernelError("execution result is missing the declared return register")
+                key = "".join(bits[-1 - bit] for bit in reversed(translation.return_bits))
+                selected[key] = selected.get(key, 0) + count
+            return selected
+        return dict(counts)
 
 
 def kernel(func: Optional[Callable[..., Any]] = None,

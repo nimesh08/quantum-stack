@@ -18,6 +18,7 @@ set_tests_properties(photon_m3_cpp_engine_test PROPERTIES LABELS "photon_M3")
 # (b) Python round-trip tests, only when the extension is built.
 if(QSTACK_HAVE_NANOBIND)
   find_package(Python COMPONENTS Interpreter REQUIRED)
+  get_filename_component(_PHOTON_TEST_DLL_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
   add_test(
     NAME photon_m3_py_engine_test
     COMMAND ${Python_EXECUTABLE}
@@ -25,6 +26,6 @@ if(QSTACK_HAVE_NANOBIND)
   )
   set_tests_properties(photon_m3_py_engine_test PROPERTIES
     LABELS "photon_M3"
-    ENVIRONMENT "PHOTON_PY_PKG_DIR=${CMAKE_BINARY_DIR}/photon/bindings/python"
+    ENVIRONMENT "PHOTON_PY_PKG_DIR=${CMAKE_BINARY_DIR}/photon/bindings/python;PHOTON_TEST_DLL_DIR=${_PHOTON_TEST_DLL_DIR}"
   )
 endif()

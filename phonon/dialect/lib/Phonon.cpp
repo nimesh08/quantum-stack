@@ -58,6 +58,7 @@ constexpr OpSig kSigs[] = {
     {OpKind::Ecr,        "spinor.ecr",         true,  false, 2},
     {OpKind::Ms,         "spinor.ms",          true,  false, 2},
     {OpKind::Rzz,        "spinor.rzz",         true,  false, 2},
+    {OpKind::Rxx,        "spinor.rxx",         true,  false, 2},
     {OpKind::Sx,         "spinor.sx",          true,  false, 1},
     {OpKind::Sxdg,       "spinor.sxdg",        true,  false, 1},
     {OpKind::Gpi,        "spinor.gpi",         true,  false, 1},
@@ -66,6 +67,7 @@ constexpr OpSig kSigs[] = {
     {OpKind::Measure,    "spinor.measure",     true,  true,  1},
     {OpKind::Reset,      "spinor.reset",       true,  true,  1},
     {OpKind::Barrier,    "spinor.barrier",     true,  true,  -1},
+    {OpKind::GlobalPhase,"spinor.gphase",      true,  true,  0},
     // phonon.* ----------------------------------------------------------
     {OpKind::ConstInt,   "phonon.const_int",   false, true,  0},
     {OpKind::ConstAngle, "phonon.const_angle", false, true,  0},
@@ -98,7 +100,7 @@ bool isStandardGate(OpKind k) {
   return sig(k).spinorKind && sig(k).standard &&
          k != OpKind::AllocQubit && k != OpKind::AllocBit &&
          k != OpKind::Measure && k != OpKind::Reset &&
-         k != OpKind::Barrier;
+         k != OpKind::Barrier && k != OpKind::GlobalPhase;
 }
 bool isNativeGate(OpKind k) {
   return sig(k).spinorKind && !sig(k).standard;
@@ -129,6 +131,7 @@ spinor::dialect::OpKind toSpinorKind(OpKind k) {
     case OpKind::Ecr:        return SK::Ecr;
     case OpKind::Ms:         return SK::Ms;
     case OpKind::Rzz:        return SK::Rzz;
+    case OpKind::Rxx:        return SK::Rxx;
     case OpKind::Sx:         return SK::Sx;
     case OpKind::Sxdg:       return SK::Sxdg;
     case OpKind::Gpi:        return SK::Gpi;
@@ -137,6 +140,7 @@ spinor::dialect::OpKind toSpinorKind(OpKind k) {
     case OpKind::Measure:    return SK::Measure;
     case OpKind::Reset:      return SK::Reset;
     case OpKind::Barrier:    return SK::Barrier;
+    case OpKind::GlobalPhase:return SK::GlobalPhase;
     default:
       throw std::logic_error("toSpinorKind on a Phonon-only op");
   }
@@ -164,6 +168,7 @@ OpKind fromSpinorKind(spinor::dialect::OpKind k) {
     case SK::Ecr:        return OpKind::Ecr;
     case SK::Ms:         return OpKind::Ms;
     case SK::Rzz:        return OpKind::Rzz;
+    case SK::Rxx:        return OpKind::Rxx;
     case SK::Sx:         return OpKind::Sx;
     case SK::Sxdg:       return OpKind::Sxdg;
     case SK::Gpi:        return OpKind::Gpi;
@@ -172,6 +177,10 @@ OpKind fromSpinorKind(spinor::dialect::OpKind k) {
     case SK::Measure:    return OpKind::Measure;
     case SK::Reset:      return OpKind::Reset;
     case SK::Barrier:    return OpKind::Barrier;
+    case SK::GlobalPhase:return OpKind::GlobalPhase;
+    case SK::If:case SK::Else:case SK::EndIf:
+    case SK::PhasedXZ:case SK::SqrtISwap:case SK::SqrtISwapInv:case SK::Syc:case SK::ISwap:case SK::Move:
+      throw std::logic_error("physical/control Spinor operation cannot be imported as a Phonon gate");
   }
   throw std::logic_error("unknown spinor::OpKind in fromSpinorKind");
 }

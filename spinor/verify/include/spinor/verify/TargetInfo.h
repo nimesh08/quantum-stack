@@ -22,6 +22,7 @@ struct TargetInfo {
   // Coupling map: undirected, stored as (low, high) pairs with
   // low<high. Empty AND allToAll==false means "no two-qubit gate
   // is allowed" (effectively a 1-qubit chip).
+  bool directedConnectivity = false;
   bool allToAll = true;                          // ignored when generic
   std::vector<std::pair<int, int>> coupling;
   std::size_t qubitCount = 0;                    // 0 means "unbounded" (generic)
@@ -35,8 +36,15 @@ struct TargetInfo {
     int lo = a < b ? a : b;
     int hi = a < b ? b : a;
     for (const auto& [x, y] : coupling) {
-      if (x == lo && y == hi) return true;
+      if ((x == a && y == b) || (x == b && y == a)) return true;
     }
+    return false;
+  }
+
+  bool directedEdge(int a,int b) const {
+    if(!directedConnectivity)return connected(a,b);
+    if(allToAll)return a!=b;
+    for(const auto& edge:coupling)if(edge.first==a&&edge.second==b)return true;
     return false;
   }
 

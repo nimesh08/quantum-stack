@@ -3,6 +3,7 @@
 // Tiny line-oriented OpenQASM 3 subset importer.
 
 #include "spinor/parser/Qasm.h"
+#include "spinor/dialect/Circuit.h"
 
 #include <cctype>
 #include <cmath>
@@ -26,8 +27,8 @@ using namespace spinor::dialect;
 const std::set<std::string>& gateMnemonics() {
   static const std::set<std::string> s = {
       "h", "x", "y", "z", "s", "sdg", "t", "tdg",
-      "rx", "ry", "rz", "cx", "cz", "swap",
-      "ecr", "ms", "rzz", "sx", "sxdg",
+      "rx", "ry", "rz", "cx", "cz", "swap", "iswap",
+      "ecr", "ms", "rzz", "rxx", "sx", "sxdg",
       "gpi", "gpi2", "u1q",
   };
   return s;
@@ -76,13 +77,15 @@ std::vector<std::string> topSplit(const std::string& s, char sep) {
 }
 
 double parseAngle(const std::string& s) {
+  auto number=[](const std::string& text){std::size_t end=0;double v=std::stod(text,&end);if(end!=text.size()||!std::isfinite(v))throw std::runtime_error("invalid angle");return v;};
   std::string t = s;
   // Handle pi forms: pi, -pi, pi/N, -pi/N, R*pi, -R*pi.
   bool neg = false;
   if (!t.empty() && t[0] == '-') { neg = true; t = trim(t.substr(1)); }
   if (t == "pi") return neg ? -M_PI : M_PI;
   if (t.rfind("pi/", 0) == 0) {
-    int N = std::stoi(t.substr(3));
+    double N = number(trim(t.substr(3)));
+    if(N==0)throw std::runtime_error("zero angle denominator");
     double v = M_PI / N;
     return neg ? -v : v;
   }
@@ -92,11 +95,11 @@ double parseAngle(const std::string& s) {
     std::string lhs = trim(t.substr(0, starP));
     std::string rhs = trim(t.substr(starP + 1));
     if (rhs == "pi" || rhs == "PI") {
-      double v = std::stod(lhs);
+      double v = number(lhs);
       return neg ? -v * M_PI : v * M_PI;
     }
   }
-  double v = std::stod(t);
+  double v = number(t);
   return neg ? -v : v;
 }
 
@@ -156,7 +159,7 @@ struct Driver {
       } else {
         name = body;
       }
-      if (name.empty()) {
+      if (name.empty()||size<1||size>1000000||regs.count(name)) {
         error("qubit declaration missing name", lineNo);
         return false;
       }
@@ -187,7 +190,7 @@ struct Driver {
       } else {
         name = body;
       }
-      if (name.empty()) {
+      if (name.empty()||size<1||size>1000000||regs.count(name)) {
         error("bit declaration missing name", lineNo);
         return false;
       }
@@ -245,6 +248,7 @@ struct Driver {
         auto* br = bitReg(bp->reg, lineNo);
         if (!qr || !br) return false;
         ValueId bit = b.measure(qr->liveQubits[qp->idx]);
+        setMeasurementTarget(m, bit, classicalIndex(m, br->latestBits[bp->idx]));
         ++br->genBits[bp->idx];
         m.setName(bit, bp->reg + std::to_string(bp->idx) + "_" +
                        std::to_string(br->genBits[bp->idx]));
@@ -279,7 +283,12 @@ struct Driver {
       return std::nullopt;
     }
     p.reg = trim(s.substr(0, lb));
-    p.idx = std::stoi(trim(s.substr(lb + 1, rb - lb - 1)));
+    const auto index=trim(s.substr(lb+1,rb-lb-1));std::size_t end=0;
+    try {p.idx=std::stoi(index,&end);}catch(...){error("invalid operand index",lineNo);return std::nullopt;}
+    auto declared=regs.find(p.reg);
+    if(end!=index.size()||!trim(s.substr(rb+1)).empty()||declared==regs.end()||p.idx<0||p.idx>=declared->second.size){
+      error("invalid or out-of-range operand: "+s,lineNo);return std::nullopt;
+    }
     return p;
   }
 
@@ -333,6 +342,8 @@ struct Driver {
       rest = trim(rest.substr(rp + 1));
     }
     std::vector<ParsedOperand> ops;
+    std::size_t expectedAngles=(name=="u1q"?2:(name=="rx"||name=="ry"||name=="rz"||name=="rxx"||name=="rzz"||name=="gpi"||name=="gpi2"?1:0));
+    if(angles.size()!=expectedAngles){error("wrong parameter count for gate '"+name+"'",lineNo);return false;}
     for (const auto& part : topSplit(rest, ',')) {
       auto p = parseOperand(part, lineNo);
       if (!p) return false;
@@ -375,6 +386,7 @@ struct Driver {
       auto* ra = qubitReg(ops[0].reg, lineNo);
       auto* rc = qubitReg(ops[1].reg, lineNo);
       if (!ra || !rc) return false;
+      if(ra==rc&&ops[0].idx==ops[1].idx){error("two-qubit operands must be distinct",lineNo);return false;}
       auto pair = (b.*fn)(ra->liveQubits[ops[0].idx],
                           rc->liveQubits[ops[1].idx], Location{});
       ++ra->genQubits[ops[0].idx];
@@ -398,6 +410,19 @@ struct Driver {
     if (name == "tdg")  return sq1(&Builder::tdg);
     if (name == "sx")   return sq1(&Builder::sx);
     if (name == "sxdg") return sq1(&Builder::sxdg);
+    if(name=="u1q"){
+      if(ops.size()!=1){error("u1q expects one qubit operand",lineNo);return false;}
+      auto* r=qubitReg(ops[0].reg,lineNo);if(!r)return false;
+      auto value=b.u1q(angles[0],angles[1],r->liveQubits[ops[0].idx]);
+      r->liveQubits[ops[0].idx]=value;return true;
+    }
+    if(name=="rxx"||name=="rzz"){
+      if(ops.size()!=2){error("rotation expects two qubit operands",lineNo);return false;}
+      auto* a=qubitReg(ops[0].reg,lineNo);auto* z=qubitReg(ops[1].reg,lineNo);if(!a||!z)return false;
+      if(a==z&&ops[0].idx==ops[1].idx){error("two-qubit operands must be distinct",lineNo);return false;}
+      auto pair=name=="rxx"?b.rxx(angles[0],a->liveQubits[ops[0].idx],z->liveQubits[ops[1].idx]):b.rzz(angles[0],a->liveQubits[ops[0].idx],z->liveQubits[ops[1].idx]);
+      a->liveQubits[ops[0].idx]=pair.first;z->liveQubits[ops[1].idx]=pair.second;return true;
+    }
     if (name == "rx" || name == "ry" || name == "rz" ||
         name == "gpi" || name == "gpi2") {
       if (angles.size() != 1) {
@@ -414,6 +439,7 @@ struct Driver {
     if (name == "cx")   return tq(&Builder::cx);
     if (name == "cz")   return tq(&Builder::cz);
     if (name == "swap") return tq(&Builder::swap);
+    if (name == "iswap") return tq(&Builder::iSwap);
     if (name == "ecr")  return tq(&Builder::ecr);
     if (name == "ms")   return tq(&Builder::ms);
     error("unsupported gate '" + name + "' in OpenQASM subset", lineNo);

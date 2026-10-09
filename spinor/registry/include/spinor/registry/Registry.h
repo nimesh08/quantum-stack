@@ -6,6 +6,7 @@
 #include "spinor/verify/TargetInfo.h"
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -36,8 +37,28 @@ struct CapabilityFlags {
 struct ChipInfo {
   std::string id;
   std::string provider;
+  std::string qirPlatform = "standard";
+  std::string vendor;
+  std::string readiness = "needs_refresh";
+  std::string readinessReason;
+  std::string capabilityProvenance;
+  bool capabilityVerified = false;
+  std::vector<std::string> routes;
+  std::vector<std::string> formats;
+  bool directedConnectivity = false;
   std::size_t qubits = 0;
   std::vector<std::string> nativeGates;
+  // Physical component partition and exact operation loci for resonator QPUs.
+  // Empty partitions mean every physical slot is a computational qubit.
+  std::vector<int> computationalQubits;
+  std::vector<int> resonatorQubits;
+  std::vector<std::pair<int, int>> moveLoci;  // always (qubit, resonator)
+  std::vector<std::pair<int, int>> czLoci;    // preserve advertised operand order
+  // Discovery can expose sparse/disabled physical slots. Missing availability
+  // means all slots; an explicitly empty list means no usable hardware.
+  std::optional<std::vector<int>> availableQubits;
+  std::vector<int> unavailableQubits;
+  std::map<std::string, std::vector<int>> singleQubitGateLoci;
 
   // Either an all-to-all chip OR an explicit edge list.
   bool allToAll = false;
@@ -53,6 +74,11 @@ struct ChipInfo {
   std::string calibrationSource;
   std::string calibrationRefresh;
   std::filesystem::path calibrationStore;
+  // Error probabilities in the same physical indexing as coupling. Values
+  // are optional; missing calibration must never imply zero error.
+  std::map<int, double> calibrationOneQubitError;
+  std::map<int, double> calibrationReadoutError;
+  std::map<std::pair<int, int>, double> calibrationTwoQubitError;
 };
 
 class Registry {
