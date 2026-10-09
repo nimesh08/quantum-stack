@@ -136,8 +136,15 @@ std::string findSpinorc() {
       if (fs::exists(cand)) return cand.string();
     }
   }
-  fs::path here = "build/spinor/cli/spinorc";
-  if (fs::exists(here)) return fs::absolute(here).string();
+  for (const fs::path directory : {fs::path("build/spinor/cli"), fs::path("build/spinor/cli/Release")}) {
+    const auto here = directory /
+#ifdef _WIN32
+        "spinorc.exe";
+#else
+        "spinorc";
+#endif
+    if (fs::exists(here)) return fs::absolute(here).string();
+  }
   return "spinorc";  // hope for the best; shells out via PATH lookup
 }
 
