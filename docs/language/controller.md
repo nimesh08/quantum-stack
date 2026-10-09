@@ -76,9 +76,23 @@ loop's explicit semantic bound.
 The C++ Phonon Builder also exposes `boundedWhile(maxIterations, initialValues,
 condition, body)`. Callbacks construct device IR over explicit loop-carried SSA
 values; they cannot inspect a measurement on the host. The body returns
-`LoopStep{values, optionalBreakPredicate}`. The result contains final values and
-the exhaustion value. The unbounded legacy While marker is not an executable
-runtime loop.
+`LoopStep{values, optionalBreakPredicate}`. The optional predicate exits after
+the body. For an immediate transfer, call `breakLoop(values)` or
+`continueLoop(values)` at the desired point, including inside a Builder `If`.
+Pass the loop-carried state at that point with its original arity and widths.
+Later operations in the body are skipped, and nested transfers affect only the
+innermost loop. `returnOp(values)` exits the enclosing helper and suppresses the
+remaining iterations and exhaustion predicate. A typed helper must provide a
+return for the path on which a bounded loop finishes or exhausts.
+
+Predicate callbacks may emit device operations. The compiler evaluates them only
+while the loop is live: once before each executed body and once after the last
+allowed body when still live. A false predicate or `break` prevents all subsequent
+predicate effects. No extra predicate evaluation occurs merely to parse a bound.
+The result contains final carried values and exhaustion. The unbounded legacy
+While marker is not an executable runtime loop. Legacy Builder `For` bounds use
+exact signed 64-bit integers, including a one-iteration range above `2^53`;
+checked expansion limits apply before iteration.
 
 ## Quantum lifetime and returns
 
@@ -96,20 +110,57 @@ addresses. Independent channel verification supplies arbitrary reference-
 entangled input states only to `quantum_inputs`, initializes reserved wires to
 zero and traces their final states out of the public quantum output.
 
-Conditional quantum helper returns transfer returned states onto the fixed
-caller wires. This supports permutations and fresh-wire replacement without
-cloning a quantum state. Unconditional helper aliases retain their earlier
-semantics. Phonon source helpers retain the quantum in/out parameter calling
-convention; arbitrary expression-valued classical helper calls are a separate
-language feature.
+Conditional quantum helper returns transfer returned states onto fixed caller
+wires. This supports permutations and fresh-wire replacement without cloning a
+quantum state. Legacy helpers without an explicit return signature retain their
+quantum in/out calling convention and unconditional alias semantics.
+
+Phonon helpers can declare Boolean and fixed-width unsigned parameters/results:
+
+```text
+def choose(bool flag, uint[64] value) -> (uint[64], bool) {
+  if (flag) {
+    return value + 1, !flag
+  }
+  return value, flag
+}
+bool flag = true
+uint[64] value = 9007199254740993
+value, flag = choose(flag, value)
+output value
+```
+
+A single classical result can be used in an expression or declaration. Tuple
+assignment requires predeclared names with matching types and widths. Explicit
+casts are required to change an unsigned width; returns never silently narrow.
+Mixed quantum/classical signatures list every result, for example
+`-> (qubit, qubit, uint[8])`. A textual helper returns one distinct quantum value
+per quantum parameter, updating those caller slots while its expression yields
+the classical results. Returned paths skip all later operations, including reset
+and measurement. Every explicit signature must return on every path. Nested and
+sequential calls keep separate immutable classical bindings; recursion is an
+error and expansion is bounded after inlining as well as before it.
+
+`int` helper arguments/results retain exact compile-time signed integer values.
+A measured-bit `int` snapshot remains exactly 0 or 1. Runtime arithmetic or
+path-dependent integer results outside that domain require an explicit
+`uint[width]`; runtime-dependent gate angles remain unsupported.
 
 Python kernel returns preserve a fixed type and width across paths. Equal-width
 measurements from different registers use a common return destination; Boolean
 and unsigned returns use a common typed output. The public kernel count result
 projects onto that declared return, excluding internal saved flags and storage.
 
-The low-level Phonon Builder does not normalize arbitrary `If`/`Return` marker
-combinations. Runtime conditional return markers are rejected explicitly; use
-source return normalization or the bounded-loop callback API with explicit
-carried values. General classical helper-call expressions remain outside this
-release, even though Boolean/UInt kernel results are supported.
+The low-level Phonon Builder normalizes conditional `If`/`Return` markers into
+device control flow. `beginTypedDef(name, parameters, resultTypes)` declares an
+explicit signature; `call(name, arguments, resultTypes)` checks it. Existing
+`beginDef` definitions infer result types from their calls and returns. Implicit
+fallthrough remains available only for the legacy matching quantum in/out
+contract. Additional fresh quantum results require a return on every path and
+reserve finite output capacity before the call. Duplicate quantum arguments or
+returned aliases are errors. These constructs and their exact types survive
+Phonon IR printing and parsing.
+
+Python/Photon kernels retain their existing supported syntax. This compiler
+helper support does not evaluate arbitrary ordinary Python functions on the
+host or introduce recursive/dynamic subprogram execution.

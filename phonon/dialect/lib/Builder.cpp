@@ -179,23 +179,48 @@ Builder::BoundedLoopResult Builder::boundedWhile(std::size_t maxIterations,std::
   for(auto value:values)if(m_.typeOf(value).kind!=TypeKind::UInt&&m_.typeOf(value).kind!=TypeKind::Bit)throw std::invalid_argument("boundedWhile state must contain bool or explicit uint values");
   auto live=copy(constInt(1,loc),bitType(),loc);
   for(std::size_t iteration=0;iteration<maxIterations;++iteration){
+    const auto conditionGuard=beginIf(live,loc);
     const auto test=condition(values);if(m_.typeOf(test)!=bitType())throw std::invalid_argument("boundedWhile condition must produce bool");
-    const auto predicate=copy(binOp("&",test,live,loc),bitType(),loc);const auto marker=beginIf(predicate,loc);
-    const auto step=body(values);
+    endIf(conditionGuard,loc);
+    const auto predicate=select(live,test,copy(constInt(0,loc),bitType(),loc),loc);
+    live=predicate;const auto marker=beginIf(predicate,loc);
+    std::vector<Type> types;for(auto value:values)types.push_back(m_.typeOf(value));
+    auto resultTypes=types;resultTypes.push_back(bitType());
+    const auto bodyResults=issue(m_,OpKind::LoopBody,values,{},resultTypes,loc);
+    loopTypes_.push_back(types);
+    LoopStep step;
+    try{step=body(values);}catch(...){loopTypes_.pop_back();throw;}
+    loopTypes_.pop_back();
     if(step.values.size()!=values.size())throw std::invalid_argument("boundedWhile body changed carried value arity");
     for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=m_.typeOf(step.values[i]))throw std::invalid_argument("boundedWhile body changed carried value type or width");
-    auto nextLive=live;
-    if(step.breakWhen){if(m_.typeOf(*step.breakWhen)!=bitType())throw std::invalid_argument("boundedWhile breakWhen must be bool");nextLive=select(*step.breakWhen,copy(constInt(0,loc),bitType(),loc),live,loc);}
+    auto yielded=step.values;
+    if(step.breakWhen){if(m_.typeOf(*step.breakWhen)!=bitType())throw std::invalid_argument("boundedWhile breakWhen must be bool");yielded.push_back(*step.breakWhen);}
+    issue(m_,OpKind::EndLoopBody,yielded,{{"has_break",std::int64_t(step.breakWhen.has_value())}},{},loc);
+    const auto nextLive=select(bodyResults.back(),copy(constInt(0,loc),bitType(),loc),live,loc);
     endIf(marker,loc);
-    for(std::size_t i=0;i<values.size();++i)values[i]=select(predicate,step.values[i],values[i],loc);
+    for(std::size_t i=0;i<values.size();++i)values[i]=select(predicate,bodyResults[i],values[i],loc);
     if(nextLive!=live)live=select(predicate,nextLive,live,loc);
     if(m_.numOps()-start>budget)throw std::invalid_argument("boundedWhile expanded operation budget exceeded");
   }
+  const auto conditionGuard=beginIf(live,loc);
   const auto test=condition(values);if(m_.typeOf(test)!=bitType())throw std::invalid_argument("boundedWhile condition must produce bool");
-  const auto exhausted=copy(binOp("&",test,live,loc),bitType(),loc);
+  endIf(conditionGuard,loc);
+  const auto exhausted=select(live,test,copy(constInt(0,loc),bitType(),loc),loc);
   output("loop_exhausted_builder_"+std::to_string(start),exhausted,"loop_exhausted",loc);
   if(m_.numOps()-start>budget)throw std::invalid_argument("boundedWhile expanded operation budget exceeded");
   return {values,exhausted};
+}
+void Builder::breakLoop(std::span<const ValueId> values,Location loc){
+  if(loopTypes_.empty())throw std::invalid_argument("breakLoop requires an enclosing boundedWhile callback");
+  if(values.size()!=loopTypes_.back().size())throw std::invalid_argument("breakLoop changes loop-carried arity");
+  for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=loopTypes_.back()[i])throw std::invalid_argument("breakLoop changes loop-carried type or width");
+  issue(m_,OpKind::Break,std::vector<ValueId>(values.begin(),values.end()),{},{},std::move(loc));
+}
+void Builder::continueLoop(std::span<const ValueId> values,Location loc){
+  if(loopTypes_.empty())throw std::invalid_argument("continueLoop requires an enclosing boundedWhile callback");
+  if(values.size()!=loopTypes_.back().size())throw std::invalid_argument("continueLoop changes loop-carried arity");
+  for(std::size_t i=0;i<values.size();++i)if(m_.typeOf(values[i])!=loopTypes_.back()[i])throw std::invalid_argument("continueLoop changes loop-carried type or width");
+  issue(m_,OpKind::Continue,std::vector<ValueId>(values.begin(),values.end()),{},{},std::move(loc));
 }
 ValueId Builder::binOp(std::string op, ValueId a, ValueId b, Location loc) {
   // Result type follows the operand type (int + int → int, angle + angle
@@ -338,6 +363,12 @@ void Builder::endDef(OpId begin, Location loc) {
   end.kind = OpKind::EndDef;
   end.loc = std::move(loc);
   m_.addOp(std::move(end));
+}
+OpId Builder::beginTypedDef(std::string name,std::span<const Param> params,std::span<const Type> results,Location loc){
+  const auto id=beginDef(std::move(name),params,std::move(loc));
+  auto& op=m_.opMut(id);op.attributes.push_back({"explicit_results",std::int64_t{1}});
+  for(auto type:results){op.attributes.push_back({"result_type",std::string(typeName(type))});if(type.kind==TypeKind::UInt)op.attributes.push_back({"result_width",std::uint64_t(type.width)});}
+  return id;
 }
 void Builder::returnOp(std::span<const ValueId> values, Location loc) {
   Op op;

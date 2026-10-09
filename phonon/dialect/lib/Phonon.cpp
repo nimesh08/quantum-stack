@@ -89,6 +89,10 @@ constexpr OpSig kSigs[] = {
     {OpKind::Copy,       "phonon.copy",        false, true,  0},
     {OpKind::Select,     "phonon.select",      false, true,  0},
     {OpKind::Output,     "phonon.output",      false, true,  0},
+    {OpKind::LoopBody,   "phonon.loop_body",   false, true,  0},
+    {OpKind::EndLoopBody,"phonon.end_loop_body",false,true, 0},
+    {OpKind::Break,      "phonon.break",       false, true,  0},
+    {OpKind::Continue,   "phonon.continue",    false, true,  0},
 };
 
 const OpSig& sig(OpKind k) {

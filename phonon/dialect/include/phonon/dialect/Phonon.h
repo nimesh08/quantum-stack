@@ -124,6 +124,7 @@ enum class OpKind : std::uint16_t {
   Return,      // operands: returned values
   Assign,      // operand: source value; attr "name" (symbol)
   ConstUInt, Copy, Select, Output,
+  LoopBody, EndLoopBody, Break, Continue,
 };
 
 std::string_view opMnemonic(OpKind k);
@@ -229,6 +230,10 @@ class Builder {
   void output(std::string name, ValueId value, std::string role = "value", Location loc = {});
   struct LoopStep {std::vector<ValueId> values;std::optional<ValueId> breakWhen;};
   struct BoundedLoopResult {std::vector<ValueId> values;ValueId exhausted;};
+  // Transfer immediately to the innermost bounded-loop exit/next iteration.
+  // The explicit values are the loop-carried state at the transfer point.
+  void breakLoop(std::span<const ValueId> values, Location loc = {});
+  void continueLoop(std::span<const ValueId> values, Location loc = {});
   // Callbacks build device IR. They never inspect measurement outcomes on the
   // host. Loop-carried values and every result retain their declared widths.
   BoundedLoopResult boundedWhile(std::size_t maxIterations,std::span<const ValueId> initial,
@@ -255,6 +260,9 @@ class Builder {
   struct Param { Type type; std::string name; };
   OpId beginDef(std::string name, std::span<const Param> params,
                 Location loc = {});
+  // An explicit signature requires a matching return on every execution path.
+  OpId beginTypedDef(std::string name, std::span<const Param> params,
+                    std::span<const Type> results, Location loc = {});
   void endDef(OpId begin, Location loc = {});
   void returnOp(std::span<const ValueId> values, Location loc = {});
   std::vector<ValueId> call(std::string name,
@@ -271,6 +279,7 @@ class Builder {
  private:
   Module& m_;
   std::vector<ValueId> reusableQubits_;
+  std::vector<std::vector<Type>> loopTypes_;
 };
 
 // --- Print / Parse / Verify ------------------------------------------------

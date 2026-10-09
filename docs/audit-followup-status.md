@@ -46,12 +46,37 @@ separate. New controller features require explicit device and serializer
 contracts. An explicit `unknown` capability cannot inherit legacy permission.
 
 Python/Photon kernels support fixed-type conditional results. Phonon helpers
-retain their quantum in/out calling convention and normalized quantum returns;
-general expression-valued classical helper calls are outside this subset.
-The low-level Builder rejects raw conditional Return markers that have not
-undergone source normalization. Its bounded-loop callback uses explicit carried
-values. Runtime angles, dynamic quantum indices/sizes, multiplication/division,
+can declare Boolean/UInt and mixed quantum/classical results, including tuple
+results, with fixed types and arity across returned paths. Legacy quantum in/out
+helpers remain compatible. The Builder normalizes conditional returns and
+in-body bounded-loop break/continue transfers, retaining explicit carried
+values. Its static For bounds use exact signed integers, including bounds above
+2^53. These compiler constructs do not execute arbitrary host Python functions.
+Runtime angles, dynamic quantum indices/sizes, multiplication/division,
 unbounded loops and a quantum heap remain unsupported with diagnostics.
+
+## Follow-up acceptance checks
+
+The completion work addresses the five gaps found in the literal coverage
+review of `196b862`, plus regressions exposed by the new checks. The numerical
+change is independently reviewable from `7d85c04`; later commits retain that
+history and the original audited baseline.
+
+| Requirement | Permanent regression coverage |
+|---|---|
+| Per-region numerical sums in measured/conditional programs, including correct fences and accepted O3 trials only | `spinor_optimization_evidence_test`, `test_numerical_regions.py` |
+| Actual per-artifact submission-object verification | `test_artifact_submission_verification.py`, isolated SDK jobs, installed-package missing-SDK and real-IBM checks |
+| Typed helper and Builder conditional returns | Phonon M3/M4 tests and `test_typed_helpers.py`, including complete reference-entangled instruments |
+| Builder break/continue/return transfers and loop status | Phonon M4 tests, source/helper bounded-loop tests and existing Python controller tests |
+| Exact legacy Builder For bounds | Phonon M4 cases above 2^53 and at signed 64-bit boundaries |
+
+`qstack verify` keeps separate logical, stored-program and actual submission
+checks. A missing SDK is `not_checked`, with an installation instruction; it does
+not erase the available checks. Google protobuf float32 conversion is measured
+under the caller's unchanged tolerance. Qibolab's native assembler plan is
+checked, while calibrated pulse semantics remain explicitly `not_checked`
+without pulse evidence. These coverage limits are never counted as successful
+account access or hardware execution.
 
 Search and branch-join enumeration are finite, and numerical fallbacks remain
 legal when a shorter analytical candidate fails its unchanged strict checks.

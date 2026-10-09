@@ -112,6 +112,19 @@ void verify(const Module& m, Diagnostics& diag) {
           diag.error("phonon.return outside of phonon.def", loc, id);
         }
         break;
+      case OpKind::LoopBody:
+        if(op.results.size()!=op.operands.size()+1)diag.error("loop body result arity must include carried state and break flag",loc,id);
+        for(auto value:op.operands)if(m.typeOf(value).kind!=TypeKind::UInt&&m.typeOf(value).kind!=TypeKind::Bit)diag.error("bounded loop state requires bool or uint values",loc,id);
+        stack.push_back(OpKind::LoopBody);break;
+      case OpKind::EndLoopBody:
+        if(stack.empty()||stack.back()!=OpKind::LoopBody)diag.error("phonon.end_loop_body without matching loop body",loc,id);
+        else stack.pop_back();break;
+      case OpKind::Break:
+      case OpKind::Continue: {
+        bool loop=false;
+        for(auto marker=stack.rbegin();marker!=stack.rend();++marker){if(*marker==OpKind::Def)break;if(*marker==OpKind::LoopBody){loop=true;break;}}
+        if(!loop)diag.error("break/continue requires a bounded loop in this function",loc,id);break;
+      }
 
       // --- classical ops ----------------------------------------------
       case OpKind::ConstInt:

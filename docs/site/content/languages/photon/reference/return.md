@@ -25,9 +25,10 @@ without returning. Exhausted shots retain their status and data; Python
 `kernel.run()` raises `PhotonKernelError` with the saved full result in
 `error.result` rather than returning an apparently successful histogram.
 
-Arbitrary classical helper-call expressions are not part of the implemented
-language. Phonon helpers retain their quantum input/output calling convention;
-see [Phonon return](../../phonon/reference/return.md).
+The Python frontend does not execute arbitrary host helper calls during device
+control. Phonon source helpers and the C++ Builder support explicitly typed
+classical helper results and quantum ownership transfer; see
+[Phonon return](../../phonon/reference/return.md).
 
 See the [finite controller language](../../../../../language/controller.md)
 for exact value and control-flow semantics.

@@ -25,9 +25,11 @@ SSA values; joins select only the taken arm. UInt arithmetic wraps modulo its
 width. Comparisons yield bool; widths change only through explicit casts.
 Runtime arithmetic on a plain `int` snapshot requires an explicit UInt cast.
 
-Quantum helper returns transfer states under the existing input/output
-convention; they do not copy qubits. Runtime floating-point values, dynamic
-qubit indices and general classical helper-call returns remain unsupported.
+Helpers can declare fixed classical result types and widths. Quantum helper
+returns transfer states under the input/output convention; they do not copy
+qubits. Runtime floating-point values and dynamic qubit indices remain
+unsupported. Static Builder `For` bounds retain exact signed 64-bit values,
+including values above the exact-integer range of binary64.
 
 See [def](reference/def.md), [return](reference/return.md), and the
 [finite controller language](../../../../language/controller.md).

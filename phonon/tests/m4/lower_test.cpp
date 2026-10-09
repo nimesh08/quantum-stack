@@ -711,7 +711,7 @@ TEST(M4_lower, programmatic_unknown_runtime_comparison_is_rejected) {
   const auto lowered=pl::lower(source);
   EXPECT_FALSE(lowered.module.has_value());EXPECT_TRUE(lowered.diag.hasErrors());
 }
-TEST(M4_lower, raw_conditional_return_markers_are_rejected_with_controller_values) {
+TEST(M4_lower, raw_conditional_return_markers_suppress_following_operations) {
   namespace pd=phonon::dialect;
   for(bool inElse:{false,true}){
     pd::Module source;source.targetAttr="generic";pd::Builder b(source);
@@ -719,12 +719,192 @@ TEST(M4_lower, raw_conditional_return_markers_are_rejected_with_controller_value
     const auto function=b.beginDef("raw",params);const auto q=b.paramValue(function,0),flag=b.paramValue(function,1);
     const auto branch=b.beginIf(b.cmp("==",flag,b.constInt(1)));
     if(inElse)b.elseIf(branch);
-    const std::vector<pd::ValueId> returned{q};b.returnOp(returned);b.endIf(branch);b.returnOp(returned);b.endDef(function);
-    const auto input=b.allocQubit(),measured=b.measure(input);b.constUInt(0,8);
-    const std::vector<pd::ValueId> args{input,measured};const std::vector<pd::Type> results{pd::qubitType()};b.call("raw",args,results);
-    const auto lowered=pl::lower(source);EXPECT_FALSE(lowered.module.has_value());EXPECT_TRUE(lowered.diag.hasErrors());
-    bool clear=false;for(const auto& d:lowered.diag.items())clear|=d.message.find("return normalization")!=std::string::npos;
-    EXPECT_TRUE(clear);
+    const std::vector<pd::ValueId> returned{q};b.returnOp(returned);b.endIf(branch);const auto changed=b.x(q);const std::vector<pd::ValueId> fallback{changed};b.returnOp(fallback);b.endDef(function);
+    const auto input=b.allocQubit(),control=b.x(b.allocQubit()),measured=b.measure(control);b.constUInt(0,8);
+    const std::vector<pd::ValueId> args{input,measured};const std::vector<pd::Type> results{pd::qubitType()};const auto result=b.call("raw",args,results);b.output("result",b.measure(result[0]));
+    const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    const auto& output=lowered.module->classicalOutputs.back();const auto info=std::find_if(lowered.module->classicalValues.begin(),lowered.module->classicalValues.end(),[&](const auto& v){return v.id==output.value;});
+    std::mt19937_64 rng(1);const auto counts=spinor::sim::sample(*lowered.module,4,rng);for(const auto& [bits,_]:counts)EXPECT_EQ(bits[bits.size()-1-info->storage[0]],inElse?'1':'0');
+  }
+}
+
+TEST(M4_lower, programmatic_for_uses_exact_signed_bounds_and_checked_spans) {
+  namespace pd=phonon::dialect;
+  const std::vector<std::int64_t> starts{9007199254740992LL,9007199254740993LL,std::numeric_limits<std::int64_t>::max()-1,std::numeric_limits<std::int64_t>::min()};
+  for(auto start:starts){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);const auto q=b.allocQubit();
+    const auto loop=b.beginFor("i",b.constInt(start),b.constInt(start+1));b.x(q);b.endFor(loop);b.measure(q);
+    const auto lowered=pl::lower(source);EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    EXPECT_EQ(countOpKind(*lowered.module,sd::OpKind::X),std::size_t(1));
+    std::mt19937_64 rng(0x51C1E);const auto counts=spinor::sim::sample(*lowered.module,4,rng);EXPECT_EQ(counts.begin()->first,"1");
+  }
+  pd::Module source;source.targetAttr="generic";pd::Builder b(source);
+  const auto loop=b.beginFor("i",b.constInt(std::numeric_limits<std::int64_t>::min()),b.constInt(std::numeric_limits<std::int64_t>::max()));b.endFor(loop);
+  EXPECT_FALSE(pl::lower(source).module.has_value());
+}
+
+static std::uint64_t controllerOutput(const spinor::dialect::Module& module,const std::string& name,const std::string& bits){
+  const auto output=std::find_if(module.classicalOutputs.begin(),module.classicalOutputs.end(),[&](const auto& item){return item.name==name;});
+  if(output==module.classicalOutputs.end())throw std::runtime_error("missing output "+name);
+  const auto value=std::find_if(module.classicalValues.begin(),module.classicalValues.end(),[&](const auto& item){return item.id==output->value;});
+  std::uint64_t result=0;for(unsigned k=0;k<value->width;++k)if(bits[bits.size()-1-value->storage[k]]=='1')result|=std::uint64_t{1}<<k;return result;
+}
+
+TEST(M4_lower, builder_break_continue_commit_transfer_state_and_skip_continuation) {
+  namespace pd=phonon::dialect;pd::Module source;source.targetAttr="generic";pd::Builder b(source);auto q=b.allocQubit();
+  const std::vector<pd::ValueId> initial{b.constUInt(0,8),b.constUInt(0,8)};
+  const auto result=b.boundedWhile(5,initial,[&](auto values){return b.cmp("<",values[0],b.constUInt(4,8));},[&](auto values){
+    const auto next=b.binOp("+",values[0],b.constUInt(1,8));const std::vector<pd::ValueId> state{next,values[1]};
+    auto branch=b.beginIf(b.cmp("==",next,b.constUInt(1,8)));b.continueLoop(state);b.endIf(branch);
+    branch=b.beginIf(b.cmp("==",next,b.constUInt(3,8)));b.breakLoop(state);b.endIf(branch);
+    q=b.x(q);return pd::Builder::LoopStep{{next,b.binOp("+",values[1],b.constUInt(1,8))},std::nullopt};
+  });b.output("i",result.values[0]);b.output("total",result.values[1]);b.output("q",b.measure(q));
+  pd::Diagnostics roundtripDiag;const auto roundtrip=pd::parse(pd::print(source),roundtripDiag);EXPECT_TRUE(roundtrip.has_value());
+  const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)return;
+  std::mt19937_64 rng(0x51C1E);const auto counts=spinor::sim::sample(*lowered.module,4,rng);
+  if(roundtrip){const auto restored=pl::lower(*roundtrip);EXPECT_TRUE(restored.module.has_value());if(restored.module){std::mt19937_64 restoredRng(0x51C1E);EXPECT_TRUE(spinor::sim::sample(*restored.module,4,restoredRng)==counts);}}
+  for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"i",bits),3u);EXPECT_EQ(controllerOutput(*lowered.module,"total",bits),1u);EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),1u);
+    for(const auto& output:lowered.module->classicalOutputs)if(output.role=="loop_exhausted")EXPECT_EQ(controllerOutput(*lowered.module,output.name,bits),0u);}
+}
+
+TEST(M4_lower, builder_early_function_return_suppresses_loop_and_exhaustion_continuations) {
+  namespace pd=phonon::dialect;
+  for(bool flagValue:{false,true}){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);
+    const std::vector<pd::Builder::Param> params{{pd::qubitType(),"q"},{pd::bitType(),"flag"}};
+    const auto function=b.beginDef("loopReturn",params);auto q=b.paramValue(function,0);const auto flag=b.paramValue(function,1);
+    const std::vector<pd::ValueId> initial{b.constUInt(0,8)};
+    b.boundedWhile(2,initial,[&](auto){return b.copy(b.constInt(1),pd::bitType());},[&](auto values){
+      const auto branch=b.beginIf(flag);const std::vector<pd::ValueId> returned{q,b.constUInt(9,8)};b.returnOp(returned);b.endIf(branch);
+      q=b.x(q);return pd::Builder::LoopStep{{b.binOp("+",values[0],b.constUInt(1,8))},std::nullopt};
+    });const std::vector<pd::ValueId> fallback{q,b.constUInt(7,8)};b.returnOp(fallback);b.endDef(function);
+    const auto input=b.allocQubit();const std::vector<pd::ValueId> args{input,b.copy(b.constInt(flagValue),pd::bitType())};const std::vector<pd::Type> types{pd::qubitType(),pd::uintType(8)};
+    const auto result=b.call("loopReturn",args,types);b.output("value",result[1]);b.output("q",b.measure(result[0]));
+    const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    std::mt19937_64 rng(0x51C1E);const auto counts=spinor::sim::sample(*lowered.module,4,rng);
+    for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"value",bits),flagValue?9u:7u);EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),0u);
+      for(const auto& output:lowered.module->classicalOutputs)if(output.role=="loop_exhausted")EXPECT_EQ(controllerOutput(*lowered.module,output.name,bits),flagValue?0u:1u);}
+  }
+}
+
+TEST(M4_lower, typed_text_helpers_merge_classical_returns_and_preserve_widths) {
+  const auto parsed=pp::parse("target generic\n"
+    "def choose(bool flag,uint[64] value) -> (uint[64],bool) {\nif (flag) {\nreturn value+1,flag\n}\nreturn value,flag\n}\n"
+    "def forward(bool flag,uint[64] value) -> uint[64] {\nuint[64] answer=0\nbool other=0\nanswer,other=choose(flag,value)\nreturn answer\n}\n"
+    "qubit q[1]\nbit c[1]\nx q\nc=measure q\nbool saved=c[0]\nreset q\nc=measure q\n"
+    "uint[64] first=forward(saved,18446744073709551615)\nuint[64] second=forward(c[0],9007199254740993)\noutput first\noutput second\n");
+  if(!parsed.module)for(const auto& d:parsed.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(parsed.module.has_value());if(!parsed.module)return;
+  const auto lowered=pl::lower(*parsed.module);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)return;
+  std::mt19937_64 rng(0x51C1E);const auto counts=spinor::sim::sample(*lowered.module,4,rng);for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"first",bits),0u);EXPECT_EQ(controllerOutput(*lowered.module,"second",bits),9007199254740993ULL);}
+}
+
+TEST(M4_lower, typed_helpers_reject_missing_returns_and_inconsistent_types) {
+  for(const auto* body:{"if (flag) {\nreturn uint[8](1)\n}\n","if (flag) {\nreturn uint[8](1)\n}\nreturn uint[16](2)\n","return uint[8](1),flag\n"}){
+    const auto parsed=pp::parse(std::string("target generic\ndef helper(bool flag) -> uint[8] {\n")+body+"}\nbool flag=1\nuint[8] value=helper(flag)\noutput value\n");
+    if(parsed.module)EXPECT_FALSE(pl::lower(*parsed.module).module.has_value());else EXPECT_TRUE(parsed.diag.hasErrors());
+  }
+}
+
+TEST(M4_lower, builder_fresh_quantum_returns_require_every_path_and_unique_ownership) {
+  namespace pd=phonon::dialect;
+  for(bool complete:{false,true}){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);
+    const std::vector<pd::Builder::Param> params{{pd::bitType(),"flag"}};
+    const auto function=b.beginDef("fresh",params);const auto flag=b.paramValue(function,0);
+    const auto branch=b.beginIf(flag);const auto q=b.x(b.allocQubit());const std::vector<pd::ValueId> yes{q};b.returnOp(yes);
+    if(complete){b.elseIf(branch);const std::vector<pd::ValueId> no{b.allocQubit()};b.returnOp(no);}b.endIf(branch);b.endDef(function);
+    const std::vector<pd::ValueId> args{b.copy(b.constInt(1),pd::bitType())};const std::vector<pd::Type> types{pd::qubitType()};
+    const auto result=b.call("fresh",args,types);b.output("result",b.measure(result[0]));
+    const auto lowered=pl::lower(source);EXPECT_EQ(lowered.module.has_value(),complete);if(!lowered.module)continue;
+    std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);for(const auto& [bits,_]:counts)EXPECT_EQ(controllerOutput(*lowered.module,"result",bits),1u);
+  }
+  pd::Module source;source.targetAttr="generic";pd::Builder b(source);const std::vector<pd::Builder::Param> params{{pd::qubitType(),"q"},{pd::bitType(),"flag"}};
+  const std::vector<pd::Type> types{pd::qubitType(),pd::qubitType()};const auto f=b.beginTypedDef("clone",params,types);
+  const auto q=b.paramValue(f,0);const std::vector<pd::ValueId> duplicate{q,q};b.returnOp(duplicate);b.endDef(f);
+  const std::vector<pd::ValueId> args{b.allocQubit(),b.copy(b.constInt(1),pd::bitType())};b.call("clone",args,types);EXPECT_FALSE(pl::lower(source).module.has_value());
+}
+
+TEST(M4_lower, builder_predicates_stop_after_break_and_first_false_result) {
+  namespace pd=phonon::dialect;
+  for(bool breaking:{false,true}){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);auto q=b.allocQubit();const std::vector<pd::ValueId> initial{b.constUInt(0,8)};
+    const auto loop=b.boundedWhile(3,initial,[&](auto){q=b.x(q);return b.copy(b.constInt(breaking),pd::bitType());},[&](auto values){
+      b.breakLoop(values);return pd::Builder::LoopStep{{values[0]},std::nullopt};
+    });b.output("exhausted",loop.exhausted);b.output("q",b.measure(q));
+    const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),1u);EXPECT_EQ(controllerOutput(*lowered.module,"exhausted",bits),0u);}
+  }
+}
+
+TEST(M4_lower, helper_int_results_keep_exact_static_values_and_measured_snapshots) {
+  const auto parsed=pp::parse("target generic\ndef identity(int n) -> int {\nreturn n\n}\n"
+    "qubit q[1]\nbit c[1]\nx q\nc=measure q\nint saved=c[0]\n"
+    "int old=identity(saved)\nint wide=identity(9007199254740993)\n"
+    "uint[64] exact=uint[64](wide)\noutput exact\noutput old\n");
+  if(!parsed.module)for(const auto& d:parsed.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(parsed.module.has_value());if(!parsed.module)return;
+  const auto lowered=pl::lower(*parsed.module);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)return;
+  std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"exact",bits),9007199254740993ULL);EXPECT_EQ(controllerOutput(*lowered.module,"old",bits),1u);}
+}
+
+TEST(M4_lower, bit_domain_comparisons_use_exact_int64_constants_in_both_orders) {
+  for(bool controller:{false,true})for(int bit:{0,1})for(const auto bound:{std::numeric_limits<std::int64_t>::min(),std::numeric_limits<std::int64_t>::max()})for(bool reverse:{false,true})for(const std::string comparison:{"==","!=","<","<=",">",">="}){
+    const std::int64_t left=reverse?bound:bit,right=reverse?bit:bound;
+    const bool expected=comparison=="=="?left==right:comparison=="!="?left!=right:comparison=="<"?left<right:comparison=="<="?left<=right:comparison==">"?left>right:left>=right;
+    const auto bitName=controller?"saved":"c[0]";
+    const auto expression=reverse?std::to_string(bound)+comparison+bitName:std::string(bitName)+comparison+std::to_string(bound);
+    const auto source=std::string("target generic\nqubit q[2]\nbit c[2]\n")+(bit?"x q[0]\n":"")+"c[0]=measure q[0]\n"+(controller?"bool saved=c[0]\n":"")+"if ("+expression+") {\nx q[1]\n}\nc[1]=measure q[1]\n";
+    const auto parsed=pp::parse(source);EXPECT_TRUE(parsed.module.has_value());if(!parsed.module)continue;
+    const auto lowered=pl::lower(*parsed.module);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,1,rng);const auto& bits=counts.begin()->first;EXPECT_EQ(bits[bits.size()-2],expected?'1':'0');
+  }
+}
+
+TEST(M4_lower, nested_builder_transfers_and_helper_returns_keep_their_own_scope) {
+  namespace pd=phonon::dialect;pd::Module source;source.targetAttr="generic";pd::Builder b(source);
+  const std::vector<pd::Builder::Param> params{{pd::qubitType(),"q"}};const auto helper=b.beginDef("flip",params);
+  const std::vector<pd::ValueId> returned{b.x(b.paramValue(helper,0))};b.returnOp(returned);b.endDef(helper);
+  auto q=b.allocQubit();const std::vector<pd::ValueId> initial{b.constUInt(0,8),b.constUInt(0,8)};
+  const auto outer=b.boundedWhile(2,initial,[&](auto values){return b.cmp("<",values[0],b.constUInt(2,8));},[&](auto values){
+    const std::vector<pd::ValueId> innerInitial{b.constUInt(0,8)};
+    b.boundedWhile(3,innerInitial,[&](auto){return b.copy(b.constInt(1),pd::bitType());},[&](auto inner){
+      const auto next=b.binOp("+",inner[0],b.constUInt(1,8));const auto branch=b.beginIf(b.cmp("==",next,b.constUInt(1,8)));
+      const std::vector<pd::ValueId> state{next};b.breakLoop(state);b.endIf(branch);q=b.x(q);return pd::Builder::LoopStep{{next},std::nullopt};
+    });
+    const std::vector<pd::ValueId> args{q};const std::vector<pd::Type> resultTypes{pd::qubitType()};q=b.call("flip",args,resultTypes)[0];
+    const auto next=b.binOp("+",values[0],b.constUInt(1,8));const auto branch=b.beginIf(b.cmp("==",next,b.constUInt(1,8)));
+    const std::vector<pd::ValueId> state{next,values[1]};b.continueLoop(state);b.endIf(branch);q=b.x(q);
+    return pd::Builder::LoopStep{{next,b.binOp("+",values[1],b.constUInt(1,8))},std::nullopt};
+  });b.output("i",outer.values[0]);b.output("count",outer.values[1]);b.output("q",b.measure(q));
+  const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)return;
+  std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);
+  for(const auto& [bits,_]:counts){EXPECT_EQ(controllerOutput(*lowered.module,"i",bits),2u);EXPECT_EQ(controllerOutput(*lowered.module,"count",bits),1u);EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),1u);
+    for(const auto& output:lowered.module->classicalOutputs)if(output.role=="loop_exhausted")EXPECT_EQ(controllerOutput(*lowered.module,output.name,bits),0u);}
+}
+
+TEST(M4_lower, zero_trip_builder_for_forwards_existing_quantum_identity_without_allocating) {
+  namespace pd=phonon::dialect;
+  for(const auto bound:{std::int64_t{0},std::numeric_limits<std::int64_t>::max()}){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);auto q=b.allocQubit();
+    const auto loop=b.beginFor("i",b.constInt(bound),b.constInt(bound));q=b.x(q);const auto unused=b.h(b.allocQubit());b.measure(unused);b.endFor(loop);b.output("q",b.measure(q));
+    const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    EXPECT_EQ(countOpKind(*lowered.module,sd::OpKind::AllocQubit),std::size_t(1));EXPECT_EQ(countOpKind(*lowered.module,sd::OpKind::X),std::size_t(0));
+    std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);for(const auto& [bits,_]:counts)EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),0u);
+  }
+}
+
+TEST(M4_lower, terminated_function_paths_do_not_reserve_dead_quantum_capacity) {
+  namespace pd=phonon::dialect;
+  for(bool conditional:{false,true})for(bool flagValue:{false,true}){
+    pd::Module source;source.targetAttr="generic";pd::Builder b(source);
+    const std::vector<pd::Builder::Param> params{{pd::qubitType(),"q"},{pd::bitType(),"flag"}};const std::vector<pd::Type> types{pd::qubitType()};
+    const auto function=b.beginTypedDef("returnBeforeAllocation",params,types);const auto q=b.paramValue(function,0),flag=b.paramValue(function,1);
+    const auto branch=conditional?std::optional<pd::OpId>{b.beginIf(flag)}:std::nullopt;
+    const std::vector<pd::ValueId> returned{q};b.returnOp(returned);auto dead=b.allocQubit();dead=b.x(dead);b.measure(dead);
+    if(branch){b.elseIf(*branch);const std::vector<pd::ValueId> fallback{b.x(q)};b.returnOp(fallback);b.endIf(*branch);}b.endDef(function);
+    const std::vector<pd::ValueId> args{b.allocQubit(),b.copy(b.constInt(flagValue?1:0),pd::bitType())};const auto result=b.call("returnBeforeAllocation",args,types);b.output("q",b.measure(result[0]));
+    const auto lowered=pl::lower(source);if(!lowered.module)for(const auto& d:lowered.diag.items())std::cerr<<d.message<<'\n';EXPECT_TRUE(lowered.module.has_value());if(!lowered.module)continue;
+    EXPECT_EQ(countOpKind(*lowered.module,sd::OpKind::AllocQubit),std::size_t(1));
+    std::mt19937_64 rng(123);const auto counts=spinor::sim::sample(*lowered.module,2,rng);for(const auto& [bits,_]:counts)EXPECT_EQ(controllerOutput(*lowered.module,"q",bits),conditional&&!flagValue?1u:0u);
   }
 }
 TEST(M4_lower, programmatic_calls_bind_immutable_bits_and_restore_callee_state) {

@@ -91,6 +91,10 @@ struct Parser {
   // Classical scalars whose compile-time value is known (used for
   // for-loop bound resolution and qubit register sizes).
   std::unordered_map<std::string, double> ctConst;
+  void cacheInteger(const std::string& name,std::int64_t value){
+    if(value>=-9007199254740991LL&&value<=9007199254740991LL)ctConst[name]=static_cast<double>(value);
+    else ctConst.erase(name);
+  }
   std::optional<std::int64_t> integerValue(pd::ValueId value) const {
     const auto& op=mod.op(mod.producerOf(value));
     if(op.kind==pd::OpKind::ConstInt){
@@ -140,6 +144,8 @@ struct Parser {
   struct FuncDecl {
     std::string name;
     std::vector<pd::Builder::Param> params;
+    std::vector<pd::Type> returnTypes;
+    bool typedResults = false;
     std::size_t body_start = 0;  // index of `{`
     std::size_t body_end = 0;    // index of `}`
     bool specialize = false;
@@ -161,6 +167,7 @@ struct Parser {
     std::vector<std::string> quantumParams;
   };
   std::vector<InlineFrame> inlineFrames;
+  std::vector<pd::Type> activeReturnTypes;
   bool inlineReturned() const { return !inlineFrames.empty() && inlineFrames.back().returned; }
 
   Parser(std::vector<Token> ts, std::string fn)
@@ -269,6 +276,8 @@ struct Parser {
   void parseWhileStmt();
   void parseDefStmt();
   void parseCallStmt(const std::string& name);
+  pd::Type parseFunctionType();
+  std::vector<pd::ValueId> parseTypedCall(const std::string& name);
   void parseAssignStmt(const std::string& name);
   void parseReturnStmt();
   void parseBlock();  // expects '{', parses stmts, expects '}'
@@ -442,6 +451,12 @@ pd::ValueId Parser::parseFactor() {
   }
   if (cur().kind == Tok::Identifier) {
     std::string name = consume().text;
+    if(name=="true"||name=="false")return b.copy(b.constInt(name=="true"),pd::bitType());
+    if(cur().kind==Tok::LParen&&funcs.count(name)&&funcs.at(name).typedResults){
+      const auto values=parseTypedCall(name);
+      if(values.size()!=1){err("helper expression requires exactly one classical result; use tuple assignment for multiple results");return b.constInt(0);}
+      return values[0];
+    }
     // Indexed reference: name[expr]
     if (cur().kind == Tok::LBracket) {
       consume();
@@ -686,9 +701,9 @@ void Parser::parseDeclClassical(bool isAngle) {
   std::string name = consume().text;
   if (!expect(Tok::Equals, "'='")) return;
   if(!isAngle){
-    const auto start=pos;auto value=parseExpr();
-    if(auto exact=integerValue(value)){
-      classicals[name]=b.constInt(*exact);ctConst[name]=static_cast<double>(*exact);
+    const auto start=pos;
+    if(auto exact=foldIntegerExpr()){
+      classicals[name]=b.constInt(*exact);cacheInteger(name,*exact);
       recordScalar(name,true);return;
     }
     pos=start;
@@ -961,7 +976,10 @@ void Parser::parseIfStmt() {
   const auto conditionStart = pos;
   // Integer comparisons are resolved without the angle evaluator's double
   // conversion. This also preserves distinctions above 2^53.
-  {
+  bool helperPredicate=false;
+  for(auto token=conditionStart;token+1<toks.size()&&toks[token].kind!=Tok::LBrace;++token)
+    if(toks[token].kind==Tok::Identifier&&toks[token+1].kind==Tok::LParen&&funcs.count(toks[token].text)&&funcs.at(toks[token].text).typedResults)helperPredicate=true;
+  if(!helperPredicate){
     const auto left=parseExpr();const auto comparison=cur().kind;
     if(comparison==Tok::EqEq||comparison==Tok::NotEq||comparison==Tok::Lt||comparison==Tok::Gt||comparison==Tok::Le||comparison==Tok::Ge){
       consume();const auto oldWidth=unsignedLiteralWidth;if(mod.typeOf(left).kind==pd::TypeKind::UInt)unsignedLiteralWidth=mod.typeOf(left).width;
@@ -1046,7 +1064,7 @@ void Parser::parseForStmt() {
   for (auto value = static_cast<std::int64_t>(*loOpt);
        value < static_cast<std::int64_t>(*hiOpt) && !diag.hasErrors() && !inlineReturned(); ++value) {
     if (++expandedIterations > 100000) { err("static loop expansion exceeds 100000 iterations"); break; }
-    ctConst[var] = static_cast<double>(value);
+    cacheInteger(var,value);
     classicals[var] = b.constInt(value);
     recordScalar(var);
     pos = bodyStart;
@@ -1132,7 +1150,9 @@ void Parser::parseWhileStmt() {
 void Parser::parseBoundedWhile(){
   accept(Tok::Bounded);if(!expect(Tok::While,"'while'"))return;
   if(!expect(Tok::LParen,"'('"))return;
-  const auto conditionStart=pos;parsePredicate();if(!expect(Tok::RParen,"')'"))return;
+  const auto conditionStart=pos;std::size_t parentheses=1;
+  while(cur().kind!=Tok::Eof&&parentheses){if(cur().kind==Tok::LParen)++parentheses;else if(cur().kind==Tok::RParen){if(!--parentheses)break;}consume();}
+  if(!expect(Tok::RParen,"')'"))return;
   if(!expect(Tok::MaxIterations,"'max_iterations'"))return;
   const auto bound=foldExpr();
   if(!bound||!std::isfinite(*bound)||std::floor(*bound)!=*bound||*bound<=0||*bound>operationBudget){err("bounded while max_iterations must be a positive compile-time integer within the expanded operation budget");return;}
@@ -1144,10 +1164,11 @@ void Parser::parseBoundedWhile(){
   loopFrames.push_back({liveName,doneName,false,inlineFrames.size()});
   for(std::size_t iteration=0;iteration<static_cast<std::size_t>(*bound)&&!diag.hasErrors();++iteration){
     if(mod.numOps()>operationBudget){err("bounded while exceeds QSTACK_EXPANDED_OPERATION_BUDGET");return;}
+    const auto live=classicals.at(liveName);const auto conditionGuard=b.beginIf(live);
     pos=conditionStart;auto predicate=parsePredicate();
     if(mod.typeOf(predicate).kind!=pd::TypeKind::Bit)predicate=b.cmp("!=",predicate,b.constInt(0));
-    predicate=b.binOp("&",predicate,classicals.at(liveName));
-    predicate=b.copy(predicate,pd::bitType());
+    b.endIf(conditionGuard);predicate=b.select(live,predicate,b.copy(b.constInt(0),pd::bitType()));
+    classicals[liveName]=predicate;recordScalar(liveName);
     classicals[doneName]=b.copy(b.constInt(0),pd::bitType());loopFrames.back().mayTransfer=false;
     const auto before=classicals;const auto constantsBefore=ctConst;const auto typesBefore=scalarTypes;const auto bitsBefore=snapshotBits();const auto registersBefore=qreg;
     auto marker=b.beginIf(predicate);++runtimeDepth;pos=bodyStart;parseBlock();--runtimeDepth;b.endIf(marker);
@@ -1156,15 +1177,27 @@ void Parser::parseBoundedWhile(){
     joinClassicals(predicate,before,thenValues,before);joinBits(predicate,bitsBefore,thenBits,bitsBefore);
     if(inlineReturned()){err("return inside bounded runtime loops requires explicit loop-exit normalization");return;}
   }
+  const auto live=classicals.at(liveName);const auto conditionGuard=b.beginIf(live);
   pos=conditionStart;auto exhausted=parsePredicate();
   if(mod.typeOf(exhausted).kind!=pd::TypeKind::Bit)exhausted=b.cmp("!=",exhausted,b.constInt(0));
-  exhausted=b.binOp("&",exhausted,classicals.at(liveName));
-  exhausted=b.copy(exhausted,pd::bitType());b.output("loop_exhausted_"+std::to_string(loopId),exhausted,"loop_exhausted");
+  b.endIf(conditionGuard);exhausted=b.select(live,exhausted,b.copy(b.constInt(0),pd::bitType()));b.output("loop_exhausted_"+std::to_string(loopId),exhausted,"loop_exhausted");
   loopFrames.pop_back();classicals.erase(liveName);classicals.erase(doneName);scalarTypes.erase(liveName);scalarTypes.erase(doneName);
   pos=afterBody;
 }
 
 // --- Function definition / call ------------------------------------------
+
+pd::Type Parser::parseFunctionType(){
+  if(accept(Tok::Qubit))return pd::qubitType();
+  if(accept(Tok::Bit)||accept(Tok::Bool))return pd::bitType();
+  if(accept(Tok::Int))return pd::intType();
+  if(accept(Tok::Angle))return pd::angleType();
+  if(accept(Tok::UInt)){
+    expect(Tok::LBracket,"'['");const auto width=foldIntegerExpr();expect(Tok::RBracket,"']'");
+    if(!width||*width<1||*width>64){err("helper uint width must be in [1,64]");return pd::uintType(1);}return pd::uintType(static_cast<unsigned>(*width));
+  }
+  err("expected parameter/result type (qubit/bool/bit/uint[width]/int/angle)");return pd::intType();
+}
 
 void Parser::parseDefStmt() {
   if (!inlineFrames.empty()) {
@@ -1179,12 +1212,7 @@ void Parser::parseDefStmt() {
   if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::Builder::Param> params;
   while (cur().kind != Tok::RParen) {
-    pd::Type ty = pd::qubitType();
-    if      (cur().kind == Tok::Qubit) { ty = pd::qubitType(); consume(); }
-    else if (cur().kind == Tok::Bit)   { ty = pd::bitType();   consume(); }
-    else if (cur().kind == Tok::Int)   { ty = pd::intType();   consume(); }
-    else if (cur().kind == Tok::Angle) { ty = pd::angleType(); consume(); }
-    else { err("expected parameter type (qubit/bit/int/angle)"); return; }
+    const pd::Type ty=parseFunctionType();if(diag.hasErrors())return;
     if (cur().kind != Tok::Identifier) { err("expected parameter name"); return; }
     std::string pname = consume().text;
     if (std::any_of(params.begin(), params.end(), [&](const auto& p) { return p.name == pname; })) {
@@ -1194,10 +1222,19 @@ void Parser::parseDefStmt() {
     if (!accept(Tok::Comma)) break;
   }
   if (!expect(Tok::RParen, "')'")) return;
-  skipNewlines();
   FuncDecl fd;
   fd.name = name;
   fd.params = params;
+  if(accept(Tok::Minus)){
+    if(!expect(Tok::Gt,"'>' in return signature"))return;
+    fd.typedResults=true;const bool tuple=accept(Tok::LParen);
+    do{fd.returnTypes.push_back(parseFunctionType());}while(tuple&&accept(Tok::Comma));
+    if(tuple)expect(Tok::RParen,"')'");
+    const auto quantumParams=std::count_if(params.begin(),params.end(),[](const auto& p){return p.type.kind==pd::TypeKind::Qubit;});
+    const auto quantumResults=std::count(fd.returnTypes.begin(),fd.returnTypes.end(),pd::qubitType());
+    if(quantumParams!=quantumResults){err("text helper must return one unique qubit per qubit parameter; list classical results in the return signature too");return;}
+  }
+  skipNewlines();
   fd.body_start = pos;
   fd.specialize = std::any_of(params.begin(), params.end(), [](const auto& p) {
     return p.type.kind != pd::TypeKind::Qubit;
@@ -1223,6 +1260,7 @@ void Parser::parseDefStmt() {
     if (helper != funcs.end() && helper->second.specialize && toks[token + 1].kind == Tok::LParen)
       fd.specialize = true;
   }
+  if(fd.typedResults){fd.specialize=false;fd.normalizeReturns=false;}
   if (fd.specialize) {
     fd.capturedQreg = qreg;
     fd.capturedCreg = creg;
@@ -1244,7 +1282,7 @@ void Parser::parseDefStmt() {
   for (auto& [_, reg] : qreg) reg = reg.clone();
   for (auto& [_, reg] : creg) reg = reg.clone();
   for (auto& [_, binding] : scalarBindings) binding = std::make_shared<ScalarBinding>(*binding);
-  pd::OpId defId = b.beginDef(name, std::span<const pd::Builder::Param>(params.data(), params.size()));
+  pd::OpId defId = fd.typedResults?b.beginTypedDef(name,params,fd.returnTypes):b.beginDef(name,params);
   for (std::size_t i = 0; i < params.size(); ++i) {
     pd::ValueId pv = b.paramValue(defId, i);
     qreg.erase(params[i].name); creg.erase(params[i].name);
@@ -1252,10 +1290,11 @@ void Parser::parseDefStmt() {
     bitTargets.erase(params[i].name);
     scalarBindings.erase(params[i].name);
     if (params[i].type.kind == pd::TypeKind::Qubit) qreg[params[i].name] = {pv};
-    else if (params[i].type.kind == pd::TypeKind::Bit) creg[params[i].name] = {pv};
-    else classicals[params[i].name] = pv;
+    else if (params[i].type.kind == pd::TypeKind::Bit&&!fd.typedResults) creg[params[i].name] = {pv};
+    else {classicals[params[i].name] = pv;scalarTypes[params[i].name]=params[i].type;}
   }
-  parseBlock();
+  const auto savedReturnTypes=activeReturnTypes;activeReturnTypes=fd.returnTypes;
+  parseBlock();activeReturnTypes=savedReturnTypes;
   qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
   scalarTypes = savedScalarTypes;
   ctConst = savedConstants; bitTargets = savedBitTargets;
@@ -1266,7 +1305,36 @@ void Parser::parseDefStmt() {
   if (cur().kind == Tok::Newline) consume();
 }
 
+std::vector<pd::ValueId> Parser::parseTypedCall(const std::string& name){
+  const auto function=funcs.at(name);expect(Tok::LParen,"'('");
+  std::vector<pd::ValueId> args;std::vector<std::pair<std::string,int>> quantumRefs;
+  while(cur().kind!=Tok::RParen&&cur().kind!=Tok::Eof){
+    if(args.size()>=function.params.size()){err("too many helper arguments: "+name);return {};}
+    const auto type=function.params[args.size()].type;
+    if(type.kind==pd::TypeKind::Qubit){
+      const auto ref=parseQubitRef();if(!ref)return {};const auto [reg,index]=*ref;
+      if(!qreg.count(reg)||(index<0&&qreg.at(reg).size()!=1)){err("helper qubit parameter requires one live quantum slot");return {};}
+      const auto slot=index<0?0:index;args.push_back(getQubitSlot(reg,slot,cur()));quantumRefs.push_back({reg,slot});
+    }else{
+      const auto previous=unsignedLiteralWidth;unsignedLiteralWidth=type.kind==pd::TypeKind::UInt?std::optional<unsigned>{type.width}:std::nullopt;
+      auto value=parsePredicate();unsignedLiteralWidth=previous;
+      if(mod.typeOf(value)!=type){
+        if(mod.typeOf(value).kind==pd::TypeKind::Int&&(type.kind==pd::TypeKind::UInt||type.kind==pd::TypeKind::Bit))value=coerce(value,type);
+        else{err("helper argument type or width mismatch; use an explicit cast");return {};}
+      }args.push_back(value);
+    }
+    if(!accept(Tok::Comma))break;
+  }
+  if(!expect(Tok::RParen,"')'")||args.size()!=function.params.size()){err("helper argument count mismatch: "+name);return {};}
+  auto result=b.call(name,args,function.returnTypes);std::vector<pd::ValueId> classical;std::size_t quantum=0;
+  for(std::size_t i=0;i<result.size();++i){
+    if(function.returnTypes[i].kind==pd::TypeKind::Qubit){const auto& [reg,slot]=quantumRefs.at(quantum++);setQubitSlot(reg,slot,result[i]);}
+    else classical.push_back(result[i]);
+  }return classical;
+}
+
 void Parser::parseCallStmt(const std::string& name) {
+  if(funcs.count(name)&&funcs.at(name).typedResults){parseTypedCall(name);if(cur().kind==Tok::Newline)consume();return;}
   if (!expect(Tok::LParen, "'('")) return;
   std::vector<pd::ValueId> args;
   std::vector<std::pair<std::string, int>> refs;
@@ -1365,7 +1433,8 @@ void Parser::parseCallStmt(const std::string& name) {
         const auto target = savedBitTargets.find(refs[i].first);
         if (target != savedBitTargets.end()) bitTargets[param.name] = {target->second.at(refs[i].second)};
       } else {
-        ctConst[param.name] = *constants[i];
+        if(param.type.kind==pd::TypeKind::Int){if(const auto exact=integerValue(args[i]))cacheInteger(param.name,*exact);else cacheInteger(param.name,static_cast<std::int64_t>(*constants[i]));}
+        else ctConst[param.name] = *constants[i];
         classicals[param.name] = args[i];
         scalarTypes[param.name] = param.type;
         recordScalar(param.name, true);
@@ -1458,7 +1527,8 @@ void Parser::parseAssignStmt(const std::string& name) {
     value=coerce(value,oldType);ctConst.erase(name);scalarTypes[name]=oldType;
   }else{
     if(runtimeDepth){err("runtime branches cannot change compile-time scalar bindings; declare uint[width] for controller arithmetic");return;}
-    if(folded&&std::isfinite(*folded))ctConst[name]=*folded;else ctConst.erase(name);
+    if(const auto exact=integerValue(value))cacheInteger(name,*exact);
+    else if(folded&&std::isfinite(*folded))ctConst[name]=*folded;else ctConst.erase(name);
   }
   classicals[name]=value;recordScalar(name);
   if(cur().kind==Tok::Newline)consume();
@@ -1478,7 +1548,12 @@ void Parser::parseReturnStmt() {
       }
       vs.push_back(getQubitSlot(reg, idx == -1 ? 0 : idx, cur()));
     } else {
-      vs.push_back(parseExpr());
+      const auto expected=vs.size()<activeReturnTypes.size()?std::optional<pd::Type>{activeReturnTypes[vs.size()]}:std::nullopt;
+      const auto previous=unsignedLiteralWidth;if(expected&&expected->kind==pd::TypeKind::UInt)unsignedLiteralWidth=expected->width;
+      auto value=parsePredicate();unsignedLiteralWidth=previous;
+      if(expected&&mod.typeOf(value)!=*expected&&mod.typeOf(value).kind==pd::TypeKind::Int&&(expected->kind==pd::TypeKind::UInt||expected->kind==pd::TypeKind::Bit))value=coerce(value,*expected);
+      if(expected&&expected->kind==pd::TypeKind::Int&&mod.typeOf(value).kind==pd::TypeKind::Bit)value=b.copy(value,pd::intType());
+      vs.push_back(value);
     }
     if (!accept(Tok::Comma)) break;
   }
@@ -1571,6 +1646,16 @@ void Parser::parseStmt() {
       }
       if (cur().kind == Tok::LParen) {
         parseCallStmt(name); return;
+      }
+      if(cur().kind==Tok::Comma){
+        std::vector<std::string> names{name};
+        while(accept(Tok::Comma)){if(cur().kind!=Tok::Identifier){err("tuple assignment requires scalar names");return;}names.push_back(consume().text);}
+        if(!expect(Tok::Equals,"'='"))return;
+        if(cur().kind!=Tok::Identifier||!funcs.count(cur().text)||!funcs.at(cur().text).typedResults){err("tuple assignment requires a typed helper call");return;}
+        const auto helper=consume().text;const auto values=parseTypedCall(helper);
+        if(values.size()!=names.size()){err("helper result arity does not match tuple assignment");return;}
+        for(std::size_t k=0;k<names.size();++k){if(!classicals.count(names[k])||scalarTypes.at(names[k])!=mod.typeOf(values[k])){err("tuple result requires a predeclared scalar with matching type and width");return;}}
+        for(std::size_t k=0;k<names.size();++k){classicals[names[k]]=values[k];ctConst.erase(names[k]);recordScalar(names[k]);}return;
       }
       if (cur().kind == Tok::Equals) {
         consume();

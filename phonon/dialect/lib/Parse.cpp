@@ -111,7 +111,7 @@ struct Cursor {
 std::unordered_map<std::string, OpKind>& mnemonicMap() {
   static std::unordered_map<std::string, OpKind> m;
   if (!m.empty()) return m;
-  for (int k = 0; k <= static_cast<int>(OpKind::Output); ++k) {
+  for (int k = 0; k <= static_cast<int>(OpKind::Continue); ++k) {
     OpKind ok = static_cast<OpKind>(k);
     m[std::string(opMnemonic(ok))] = ok;
   }
