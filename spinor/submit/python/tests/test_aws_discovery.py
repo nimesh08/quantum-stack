@@ -148,3 +148,36 @@ def test_aws_discovery_retired_native_devices_are_not_live_ready():
     record = cloud._aws_device_record(device(capabilities(), status="RETIRED"))
     assert record["capability_verified"] is False
     assert record["readiness"] == "retired"
+
+
+def test_aws_iqm_extension_operations_are_preserved_without_authorizing_feedback():
+    from qstack.models import QStackError
+    from qstack.registry import validate_physical
+    raw = capabilities()
+    raw["paradigm"]["nativeGateSet"] = ["cz", "prx", "cc_prx", "measure_ff", "barrier", "future_extension"]
+    record = cloud._aws_device_record(device(raw, provider_name="IQM"))
+    assert record["native_gates"] == ["cz", "u1q", "barrier"]
+    assert record["advertised_native_operations"] == raw["paradigm"]["nativeGateSet"]
+    assert record["unsupported_native_operations"] == ["cc_prx", "measure_ff", "future_extension"]
+    assert record["raw"] == raw
+    assert record["capability_verified"] is True
+    assert record["supports"] == {"reset": False, "mid_circuit_measure": False, "feedforward": False}
+    feedback = {"schema_version": 1, "num_qubits": 4, "num_clbits": 1, "instructions": [
+        {"op": "if", "clbits": [0], "condition_value": 1},
+        {"op": "u1q", "qubits": [0], "params": [1.0, 0.0]}, {"op": "endif"}]}
+    with pytest.raises(QStackError, match="feedforward"):
+        validate_physical(feedback, record)
+    unsupported = {"schema_version": 1, "num_qubits": 4, "num_clbits": 1,
+                   "instructions": [{"op": "cc_prx", "qubits": [0], "params": [1.0, 0.0]}]}
+    with pytest.raises(QStackError, match="cc_prx"):
+        validate_physical(unsupported, record)
+
+
+@pytest.mark.parametrize("native", [["cc_prx", "measure_ff"], ["future_gate"], ["barrier", "cc_prx"]])
+def test_aws_unknown_or_control_only_native_sets_do_not_enable_compilation(native):
+    raw = capabilities()
+    raw["paradigm"]["nativeGateSet"] = native
+    record = cloud._aws_device_record(device(raw))
+    assert record["capability_verified"] is False
+    assert record["readiness"] == "unavailable"
+    assert record["unsupported_native_operations"] == [name for name in native if name != "barrier"]

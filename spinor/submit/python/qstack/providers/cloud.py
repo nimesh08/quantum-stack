@@ -179,6 +179,16 @@ class AWSAdapter(Adapter):
         return {"job_id": receipt.job_id, "cancellation_requested": True, "provider_response": plain(result)}
 
 
+# Compiler mnemonics accepted by the native registry (plus its barrier fence).
+# Discovery may advertise provider extensions that require a separate contract;
+# they must not become compiler operations or implicitly enable feed-forward.
+_AWS_COMPILER_NATIVE_GATES = frozenset({
+    "h", "x", "y", "z", "s", "sdg", "t", "tdg", "rx", "ry", "rz",
+    "cx", "cz", "swap", "move", "ecr", "ms", "rzz", "rxx", "sx", "sxdg",
+    "phased_xz", "sqrt_iswap", "sqrt_iswap_inv", "syc", "iswap", "gpi", "gpi2", "u1q", "barrier",
+})
+
+
 def _aws_device_record(device):
     # Braket's capability schemas currently inherit Pydantic v1, which has
     # .json() rather than .model_dump(). Decode only this public capability
@@ -196,6 +206,16 @@ def _aws_device_record(device):
     valid_count = type(reported_count) is int and reported_count > 0
     native = paradigm.get("nativeGateSet")
     native = native if isinstance(native, list) and all(isinstance(g, str) and g for g in native) else []
+    aliases = {"zz": "rzz", "xx": "rxx", "prx": "u1q"}
+    supported_native, unsupported_native = [], []
+    for advertised in native:
+        canonical = aliases.get(advertised.lower(), advertised.lower())
+        if canonical in _AWS_COMPILER_NATIVE_GATES:
+            if canonical not in supported_native:
+                supported_native.append(canonical)
+        else:
+            unsupported_native.append(advertised)
+    has_native_gate = any(g != "barrier" for g in supported_native)
     connection = paradigm.get("connectivity")
     connection = connection if isinstance(connection, dict) else {}
     fully_connected = connection.get("fullyConnected") is True
@@ -235,15 +255,15 @@ def _aws_device_record(device):
     pragmas = qasm.get("supportedPragmas") if qasm is not None else None
     verbatim = isinstance(pragmas, list) and "verbatim" in pragmas
     status = str(plain(getattr(device, "status", "")))
-    verified = bool(native and valid_graph and verbatim and status != "RETIRED")
+    verified = bool(has_native_gate and valid_graph and verbatim and status != "RETIRED")
     if status == "RETIRED":
         readiness, reason = "retired", "AWS identifies this device as retired."
-    elif not native or not verbatim:
-        readiness, reason = "unavailable", "Device does not advertise the native gate-model OpenQASM/verbatim contract required by this route."
+    elif not has_native_gate or not verbatim:
+        readiness, reason = "unavailable", "Device does not advertise a compiler-supported native gate-model OpenQASM/verbatim contract required by this route."
     elif not valid_graph:
         readiness, reason = "needs_refresh", "Device native connectivity or available-qubit metadata is missing or inconsistent."
     else:
-        readiness, reason = "discovered", "Native capabilities were read from Braket GetDevice metadata."
+        readiness, reason = "discovered", "Compiler-supported native capabilities were read from Braket GetDevice metadata; provider extensions remain unsupported."
     provider_name = str(getattr(device, "provider_name", "")).strip().lower()
     vendor = provider_name if provider_name in {"ionq", "rigetti", "iqm", "oqc", "aqt"} else ""
     resource = device.arn.split(":", 5)[-1].split("/")
@@ -252,7 +272,9 @@ def _aws_device_record(device):
     classification = {"QPU": "hardware", "SIMULATOR": "simulator"}.get(str(plain(getattr(device, "type", ""))))
     return {"route": "aws", "device": device.arn, "vendor": vendor, "device_status": status,
         "qubits": qubits, "reported_qubit_count": reported_count,
-        "available_qubits": available, "native_gates": [{"zz": "rzz", "xx": "rxx", "prx": "u1q"}.get(g.lower(), g.lower()) for g in native],
+        "available_qubits": available, "native_gates": supported_native,
+        "advertised_native_operations": native, "unsupported_native_operations": unsupported_native,
+        "native_gate_scope": "compiler-supported-subset",
         "coupling": coupling, "all_to_all": fully_connected, "directed_connectivity": False,
         "supports": {"reset": False, "mid_circuit_measure": False, "feedforward": False},
         "formats": ["openqasm3"] if qasm is not None else [], "parameter_units": "radians",
