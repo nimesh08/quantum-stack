@@ -3,9 +3,8 @@
 # C++ ingester ("photonc-cxx") for Phase C M5.
 #
 # The self-hosted path (recursive-descent over a small C++ subset) is
-# always built. The LibTooling path is wired but only built when
-# `find_package(Clang)` succeeds (currently a Phase D follow-up: no
-# system Clang on the build host).
+# always built. Optional LibTooling libraries are linked only when
+# the caller explicitly selects a Clang package with Clang_DIR.
 
 add_library(photon_cppfront STATIC
   lib/Ingest.cpp
@@ -27,8 +26,10 @@ target_link_libraries(photonc-cxx PRIVATE
 target_compile_features(photonc-cxx PRIVATE cxx_std_20)
 
 # Optional LibTooling integration: attempt only when Clang_DIR is
-# explicitly provided.
-if(DEFINED Clang_DIR OR DEFINED LLVM_DIR)
+# explicitly provided. A normal top-level LLVM lookup creates LLVM_DIR
+# even when LLVM is absent; it must not opt into unrelated system Clang
+# packages, which may contain only a subset of the development libraries.
+if(Clang_DIR)
   find_package(Clang QUIET CONFIG)
   if(Clang_FOUND)
     message(STATUS "photon: Clang found; LibTooling path enabled")

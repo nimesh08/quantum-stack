@@ -45,6 +45,12 @@ def test_discovered_snapshot_to_native_artifact_to_real_simulation(route, vendor
     result = submit_artifact(artifact, SubmissionOptions(mode="local", shots=64), wait=True)
     assert set(result.counts) == ({"1"} if single else {"00", "11"})
     assert sum(result.counts.values()) == 64
+    assert result.metadata["measurement_mapping"] == artifact.physical_ir["measurement_mapping"]
+    assert result.metadata["artifact_hash"] == artifact.manifest["artifact_hash"]
+    from qstack.jobs import load_job
+    saved_receipt, saved_result = load_job(result.job_id)
+    assert saved_receipt.metadata["measurement_mapping"] == result.metadata["measurement_mapping"]
+    assert saved_result.to_dict() == result.to_dict()
     if route == "aws":
         assert "#pragma braket verbatim" in artifact.program_text()
         assert artifact.program_text().rfind("measure") > artifact.program_text().rfind("}")

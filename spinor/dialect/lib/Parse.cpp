@@ -10,7 +10,9 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <locale>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -117,9 +119,13 @@ class Lexer {
     }
     if (pos_ == start) return std::nullopt;
     double v = 0.0;
-    auto r =
-        std::from_chars(src_.data() + start, src_.data() + pos_, v);
-    if (r.ec != std::errc{}) {
+    // Apple libc++ shipped without floating-point from_chars through Xcode
+    // 15. Use the classic locale explicitly so IR decimals remain portable
+    // and are not interpreted using the user's decimal separator.
+    std::istringstream input(std::string(src_.substr(start, pos_ - start)));
+    input.imbue(std::locale::classic());
+    if (!(input >> std::noskipws >> v) || input.peek() != std::char_traits<char>::eof() ||
+        !std::isfinite(v)) {
       pos_ = start;
       return std::nullopt;
     }

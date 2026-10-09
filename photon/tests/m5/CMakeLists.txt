@@ -22,9 +22,11 @@ target_include_directories(photon_m5_photonc_cli_test PRIVATE
   ${CMAKE_SOURCE_DIR}/spinor/tests/support
 )
 target_compile_features(photon_m5_photonc_cli_test PRIVATE cxx_std_20)
+target_link_libraries(photon_m5_photonc_cli_test PRIVATE qs::common_cli)
 target_compile_definitions(photon_m5_photonc_cli_test PRIVATE
-  PHOTON_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/photon/tests/corpus"
   PHOTONC_CLI="$<TARGET_FILE:photonc-cxx>")
 add_dependencies(photon_m5_photonc_cli_test photonc-cxx)
 add_test(NAME photon_m5_photonc_cli_test COMMAND photon_m5_photonc_cli_test)
-set_tests_properties(photon_m5_photonc_cli_test PROPERTIES LABELS "photon_M5")
+set_tests_properties(photon_m5_photonc_cli_test PROPERTIES
+  LABELS "photon_M5"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/photon/tests/corpus/cpp")

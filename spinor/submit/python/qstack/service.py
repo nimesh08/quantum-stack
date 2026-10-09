@@ -211,9 +211,14 @@ def _execute_local(artifact: CompiledArtifact, options: SubmissionOptions, confi
     if not isinstance(counts, dict) or any(type(v) is not int or v < 0 for v in counts.values()) or sum(counts.values()) != options.shots:
         raise QStackError("Local simulator returned an invalid histogram", "SIMULATION_FAILED")
     job_id = "local-" + uuid.uuid4().hex
-    receipt = JobReceipt(artifact.route, artifact.target, job_id, artifact_hash=artifact_hash(artifact), mode="local")
+    metadata = {"mode": "local", "bit_order": "c[n-1]...c[0]", "artifact_hash": artifact_hash(artifact),
+                "num_clbits": artifact.physical_ir["num_clbits"],
+                "measurement_mapping": artifact.physical_ir.get("measurement_mapping", []),
+                "logical_to_physical": artifact.physical_ir.get("logical_to_physical", [])}
+    receipt = JobReceipt(artifact.route, artifact.target, job_id, metadata=dict(metadata),
+                         artifact_hash=metadata["artifact_hash"], mode="local")
     return receipt, ExecutionResult(artifact.route, artifact.target, job_id, counts, data,
-                                   {"mode": "local", "bit_order": "c[n-1]...c[0]"})
+                                   metadata)
 
 
 def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, config: dict | None = None,
@@ -239,8 +244,12 @@ def submit_artifact(artifact: CompiledArtifact, options: SubmissionOptions, conf
         if not path.is_file():
             raise QStackError("No matching cassette fixture", "CASSETTE_MISSING")
         raw = json.loads(path.read_text())
-        receipt = JobReceipt(artifact.route, artifact.target, "cassette-" + uuid.uuid4().hex, mode="cassette")
-        result = ExecutionResult(artifact.route, artifact.target, receipt.job_id, None, raw, {"mode": "cassette", "fixture": options.name})
+        metadata = {"mode": "cassette", "fixture": options.name, "artifact_hash": artifact_hash(artifact),
+                    "num_clbits": artifact.physical_ir["num_clbits"],
+                    "measurement_mapping": artifact.physical_ir.get("measurement_mapping", [])}
+        receipt = JobReceipt(artifact.route, artifact.target, "cassette-" + uuid.uuid4().hex,
+                             metadata=dict(metadata), artifact_hash=metadata["artifact_hash"], mode="cassette")
+        result = ExecutionResult(artifact.route, artifact.target, receipt.job_id, None, raw, metadata)
         save_job(receipt, result)
         return result if wait else receipt
     ensure_live_target(artifact.target_snapshot)
