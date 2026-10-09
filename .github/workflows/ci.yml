@@ -91,6 +91,7 @@ jobs:
           spinor/submit/python/tests/test_sdk_qibolab_contracts.py
           spinor/submit/python/tests/test_sdk_verification.py
           spinor/submit/python/tests/test_artifact_submission_verification.py
+          spinor/submit/python/tests/test_aws_discovery.py
           spinor/submit/python/tests/test_provider_contracts.py
           spinor/submit/python/tests/test_provider_serialization.py
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 from qstack.models import QStackError
@@ -107,32 +108,7 @@ class AWSAdapter(Adapter):
 
     def discover(self):
         sdk = optional("braket.aws", "aws")
-        records = []
-        for device in sdk.AwsDevice.get_devices(aws_session=self.session()):
-            raw = plain(device.properties)
-            paradigm = raw.get("paradigm", {})
-            native = paradigm.get("nativeGateSet", [])
-            connection = paradigm.get("connectivity", {})
-            coupling = [[int(a), int(b)] for a, bs in connection.get("connectivityGraph", {}).items() for b in bs]
-            provider_name = str(getattr(device, "provider_name", "")).strip().lower()
-            vendor = provider_name if provider_name in {"ionq", "rigetti", "iqm", "oqc", "aqt"} else ""
-            # Braket device ARNs identify the hardware vendor independently of
-            # the AWS transport route. Never guess it from a device nickname.
-            resource = device.arn.split(":", 5)[-1].split("/")
-            if not vendor and len(resource) == 4 and resource[:2] == ["device", "qpu"] and resource[2] in {"ionq", "rigetti", "iqm", "oqc", "aqt"}:
-                vendor = resource[2]
-            # SDK metadata, not ARN/name heuristics, establishes execution type.
-            device_type = str(getattr(device, "type", ""))
-            classification = {"QPU": "hardware", "SIMULATOR": "simulator"}.get(device_type)
-            records.append({"route": self.route, "device": device.arn, "vendor": vendor, "qubits": paradigm.get("qubitCount"),
-                "native_gates": [{"zz": "rzz", "xx": "rxx", "prx": "u1q"}.get(g.lower(), g.lower()) for g in native], "coupling": coupling,
-                "all_to_all": connection.get("fullyConnected", False), "directed_connectivity": False,
-                "supports": {"reset": False, "mid_circuit_measure": False, "feedforward": False},
-                "formats": ["openqasm3"], "parameter_units": "radians",
-                "capability_verified": bool(native and connection), "raw": raw,
-                **({"execution_kind": classification, "execution_kind_verified": True,
-                    "execution_kind_source": "Braket AwsDevice.type"} if classification else {})})
-        return records
+        return [_aws_device_record(device) for device in sdk.AwsDevice.get_devices(aws_session=self.session())]
 
     def estimate(self, artifact, options):
         self.validate(artifact, options)
@@ -201,6 +177,89 @@ class AWSAdapter(Adapter):
     def cancel(self, receipt):
         result = self.task(receipt).cancel()
         return {"job_id": receipt.job_id, "cancellation_requested": True, "provider_response": plain(result)}
+
+
+def _aws_device_record(device):
+    # Braket's capability schemas currently inherit Pydantic v1, which has
+    # .json() rather than .model_dump(). Decode only this public capability
+    # object; generic plain() must never serialize arbitrary client objects.
+    properties = getattr(device, "properties", None)
+    try:
+        raw = (json.loads(properties.json()) if hasattr(properties, "json")
+               and not hasattr(properties, "model_dump") else plain(properties))
+    except (TypeError, ValueError):
+        raw = None
+    raw = raw if isinstance(raw, dict) else {}
+    paradigm = raw.get("paradigm")
+    paradigm = paradigm if isinstance(paradigm, dict) else {}
+    reported_count = paradigm.get("qubitCount")
+    valid_count = type(reported_count) is int and reported_count > 0
+    native = paradigm.get("nativeGateSet")
+    native = native if isinstance(native, list) and all(isinstance(g, str) and g for g in native) else []
+    connection = paradigm.get("connectivity")
+    connection = connection if isinstance(connection, dict) else {}
+    fully_connected = connection.get("fullyConnected") is True
+    graph = connection.get("connectivityGraph", {})
+    nodes, edges = set(), set()
+    valid_graph = isinstance(graph, dict)
+    if valid_graph:
+        try:
+            for source, destinations in graph.items():
+                if not str(source).isdigit() or not isinstance(destinations, list):
+                    raise ValueError
+                source = int(source)
+                nodes.add(source)
+                for destination in destinations:
+                    if not str(destination).isdigit():
+                        raise ValueError
+                    destination = int(destination)
+                    nodes.add(destination)
+                    edges.add((source, destination))
+        except (TypeError, ValueError):
+            valid_graph = False
+    # qubitCount is the number of available qubits, not the largest address.
+    # Rigetti may omit disabled addresses; IQM's physical addresses start at 1.
+    valid_graph = (valid_graph and valid_count and type(connection.get("fullyConnected")) is bool
+                   and (len(nodes) == reported_count if nodes else fully_connected))
+    if valid_graph:
+        available = sorted(nodes) if nodes else list(range(reported_count))
+        qubits = available[-1] + 1
+        coupling = [list(edge) for edge in sorted(edges)]
+    else:
+        available, coupling = [], []
+        qubits = reported_count if valid_count else None
+    actions = raw.get("action")
+    actions = actions if isinstance(actions, dict) else {}
+    qasm = actions.get("braket.ir.openqasm.program")
+    qasm = qasm if isinstance(qasm, dict) else None
+    pragmas = qasm.get("supportedPragmas") if qasm is not None else None
+    verbatim = isinstance(pragmas, list) and "verbatim" in pragmas
+    status = str(plain(getattr(device, "status", "")))
+    verified = bool(native and valid_graph and verbatim and status != "RETIRED")
+    if status == "RETIRED":
+        readiness, reason = "retired", "AWS identifies this device as retired."
+    elif not native or not verbatim:
+        readiness, reason = "unavailable", "Device does not advertise the native gate-model OpenQASM/verbatim contract required by this route."
+    elif not valid_graph:
+        readiness, reason = "needs_refresh", "Device native connectivity or available-qubit metadata is missing or inconsistent."
+    else:
+        readiness, reason = "discovered", "Native capabilities were read from Braket GetDevice metadata."
+    provider_name = str(getattr(device, "provider_name", "")).strip().lower()
+    vendor = provider_name if provider_name in {"ionq", "rigetti", "iqm", "oqc", "aqt"} else ""
+    resource = device.arn.split(":", 5)[-1].split("/")
+    if not vendor and len(resource) == 4 and resource[:2] == ["device", "qpu"]:
+        vendor = resource[2]
+    classification = {"QPU": "hardware", "SIMULATOR": "simulator"}.get(str(plain(getattr(device, "type", ""))))
+    return {"route": "aws", "device": device.arn, "vendor": vendor, "device_status": status,
+        "qubits": qubits, "reported_qubit_count": reported_count,
+        "available_qubits": available, "native_gates": [{"zz": "rzz", "xx": "rxx", "prx": "u1q"}.get(g.lower(), g.lower()) for g in native],
+        "coupling": coupling, "all_to_all": fully_connected, "directed_connectivity": False,
+        "supports": {"reset": False, "mid_circuit_measure": False, "feedforward": False},
+        "formats": ["openqasm3"] if qasm is not None else [], "parameter_units": "radians",
+        "capability_verified": verified, "readiness": readiness, "readiness_reason": reason,
+        "capability_sources": ["Braket GetDevice deviceCapabilities"], "raw": raw,
+        **({"execution_kind": classification, "execution_kind_verified": True,
+            "execution_kind_source": "Braket AwsDevice.type"} if classification else {})}
 
 
 class GoogleAdapter(Adapter):
