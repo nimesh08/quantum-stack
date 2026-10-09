@@ -239,6 +239,24 @@ bool loadOneChip(const fs::path& file, const fs::path& topologiesDir,
     };
     indices("computational_qubits", out.computationalQubits);
     indices("resonator_qubits", out.resonatorQubits);
+    if (n.has("available_qubits")) {
+      out.availableQubits.emplace();
+      indices("available_qubits", *out.availableQubits);
+    }
+    indices("unavailable_qubits", out.unavailableQubits);
+    if (n.has("single_qubit_gate_loci")) {
+      for (const auto& [gate, values] : n.at("single_qubit_gate_loci").asMap()) {
+        if (!knownNativeGates().contains(gate) && gate != "measure" && gate != "reset")
+          throw std::runtime_error("unknown single-qubit operation locus: " + gate);
+        auto& destination = out.singleQubitGateLoci[gate];
+        std::set<int> unique;
+        for (const auto& value : values.asArray()) {
+          int index = componentIndex(value);
+          if (!unique.insert(index).second) throw std::runtime_error("duplicate single-qubit operation locus");
+          destination.push_back(index);
+        }
+      }
+    }
     auto operationLoci = [&](const char* key, auto& destination) {
       if (!n.has(key)) return;
       std::set<std::pair<int,int>> unique;

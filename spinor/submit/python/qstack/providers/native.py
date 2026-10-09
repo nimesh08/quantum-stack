@@ -189,6 +189,22 @@ def validate_qiskit_target(ir, target):
                               "TARGET_INCOMPATIBLE")
 
 
+def cirq_measurement_keys(ir):
+    """Give every readout a stable key, retaining final-write classical semantics."""
+    occurrences, mapping = {}, []
+    for item in ir.get("instructions", []):
+        if item.get("op", "").lower() != "measure":
+            continue
+        bits = item.get("clbits", [])
+        if len(bits) != 1:
+            raise QStackError("Each physical measurement must map one qubit to one classical bit")
+        bit = bits[0]
+        occurrence = occurrences.get(bit, 0)
+        mapping.append({"key": f"c{bit}" + (f"__{occurrence}" if occurrence else ""), "clbit": bit})
+        occurrences[bit] = occurrence + 1
+    return mapping
+
+
 def cirq_circuit(artifact, config, *, module=None):
     cirq = module or optional("cirq", "google")
     ir = artifact.physical_ir
@@ -210,6 +226,7 @@ def cirq_circuit(artifact, config, *, module=None):
             raise QStackError("Google qubit_labels must contain [row,column] or 'row_column'")
     circuit = cirq.Circuit()
     operations = []
+    measurement_keys = iter(cirq_measurement_keys(ir))
     for index, item in enumerate(instructions(ir)):
         op = item["op"].lower()
         qs = [qubits[q] for q in item.get("qubits", [])]
@@ -217,7 +234,7 @@ def cirq_circuit(artifact, config, *, module=None):
         if op == "measure":
             if len(qs) != 1 or len(item.get("clbits", [])) != 1:
                 raise QStackError("Each physical measurement must map one qubit to one classical bit")
-            gate = cirq.measure(qs[0], key=f"c{item['clbits'][0]}")
+            gate = cirq.measure(qs[0], key=next(measurement_keys)["key"])
         elif op == "rz" and len(p) == len(qs) == 1:
             gate = cirq.rz(p[0])(qs[0])
         elif op == "u1q" and len(p) == 2 and len(qs) == 1:

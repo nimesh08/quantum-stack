@@ -749,6 +749,17 @@ def test_cirq_direct_serializer_rejects_label_override_before_construction():
     value.target_snapshot["qubit_labels"] = ["0_0", "0_1"]
     with pytest.raises(QStackError, match="physical mapping"):
         native.cirq_circuit(value, {"qubit_labels": ["0_1", "0_0"]}, module=NS())
+
+
+def test_google_counts_require_actual_joint_binary_records():
+    from qstack.providers.cloud import _google_counts
+    metadata = {"num_clbits": 3, "shots": 2,
+        "measurement_keys": [{"key": "a", "clbit": 2}, {"key": "b", "clbit": 0}]}
+    assert _google_counts({"a": [[[1]], [[0]]], "b": [[[0]], [[1]]]}, metadata) == {"100": 1, "001": 1}
+    assert _google_counts({"a": [[[0.1]], [[0.9]]], "b": [[[0]], [[1]]]}, metadata) is None
+    assert _google_counts({"a": [[[1]], [[0]]], "b": [[[0]]]}, metadata) is None
+    assert _google_counts({"a": [[[1]], [[0]]]}, metadata) is None
+    assert _google_counts({"a": [[[1]], [[0]]], "b": [[[0]], [[1]]]}, {**metadata, "shots": 3}) is None
 def test_standalone_result_retains_readout_mapping_without_credential_context():
     from qstack.models import JobReceipt
     from qstack.providers.base import Adapter

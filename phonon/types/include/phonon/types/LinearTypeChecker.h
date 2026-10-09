@@ -15,9 +15,10 @@ struct Options {
   // (no gate uses it; no measure / reset). Default: emit a
   // warning. Set to false to silence.
   bool warnImplicitDiscard = true;
-  // Honour the W4 relaxation: when true, a `reset` after a
-  // measure restores the qubit for further gate use. When false,
-  // any post-measure use is rejected.
+  // A supported mid-circuit measurement leaves the projected quantum state
+  // available on its original wire. Reset is optional and changes that state
+  // to |0>; it must never be inserted merely to satisfy the type checker.
+  // Target capability validation separately rejects unsupported operations.
   bool midCircuitMeasure = true;
 };
 

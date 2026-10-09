@@ -16,7 +16,7 @@ using namespace dialect;
 using namespace la;
 using namespace twoq;
 constexpr double pi=std::numbers::pi;
-constexpr double zeroTolerance=2e-11;
+constexpr double zeroTolerance=kRecognitionTolerance;
 
 Mat4 magicBasis() {
   Mat4 m;const double s=1/std::sqrt(2.0);const cdbl is(0,s);
@@ -112,8 +112,12 @@ Cartan cartan(const Mat4& input,bool parametric) {
       for(int r=0;r<4;++r)for(int c=0;c<4;++c)left(r,c)/=roots[c];
       double imaginary=0;for(auto value:left.e)imaginary=std::max(imaginary,std::abs(value.imag()));
       if(imaginary>2e-9)continue;
-      auto after=tensorFactors(mul4(magic,mul4(left,adjoint(magic))));
-      auto before=tensorFactors(mul4(magic,mul4(transpose(v),adjoint(magic))));
+      // These are the already-local SO(4) factors from the Cartan solver,
+      // not a decision to remove the input's nonlocal interaction. Retain
+      // the reconstruction residual allowance here; the initial local-only
+      // shortcut below uses tensorFactors' strict machine-roundoff default.
+      auto after=tensorFactors(mul4(magic,mul4(left,adjoint(magic))),1e-9);
+      auto before=tensorFactors(mul4(magic,mul4(transpose(v),adjoint(magic))),1e-9);
       best={before.first,before.second,after.first,after.second,x,y,z};
       bestScore=score;found=true;
     }

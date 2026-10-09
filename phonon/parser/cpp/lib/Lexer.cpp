@@ -92,27 +92,21 @@ Token Lexer::readNumber(char first) {
     get();
   }
   bool sawDot = false;
-  while (pos_ < src_.size()) {
-    char c = src_[pos_];
-    if (std::isdigit(static_cast<unsigned char>(c))) {
-      num.push_back(c);
-      get();
-    } else if (c == '.' && !sawDot) {
-      // Lookahead: ".." is the range operator, not a decimal point.
-      if (pos_ + 1 < src_.size() && src_[pos_ + 1] == '.') break;
-      sawDot = true;
-      num.push_back(c);
-      get();
-    } else if (c == 'e' || c == 'E') {
-      num.push_back(c);
-      get();
-      if (peek() == '+' || peek() == '-') {
-        num.push_back(get());
-      }
-    } else break;
+  bool sawExponent = false, valid = true;
+  while (std::isdigit(static_cast<unsigned char>(peek()))) num.push_back(get());
+  // ".." is the range operator, not a decimal point.
+  if (peek() == '.' && peek(1) != '.') {
+    sawDot = true; num.push_back(get());
+    while (std::isdigit(static_cast<unsigned char>(peek()))) num.push_back(get());
+  }
+  if (peek() == 'e' || peek() == 'E') {
+    sawExponent = true; num.push_back(get());
+    if (peek() == '+' || peek() == '-') num.push_back(get());
+    valid = std::isdigit(static_cast<unsigned char>(peek())) != 0;
+    while (std::isdigit(static_cast<unsigned char>(peek()))) num.push_back(get());
   }
   t.text = num;
-  t.kind = sawDot ? Tok::Real : Tok::Integer;
+  t.kind = !valid ? Tok::Invalid : (sawDot || sawExponent) ? Tok::Real : Tok::Integer;
   return t;
 }
 
@@ -121,6 +115,25 @@ std::vector<Token> Lexer::tokenize() {
   while (pos_ < src_.size()) {
     char c = peek();
     if (c == ' ' || c == '\t' || c == '\r') { get(); continue; }
+    if (c == '"') {
+      Token t; t.kind = Tok::String; t.line = line_; t.column = col_;
+      get();
+      bool closed = false;
+      while (pos_ < src_.size()) {
+        char value = get();
+        if (value == '"') { closed = true; break; }
+        if (value == '\n' || value == '\r') { t.kind = Tok::Invalid; break; }
+        if (value == '\\') {
+          if (pos_ >= src_.size()) break;
+          value = get();
+          if (value != '"' && value != '\\' && value != '/') t.kind = Tok::Invalid;
+        }
+        t.text.push_back(value);
+      }
+      if (!closed) t.kind = Tok::Invalid;
+      out.push_back(std::move(t));
+      continue;
+    }
     if (c == ';') { skipLineComment(); continue; }
     if (c == '/' && peek(1) == '/') { get(); get(); skipLineComment(); continue; }
     if (c == '\n') {
@@ -200,12 +213,10 @@ std::vector<Token> Lexer::tokenize() {
       case '+': t.kind = Tok::Plus;     break;
       case '*': t.kind = Tok::Star;     break;
       case '/': t.kind = Tok::Slash;    break;
-      default:  t.kind = Tok::Eof;      break;
+      default:  t.kind = Tok::Invalid;  break;
     }
     get();
-    if (t.kind != Tok::Eof) {
-      out.push_back(std::move(t));
-    }
+    out.push_back(std::move(t));
   }
   Token end; end.kind = Tok::Eof; end.line = line_; end.column = col_;
   out.push_back(std::move(end));

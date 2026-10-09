@@ -54,6 +54,11 @@ struct ChipInfo {
   std::vector<int> resonatorQubits;
   std::vector<std::pair<int, int>> moveLoci;  // always (qubit, resonator)
   std::vector<std::pair<int, int>> czLoci;    // preserve advertised operand order
+  // Discovery can expose sparse/disabled physical slots. Missing availability
+  // means all slots; an explicitly empty list means no usable hardware.
+  std::optional<std::vector<int>> availableQubits;
+  std::vector<int> unavailableQubits;
+  std::map<std::string, std::vector<int>> singleQubitGateLoci;
 
   // Either an all-to-all chip OR an explicit edge list.
   bool allToAll = false;

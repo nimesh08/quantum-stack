@@ -49,6 +49,9 @@ struct Lowerer {
   bool returning = false;
   std::size_t expandedIterations = 0;
   std::size_t nextAnonymousBit = 0;
+  std::size_t runtimeDepth = 0;
+  std::unordered_map<std::uint32_t, std::size_t> quantumWire;
+  std::vector<sd::ValueId> wireValue;
 
   Lowerer(const pd::Module& m,
           const spinor::verify::TargetInfo* t)
@@ -138,6 +141,10 @@ struct Lowerer {
   void emitSpinorOp(pd::OpId pid) {
     const pd::Op& op = src.op(pid);
     sd::OpKind sk = pd::toSpinorKind(op.kind);
+    if (runtimeDepth && (sk == sd::OpKind::AllocQubit || sk == sd::OpKind::AllocBit)) {
+      diag.error("runtime branches cannot allocate or redeclare registers; declare the register before the branch", op.loc);
+      return;
+    }
     sd::Op sop;
     sop.kind = sk;
     for (pd::ValueId v : op.operands) {
@@ -145,6 +152,7 @@ struct Lowerer {
       if (type == pd::TypeKind::Qubit || type == pd::TypeKind::Bit)
         sop.operands.push_back(mapValue(v));
     }
+    if (diag.hasErrors()) return;
     // Copy attributes: only "angle" / "theta" / "phi" carry to spinor.*
     for (const auto& a : op.attributes) {
       if (a.name == "angle" || a.name == "theta" || a.name == "phi" || a.name == "clbit") {
@@ -201,6 +209,13 @@ struct Lowerer {
       outResults.push_back(v);
       live.results.push_back(v);
     }
+    for (int k = 0; k < qResults; ++k) {
+      const auto wire = sk == sd::OpKind::AllocQubit ? wireValue.size()
+          : quantumWire.at(live.operands.at(k).v);
+      quantumWire[outResults[k].v] = wire;
+      if (wire == wireValue.size()) wireValue.push_back(outResults[k]);
+      else wireValue[wire] = outResults[k];
+    }
     // Map Phonon results to the freshly emitted Spinor results.
     for (std::size_t k = 0; k < op.results.size() && k < outResults.size(); ++k) {
       vmap[op.results[k].v] = outResults[k];
@@ -219,6 +234,43 @@ struct Lowerer {
       if (!n.empty() && n[0] == '%') n = n.substr(1);
       if (!n.empty() && n.find('?') == std::string::npos) {
         out.setName(outResults[k], n);
+      }
+    }
+  }
+
+  // The source builders thread mutable register slots through both branches.
+  // If a predicate is constant (also possible for a bit compared with -1/2),
+  // skipped producers still name those same slots in the retained branch and
+  // in following code. Resolve their identities without applying their gates.
+  void aliasSkippedRange(std::uint32_t lo, std::uint32_t hi) {
+    for (std::uint32_t i = lo; i < hi && !diag.hasErrors(); ++i) {
+      const auto& op = src.op(pd::OpId{i});
+      if (op.kind == pd::OpKind::AllocQubit || op.kind == pd::OpKind::AllocBit) {
+        diag.error("conditional branches cannot allocate or redeclare registers; declare the register before the branch", op.loc);
+        return;
+      }
+      if (op.kind == pd::OpKind::Measure) {
+        std::optional<std::size_t> destination;
+        for (const auto& attr : op.attributes) if (attr.name == "clbit")
+          destination = static_cast<std::size_t>(std::get<double>(attr.value));
+        if (destination) for (const auto& [_, value] : vmap) {
+          if (out.typeOf(value).kind == sd::TypeKind::Bit && sd::classicalIndex(out, value) == *destination) {
+            for (auto result : op.results) vmap[result.v] = value;
+            break;
+          }
+        }
+        continue;
+      }
+      if (!pd::isSpinorKind(op.kind) && op.kind != pd::OpKind::Call) continue;
+      std::vector<pd::ValueId> operands;
+      for (auto operand : op.operands) if (src.typeOf(operand).kind == pd::TypeKind::Qubit)
+        operands.push_back(operand);
+      std::size_t slot = 0;
+      for (auto result : op.results) if (src.typeOf(result).kind == pd::TypeKind::Qubit) {
+        if (slot >= operands.size()) {
+          diag.error("untaken branch requires unsupported quantum value merging", op.loc); return;
+        }
+        vmap[result.v] = mapValue(operands[slot++]);
       }
     }
   }
@@ -287,6 +339,10 @@ struct Lowerer {
           ++i; break;
         }
         case pd::OpKind::Assign: {
+          if (op.operands.size() == 1 && src.typeOf(op.operands[0]).kind == pd::TypeKind::Bit) {
+            diag.error("copying measured data into a scalar is unsupported; use a separate measurement destination", op.loc);
+            return;
+          }
           // Re-bind classical name; if rhs has ct value, propagate.
           if (op.operands.size() == 1) {
             auto it = ctMap.find(op.operands[0].v);
@@ -329,6 +385,7 @@ struct Lowerer {
           }
           // Save vmap entries for params so we can restore after inlining.
           std::vector<std::pair<std::uint32_t, std::optional<sd::ValueId>>> savedV;
+          std::vector<std::size_t> argumentWires;
           auto savedCt = ctMap;
           for (std::size_t k = 0; k < fr.paramValues.size() &&
                                    k < op.operands.size(); ++k) {
@@ -346,6 +403,8 @@ struct Lowerer {
               ctMap[pv] = value->second;
             } else {
               vmap[pv] = mapValue(op.operands[k]);
+              if (fr.paramTypes[k].kind == pd::TypeKind::Qubit)
+                argumentWires.push_back(quantumWire.at(vmap[pv].v));
             }
           }
           // Inline the body. Track "return values" produced by a
@@ -371,6 +430,44 @@ struct Lowerer {
           returning = false;
           callStack.pop_back();
           ctMap = std::move(savedCt);
+          std::vector<std::size_t> returnedWires;
+          for (auto value : returnValues) {
+            if (out.typeOf(value).kind != sd::TypeKind::Qubit) {
+              diag.error("function must return qubit values: " + name, op.loc); return;
+            }
+            const auto wire = quantumWire.at(value.v);
+            if (std::find(returnedWires.begin(), returnedWires.end(), wire) != returnedWires.end()) {
+              diag.error("function cannot return duplicate qubit aliases: " + name, op.loc); return;
+            }
+            returnedWires.push_back(wire);
+          }
+          if (runtimeDepth && returnValues.size() == argumentWires.size()) {
+            // Represent conditional return aliases as actual state transfers,
+            // leaving caller slot identities invariant across the branch join.
+            auto stateAt = argumentWires;
+            for (auto wire : returnedWires)
+              if (std::find(argumentWires.begin(), argumentWires.end(), wire) == argumentWires.end()) {
+                diag.error("runtime function return must be a permutation of its input qubits; fresh-wire substitution needs branch value merging", op.loc);
+                return;
+              }
+            for (std::size_t k = 0; k < stateAt.size(); ++k) {
+              auto found = std::find(stateAt.begin() + k, stateAt.end(), returnedWires[k]);
+              const auto j = static_cast<std::size_t>(found - stateAt.begin());
+              if (k == j) continue;
+              const auto a = argumentWires[k], b_ = argumentWires[j];
+              auto swapped = b.swap(wireValue[a], wireValue[b_], op.loc);
+              quantumWire[swapped.first.v] = a; quantumWire[swapped.second.v] = b_;
+              wireValue[a] = swapped.first; wireValue[b_] = swapped.second;
+              for (auto& [_, value] : vmap) if (out.typeOf(value).kind == sd::TypeKind::Qubit) {
+                const auto wire = quantumWire.at(value.v);
+                if (wire == a) value = swapped.first;
+                else if (wire == b_) value = swapped.second;
+              }
+              std::swap(stateAt[k], stateAt[j]);
+            }
+            returnValues.clear();
+            for (auto wire : argumentWires) returnValues.push_back(wireValue[wire]);
+          }
           // Bind call results to the returned values, in order
           // (qubit results only).
           std::size_t rk = 0;
@@ -462,17 +559,27 @@ struct Lowerer {
               throw std::runtime_error("unsupported classical predicate");
             };
             bool zero=evaluate(0),one=evaluate(1);
-            if(zero==one){if(one)emitRange(bodyStart,bodyStart+thenCount);else emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
+            if(zero==one){
+              if(one){emitRange(bodyStart,bodyStart+thenCount);aliasSkippedRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
+              else{aliasSkippedRange(bodyStart,bodyStart+thenCount);emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
+            }
             else {
               b.beginIf(sd::classicalIndex(out,mapped->second),one,op.loc);
+              ++runtimeDepth;
               emitRange(bodyStart,bodyStart+thenCount);
               if(returning){diag.error("conditional return requires explicit control-flow return lowering",op.loc);return;}
               if(elseCount){b.elseBranch(op.loc);emitRange(bodyStart+thenCount,bodyStart+thenCount+elseCount);}
               if(returning){diag.error("conditional return requires explicit control-flow return lowering",op.loc);return;}
+              --runtimeDepth;
               b.endIf(op.loc);
             }
-          } else if (condition->second != 0) emitRange(bodyStart, bodyStart + thenCount);
-          else emitRange(bodyStart + thenCount, bodyStart + thenCount + elseCount);
+          } else if (condition->second != 0) {
+            emitRange(bodyStart, bodyStart + thenCount);
+            aliasSkippedRange(bodyStart + thenCount, bodyStart + thenCount + elseCount);
+          } else {
+            aliasSkippedRange(bodyStart, bodyStart + thenCount);
+            emitRange(bodyStart + thenCount, bodyStart + thenCount + elseCount);
+          }
           i = bodyEnd + 1;
           break;
         }

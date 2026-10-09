@@ -21,11 +21,44 @@
 #include "spinor/passes/SynthesisTraits.h"
 #include "spinor/passes/VF2PostLayout.h"
 #include "spinor/passes/ResonatorRouting.h"
+#include "spinor/passes/AvailableRouting.h"
 #include "spinor/dialect/Resonators.h"
 #include "spinor/registry/ComponentTopology.h"
 
 namespace spinor::passes {
 namespace {
+// libm's trigonometric reduction retains the represented double's angle even
+// when a quotient by rounded 2*pi would lose many radians. Rotations have a
+// 4*pi period in SU(2); gate-axis and scalar phases have a 2*pi period.
+double boundedPhase(double angle) {
+  return std::atan2(std::sin(angle),std::cos(angle));
+}
+double boundedRotation(double angle) {
+  return 2*std::atan2(std::sin(angle/2),std::cos(angle/2));
+}
+dialect::Module boundedInputParameters(const dialect::Module& module) {
+  using namespace dialect;
+  auto circuit=flatten(module);
+  circuit.globalPhase=boundedPhase(circuit.globalPhase);
+  for(auto& op:circuit.instructions) {
+    switch(op.kind) {
+      case OpKind::Rx:case OpKind::Ry:case OpKind::Rz:
+      case OpKind::Rxx:case OpKind::Rzz:
+        op.attributes={angleAttr(boundedRotation(parameter(op)))};break;
+      case OpKind::Gpi:case OpKind::Gpi2:case OpKind::GlobalPhase:
+        op.attributes={angleAttr(boundedPhase(parameter(op)))};break;
+      case OpKind::U1q:
+        op.attributes={namedDouble("theta",boundedRotation(parameter(op,"theta"))),
+                       namedDouble("phi",boundedPhase(parameter(op,"phi")))};break;
+      case OpKind::PhasedXZ:
+        op.attributes={namedDouble("x",boundedPhase(parameter(op,"x"))),
+                       namedDouble("z",boundedPhase(parameter(op,"z"))),
+                       namedDouble("axis_phase",boundedPhase(parameter(op,"axis_phase")))};break;
+      default:break;
+    }
+  }
+  return rebuild(circuit);
+}
 dialect::Module canonicalParameters(const dialect::Module& module) {
   using namespace dialect;
   auto in=flatten(module),out=in;out.instructions.clear();
@@ -36,28 +69,35 @@ dialect::Module canonicalParameters(const dialect::Module& module) {
       auto single=in;single.instructions={op};single.globalPhase=0;
       auto normalized=flatten(canonicalParameters(rebuild(single)));
       out.instructions.insert(out.instructions.end(),normalized.instructions.begin(),normalized.instructions.end());
-      if(depth){if(std::abs(normalized.globalPhase)>1e-13)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(normalized.globalPhase)},op.loc});}
+      if(depth){if(std::abs(normalized.globalPhase)>kRecognitionTolerance)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(normalized.globalPhase)},op.loc});}
       else out.globalPhase+=normalized.globalPhase;
     }
     return rebuild(out);
   }
-  auto wrap=[](double x){double r=std::fmod(x,2*M_PI);return r<0?r+2*M_PI:r;};
+  auto wrap=[](double x){double r=boundedPhase(x);return r<0?r+2*M_PI:r;};
   for(auto op:in.instructions){
     if(op.kind==OpKind::U1q){
-      auto desired=matrix1(op);double theta=wrap(parameter(op,"theta")),phi=parameter(op,"phi");
+      auto desired=matrix1(op);double theta=boundedRotation(parameter(op,"theta")),phi=boundedPhase(parameter(op,"phi"));
+      if(theta<0)theta+=2*M_PI;
       if(theta>M_PI){theta=2*M_PI-theta;phi+=M_PI;}
       op.attributes={namedDouble("theta",theta),namedDouble("phi",wrap(phi))};
       out.globalPhase+=phaseDifference(desired,matrix1(op));
     }else if(op.kind==OpKind::Gpi||op.kind==OpKind::Gpi2){op.attributes={angleAttr(wrap(parameter(op)))};}
     else if(op.kind==OpKind::Rx){
-      double angle=parameter(op),reduced=std::remainder(angle,2*M_PI);
-      out.globalPhase+=std::round((angle-reduced)/(2*M_PI))*M_PI;
-      if(std::abs(reduced)<1e-13)continue;
+      const auto desired=matrix1(op);
+      double reduced=boundedRotation(parameter(op));
+      if(reduced>M_PI)reduced-=2*M_PI;
+      if(reduced<-M_PI)reduced+=2*M_PI;
       op.attributes={angleAttr(reduced)};
+      out.globalPhase+=phaseDifference(desired,matrix1(op));
+      if(std::abs(reduced)<kRecognitionTolerance)continue;
     }
     else if(op.kind==OpKind::Rxx){
-      double angle=parameter(op),reduced=wrap(angle);
-      out.globalPhase+=std::round((angle-reduced)/(2*M_PI))*M_PI;
+      const auto desired=matrix2(op);
+      double reduced=boundedRotation(parameter(op));
+      if(reduced<0)reduced+=2*M_PI;
+      op.attributes={angleAttr(reduced)};
+      out.globalPhase+=phaseDifference(desired,matrix2(op));
       int pieces=std::max(1,static_cast<int>(std::ceil(reduced/(M_PI/2))));
       op.attributes={angleAttr(reduced/pieces)};
       for(int i=0;i<pieces;++i)out.instructions.push_back(op);
@@ -114,6 +154,7 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
   try{
     dialect::verify(module,diag);if(diag.hasErrors())return false;
     auto c=dialect::flatten(module);checkCapabilities(c,chip);
+    validateAvailableCircuit(c,chip);
     auto computers=registry::computationalComponents(chip);
     auto actualResonators=c.resonatorQubits,expectedResonators=chip.resonatorQubits;
     std::sort(actualResonators.begin(),actualResonators.end());std::sort(expectedResonators.begin(),expectedResonators.end());
@@ -145,7 +186,7 @@ bool validateCompiled(const dialect::Module& module,const registry::ChipInfo& ch
       }
       if(op.kind==dialect::OpKind::Rx&&chip.decompose.oneQubitPi2Gate=="rx"){
         double angle=dialect::parameter(op),steps=angle/(M_PI/2);
-        if(std::abs(angle)<1e-13||std::abs(angle)>M_PI+1e-10||std::abs(steps-std::round(steps))>1e-10)
+        if(std::abs(angle)<kRecognitionTolerance||std::abs(angle)>M_PI+kRecognitionTolerance||std::abs(steps-std::round(steps))>kRecognitionTolerance)
           throw std::runtime_error("native RX requires a calibrated angle of +/-pi/2 or +/-pi");
       }
       if(op.qubits.size()==2&&!graph.connected(op.qubits[0],op.qubits[1]))throw std::runtime_error("non-adjacent native two-qubit operands");
@@ -165,20 +206,25 @@ dialect::Module PassManager::compile(const dialect::Module& module,
                                      dialect::Diagnostics& diag) const try {
   dialect::verify(module,diag);
   if(diag.hasErrors())return module;
-  checkCapabilities(dialect::flatten(module),chip);
-  if(!chip.resonatorQubits.empty())return compileResonatorCircuit(module,chip,level,diag);
+  // Bound each input independently before additions in rotation merging or
+  // synthesis. Adding a small angle to an unbounded double can otherwise
+  // discard the complete operation (for example RZ(1e16); RZ(1)).
+  const auto bounded=boundedInputParameters(module);
+  checkCapabilities(dialect::flatten(bounded),chip);
+  if(auto available=compileAvailableCircuit(bounded,chip,level,diag))return *available;
+  if(!chip.resonatorQubits.empty())return compileResonatorCircuit(bounded,chip,level,diag);
   // Stage 1: Placement (always run; chip-agnostic — only reads
   // the coupling map).
   CouplingGraph g(chip.qubits, chip.coupling, chip.allToAll);
   Placement pl;
-  auto layout = pl.run(module, g);
+  auto layout = pl.run(bounded, g);
 
   auto compileLayout = [&](const Layout& candidateLayout,
                            dialect::Diagnostics& candidateDiagnostics) -> dialect::Module {
   // Stage 2: Routing (always run; chip-agnostic — only reads the
   // coupling map and uses deterministic shortest paths).
   Routing routing;
-  auto routed = routing.run(module, chip, g, candidateLayout);
+  auto routed = routing.run(bounded, chip, g, candidateLayout);
 
   // Stage 3: Decomposition (always run; vendor-modular via the
   // YAML registry strings — entangler / rotation_gate / pi_2_gate).
@@ -203,10 +249,8 @@ dialect::Module PassManager::compile(const dialect::Module& module,
   //
   SynthesisTraits traits = computeTraits(chip);
 
-  // O1 loop body: peephole + 1Q Euler resynthesis +
-  // CommutativeCancellation (CommutativeCancellation enabled at
-  // O2+; here it runs but is a no-op at O1 since its rule table
-  // is sparse). Wrapped in a fixed-point loop.
+  // O1 uses peephole cleanup and 1Q Euler resynthesis in a bounded
+  // fixed-point loop. O2/O3 additionally run commutation cancellation.
   if (level == OptimizationLevel::O1 ||
       level == OptimizationLevel::O2 ||
       level == OptimizationLevel::O3) {

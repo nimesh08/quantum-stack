@@ -88,6 +88,15 @@ def _compiler_registry(record: dict, config: dict, scratch: Path) -> tuple[Path,
                     resonator_qubits=record["resonator_qubits"],
                     move_loci=record.get("gate_loci", {}).get("move", []),
                     cz_loci=record.get("gate_loci", {}).get("cz", []))
+    for key in ("available_qubits", "unavailable_qubits"):
+        if key in record:
+            chip[key] = record[key]
+    single_qubit_gates = {"h", "x", "y", "z", "s", "sdg", "t", "tdg", "sx", "sxdg",
+                          "rx", "ry", "rz", "u1q", "gpi", "gpi2", "phased_xz", "measure", "reset"}
+    loci = {gate: [locus[0] for locus in values] for gate, values in record.get("gate_loci", {}).items()
+            if gate in single_qubit_gates and all(len(locus) == 1 for locus in values)}
+    if loci:
+        chip["single_qubit_gate_loci"] = loci
     # The small C++ reader accepts block maps and flow lists, not flow maps.
     # Timing objects belong in the Python scheduling report; only numeric error
     # pairs/triples are passed to the native placement engine.

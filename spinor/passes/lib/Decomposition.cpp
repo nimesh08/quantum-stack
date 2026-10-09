@@ -87,7 +87,7 @@ Module Decomposition::run(const Module& input,const registry::ChipInfo& chip,Dia
     if(op.kind==OpKind::Measure||op.kind==OpKind::Reset||op.kind==OpKind::Barrier){out.instructions.push_back(op);return;}
     std::string name(opMnemonic(op.kind));name=name.substr(7);
     bool halfXOnly=op.kind==OpKind::Rx&&chip.decompose.oneQubitPi2Gate=="rx";
-    bool needsFixedX=halfXOnly&&std::abs(parameter(op)/(M_PI/2)-std::round(parameter(op)/(M_PI/2)))>1e-10;
+    bool needsFixedX=halfXOnly&&std::abs(parameter(op)/(M_PI/2)-std::round(parameter(op)/(M_PI/2)))>kRecognitionTolerance;
     if(has(name)&&!needsFixedX&& !((op.kind==OpKind::Cx||op.kind==OpKind::Ecr)&&!allowed(op.qubits[0],op.qubits[1]))){out.instructions.push_back(op);return;}
     if(op.qubits.size()==1){one(matrix1(op),op.qubits[0]);return;}
     if(op.qubits.size()!=2)throw std::runtime_error("unsupported gate arity");
@@ -112,7 +112,7 @@ Module Decomposition::run(const Module& input,const registry::ChipInfo& chip,Dia
     emitOperation();
     if(depth){
       double localPhase=out.globalPhase-phaseBefore;out.globalPhase=phaseBefore;
-      if(std::abs(localPhase)>1e-13)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(localPhase)},op.loc});
+      if(std::abs(localPhase)>kRecognitionTolerance)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(localPhase)},op.loc});
     }
   }catch(const std::exception& e){diag.error("decompose: "+std::string(e.what())+" on "+chip.id,op.loc);return input;}
   return rebuild(out);

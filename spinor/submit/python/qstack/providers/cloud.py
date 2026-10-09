@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 from qstack.models import QStackError
 from .base import Adapter, counts_dict, optional, plain
-from .native import cirq_circuit, qiskit_circuit, qiskit_target_record, validate_qiskit_target
+from .native import cirq_circuit, cirq_measurement_keys, qiskit_circuit, qiskit_target_record, validate_qiskit_target
 
 
 class IBMAdapter(Adapter):
@@ -255,6 +255,7 @@ class GoogleAdapter(Adapter):
         job = processor.run_sweep(circuit, **kwargs)
         return self.receipt(artifact, job.job_id, program_id=job.program_id,
                             project=self.config.get("project"), device=target,
+                            measurement_keys=cirq_measurement_keys(artifact.physical_ir), shots=options.shots,
                             serialization_precision="Engine protobuf float32 gate arguments")
 
     def job(self, receipt):
@@ -269,12 +270,74 @@ class GoogleAdapter(Adapter):
 
     def results(self, receipt):
         results = self.job(receipt).results()
-        return self.result(receipt, [{"measurements": plain(r.measurements), "records": plain(r.records)} for r in results],
-                           result_kind="per-shot-registers", bit_order="measurement-key-order")
+        raw = []
+        for result in results:
+            # Cirq's 2D convenience view rejects repeated keys from older jobs.
+            # The 3D records preserve every occurrence and shot correlation.
+            records = plain(result.records)
+            # Read records directly: ResultDict.measurements can retain a
+            # partially initialized cache after raising for repeated keys.
+            measurements = ({key: [shot[0] for shot in rows] for key, rows in records.items()}
+                if isinstance(records, dict) and all(isinstance(rows, list) and
+                    all(isinstance(shot, list) and len(shot) == 1 for shot in rows)
+                    for rows in records.values()) else None)
+            raw.append({"measurements": measurements, "records": records})
+        counts = _google_counts(raw[0]["records"], receipt.metadata) if len(raw) == 1 else None
+        return self.result(receipt, raw, counts, result_kind="per-shot-registers",
+                           bit_order="classical-msb-first", raw_bit_order="measurement-key-and-occurrence",
+                           measurement_keys=receipt.metadata.get("measurement_keys"))
 
     def cancel(self, receipt):
         self.job(receipt).cancel()
         return {"job_id": receipt.job_id, "cancellation_requested": True}
+
+
+def _google_counts(records, metadata):
+    """Normalize actual correlated samples, including receipts using repeated keys.
+
+    No marginal probabilities are combined. An incomplete or non-binary provider
+    payload remains available in raw results without a manufactured histogram.
+    """
+    width = metadata.get("num_clbits")
+    if type(width) is not int or width < 0 or not isinstance(records, dict):
+        return None
+    mapping = metadata.get("measurement_keys")
+    if mapping is None:
+        # Before occurrence-specific keys, each cN record held an occurrence
+        # axis. Source-ordered receipt mappings identify the last write exactly.
+        occurrences, mapping = {}, []
+        for entry in metadata.get("measurement_mapping", []):
+            bit = entry.get("clbit")
+            occurrence = occurrences.get(bit, 0)
+            mapping.append({"key": f"c{bit}", "clbit": bit, "occurrence": occurrence})
+            occurrences[bit] = occurrence + 1
+    if not isinstance(mapping, list) or not mapping:
+        return None
+    columns, shots = {}, None
+    for entry in mapping:
+        bit, occurrence = entry.get("clbit"), entry.get("occurrence", 0)
+        if type(bit) is not int or not 0 <= bit < width or type(occurrence) is not int or occurrence < 0:
+            return None
+        values = records.get(entry.get("key"))
+        if not isinstance(values, list) or (shots is not None and len(values) != shots):
+            return None
+        shots = len(values)
+        column = []
+        for shot in values:
+            if not isinstance(shot, list) or occurrence >= len(shot):
+                return None
+            value = shot[occurrence]
+            if not isinstance(value, list) or len(value) != 1 or type(value[0]) not in {int, bool} or value[0] not in {0, 1}:
+                return None
+            column.append(int(value[0]))
+        columns[bit] = column  # source order: the last classical write wins
+    if metadata.get("shots", shots) != shots:
+        return None
+    counts = {}
+    for shot in range(shots):
+        bitstring = "".join(str(columns[bit][shot] if bit in columns else 0) for bit in reversed(range(width)))
+        counts[bitstring] = counts.get(bitstring, 0) + 1
+    return counts
 
 
 class AzureAdapter(Adapter):

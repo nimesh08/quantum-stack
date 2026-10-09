@@ -53,8 +53,15 @@ QASM source submission remains supported with an explicit target and validation.
 The optimizer levels are O0 required lowering/legality, O1 exact local
 simplification, O2 commutation/block optimization with topology routing, and
 O3 bounded layout/native-resynthesis searches. Compilation is deterministic.
-Approximate synthesis is not enabled; the recorded error budget is zero.
+Intentional approximate synthesis is not enabled; the recorded error budget is
+zero. Small-matrix identity recognition uses a machine-roundoff allowance, while
+Euler/KAK reconstruction has separate numerical residual checks. These
+floating-point tolerances are not an accumulated whole-circuit error bound or
+a claim of symbolic exactness.
 Measurement, reset and classical conditions form optimization boundaries.
+The public CLI/API lowers Phonon into logical Spinor before running quantum
+optimization. The separate legacy Phonon optimizer API is not enabled in this
+path; selecting O1-O3 selects the owned Spinor passes described above.
 Unsupported features, unbound parameters and missing native recipes are errors.
 Counted loops preserve their induction step and comparison. Phonon `while`
 loops are expanded only when their condition is known at compile time and they
@@ -64,6 +71,10 @@ Lexical captures and parameter shadows preserve their separate bindings;
 qubit and readout arguments retain their original register slots. Expansion is
 bounded to 128 nested calls and 100000 expanded calls or loop iterations.
 Runtime unbounded loops and recursive calls are diagnosed explicitly.
+Runtime branches cannot allocate or redeclare registers. Copying a measured bit
+into a numeric scalar is unsupported; use an explicit measurement destination.
+Returning a permutation of existing qubit arguments inside a classical branch
+materializes SWAPs in that branch, preserving consistent wire identities at joins.
 Provider serialization can impose numeric precision limits; Google's Engine
 protobuf stores numeric gate arguments as float32, which is recorded in its
 job receipt. This does not enable approximate synthesis in the compiler.
@@ -73,9 +84,16 @@ program (`.qasm3`, `.bc`, `.ll`, `.quil`, or `.json`), `target.json`,
 `optimization.json`, and `mappings.json`. Content hashes detect inconsistent
 files. Reports include gate/two-qubit counts, dependency depth, and a resource
 schedule. Duration is reported only when every relevant instruction has timing
-data. Untimed provider formats may be retimed by the service; these estimates
+data. Runtime conditions also require an explicitly supplied
+`scheduling.feedback_latency_ns`; otherwise total duration remains unknown.
+Untimed provider formats may be retimed by the service; these estimates
 do not claim enforced pulse timing. Branch counts include both bodies;
 depth/duration use worst-case joins. Qubit and readout mappings accompany results.
+Discovered available/disabled components and operation-specific readout/native
+gate loci restrict placement without changing the provider's physical IDs.
+The current search selects a common compatible native subgraph. It can reject a
+heterogeneous device even when a more general placement exists; it does not claim
+complete or globally optimal placement.
 
 ## Configuration and credentials
 

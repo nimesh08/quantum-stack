@@ -71,6 +71,18 @@ Module compileResonatorCircuit(const Module& input,const registry::ChipInfo& chi
   auto effective=chip;
   effective.qubits=physical.size();effective.allToAll=false;effective.directedConnectivity=false;
   effective.computationalQubits.clear();effective.resonatorQubits.clear();
+  // The effective graph has computational indices, not original physical
+  // component indices. Discovery constraints must use that same coordinate system.
+  effective.availableQubits.reset();effective.unavailableQubits.clear();effective.singleQubitGateLoci.clear();
+  if(chip.availableQubits) {
+    effective.availableQubits.emplace();
+    for(int q:*chip.availableQubits)if(compact.contains(q))effective.availableQubits->push_back(compact.at(q));
+  }
+  for(int q:chip.unavailableQubits)if(compact.contains(q))effective.unavailableQubits.push_back(compact.at(q));
+  for(const auto& [gate,loci]:chip.singleQubitGateLoci) {
+    auto& mapped=effective.singleQubitGateLoci[gate];
+    for(int q:loci)if(compact.contains(q))mapped.push_back(compact.at(q));
+  }
   effective.moveLoci.clear();effective.czLoci.clear();effective.coupling.clear();
   effective.nativeGates.erase(std::remove(effective.nativeGates.begin(),effective.nativeGates.end(),"move"),effective.nativeGates.end());
   effective.calibrationOneQubitError.clear();effective.calibrationReadoutError.clear();effective.calibrationTwoQubitError.clear();

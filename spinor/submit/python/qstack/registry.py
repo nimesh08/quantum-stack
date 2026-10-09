@@ -149,6 +149,8 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
             raise QStackError("Unbound or non-finite gate parameter", "ARTIFACT_INVALID")
         if any(q in target.get("unavailable_qubits", []) for q in qs):
             raise QStackError("Program uses an unavailable physical qubit", "TARGET_INCOMPATIBLE")
+        if "available_qubits" in target and any(q not in target["available_qubits"] for q in qs):
+            raise QStackError("Program uses a physical qubit absent from the available component list", "TARGET_INCOMPATIBLE")
         if op in {"if", "else", "endif"}:
             if qs or inst.get("params", []) or (op != "if" and cs):
                 raise QStackError("Invalid operands on a control-flow marker", "ARTIFACT_INVALID")
@@ -202,6 +204,9 @@ def validate_physical(ir: dict, target: dict, config: dict | None = None) -> Non
         mapping = ir.get(key, [])
         if len(set(mapping)) != len(mapping) or any(type(q) is not int or q < 0 or q >= nq for q in mapping):
             raise QStackError("Invalid logical to physical qubit mapping", "ARTIFACT_INVALID")
+        if any(q in target.get("unavailable_qubits", []) for q in mapping) or (
+                "available_qubits" in target and any(q not in target["available_qubits"] for q in mapping)):
+            raise QStackError("Logical layout includes an unavailable physical qubit", "TARGET_INCOMPATIBLE")
     if target.get("resonator_qubits") or any(i.get("op") == "move" for i in ir.get("instructions", [])):
         from .providers.iqm_contract import validate_moves
         validate_moves(ir, target)

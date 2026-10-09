@@ -421,7 +421,7 @@ void Parser::parseHeader() {
   if (cur().kind == Tok::Generic) {
     mod.targetAttr = "generic";
     consume();
-  } else if (cur().kind == Tok::Identifier) {
+  } else if (cur().kind == Tok::Identifier || cur().kind == Tok::String) {
     mod.targetAttr = consume().text;
   } else {
     err("expected 'generic' or device id after 'target'");
@@ -434,6 +434,10 @@ void Parser::parseHeader() {
 // --- Declarations --------------------------------------------------------
 
 void Parser::parseDeclQubit() {
+  if (runtimeDepth) {
+    err("runtime branches cannot allocate or redeclare quantum registers; declare the register before the branch");
+    fatal = true; return;
+  }
   consume();  // 'qubit'
   if (cur().kind != Tok::Identifier) { err("expected register name"); return; }
   std::string name = consume().text;
@@ -456,6 +460,10 @@ void Parser::parseDeclQubit() {
 }
 
 void Parser::parseDeclBit() {
+  if (runtimeDepth) {
+    err("runtime branches cannot allocate or redeclare classical registers; declare the register before the branch");
+    fatal = true; return;
+  }
   consume();  // 'bit'
   if (cur().kind != Tok::Identifier) { err("expected register name"); return; }
   std::string name = consume().text;
@@ -500,6 +508,10 @@ void Parser::parseDeclClassical(bool isAngle) {
     ctConst.erase(name);
     pos = save;
     pd::ValueId v = parseExpr();
+    if (mod.typeOf(v).kind == pd::TypeKind::Bit) {
+      err("copying measured data into a numeric scalar is unsupported; use a separate measurement destination instead of a saved scalar alias");
+      return;
+    }
     classicals[name] = v;
   }
   recordScalar(name, true);
@@ -1093,6 +1105,42 @@ void Parser::parseCallStmt(const std::string& name) {
       for (const auto& param : function.params)
         if (param.type.kind == pd::TypeKind::Qubit) results.push_back(qreg.at(param.name)[0]);
     }
+    // A conditional helper cannot change the meaning of a caller's slot at
+    // the branch join. Materialize a returned permutation on those wires.
+    // Outside runtime control flow, the existing return-alias semantics stay
+    // unchanged. Fresh-wire replacement needs an explicit branch value merge.
+    std::vector<std::string> quantumParams;
+    std::vector<pd::ValueId> current;
+    for (const auto& param : function.params) if (param.type.kind == pd::TypeKind::Qubit) {
+      quantumParams.push_back(param.name);
+      current.push_back(qreg.at(param.name)[0]);
+    }
+    for (std::size_t i = 0; i < results.size(); ++i)
+      if (std::find(results.begin(), results.begin() + i, results[i]) != results.begin() + i)
+        err("function cannot return duplicate qubit aliases: " + name);
+    if (runtimeDepth && results.size() == current.size() && !diag.hasErrors()) {
+      std::vector<std::size_t> wanted, stateAt;
+      for (auto value : results) {
+        const auto found = std::find(current.begin(), current.end(), value);
+        if (found == current.end()) {
+          err("runtime function return must be a permutation of its input qubits; fresh-wire substitution needs branch value merging");
+          break;
+        }
+        wanted.push_back(static_cast<std::size_t>(found - current.begin()));
+      }
+      for (std::size_t i = 0; i < current.size(); ++i) stateAt.push_back(i);
+      if (!diag.hasErrors()) for (std::size_t i = 0; i < current.size(); ++i) {
+        const auto found = std::find(stateAt.begin() + i, stateAt.end(), wanted[i]);
+        const auto j = static_cast<std::size_t>(found - stateAt.begin());
+        if (i == j) continue;
+        auto swapped = b.swap(current[i], current[j]);
+        current[i] = swapped.first; current[j] = swapped.second;
+        setQubitSlot(quantumParams[i], 0, current[i]);
+        setQubitSlot(quantumParams[j], 0, current[j]);
+        std::swap(stateAt[i], stateAt[j]);
+      }
+      if (!diag.hasErrors()) results = std::move(current);
+    }
     qreg = savedQreg; creg = savedCreg; classicals = savedClassicals;
     ctConst = savedConstants; bitTargets = savedBitTargets;
     scalarBindings = savedScalars;
@@ -1127,6 +1175,10 @@ void Parser::parseAssignStmt(const std::string& name) {
   auto folded = foldExpr();
   pos = expressionStart;
   pd::ValueId v = parseExpr();
+  if (mod.typeOf(v).kind == pd::TypeKind::Bit) {
+    err("copying measured data into a numeric scalar is unsupported; use a separate measurement destination instead of a saved scalar alias");
+    return;
+  }
   if (folded && std::isfinite(*folded)) ctConst[name] = *folded;
   else ctConst.erase(name);
   classicals[name] = v;

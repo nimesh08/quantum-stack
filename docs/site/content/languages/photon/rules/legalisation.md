@@ -10,8 +10,8 @@ pass adapts it to the chip's capabilities (`supports.*` in the YAML).
 If the kernel calls `q.measure(i)` and then more gates on `q[i]`:
 
 - Chip with `supports.mid_circuit_measure: true` → legal as written.
-- Chip without → the legalisation pass inserts a `q.reset(i)` if the
-  chip supports reset, otherwise rejects with a precise error.
+- Chip without → reject with a capability error. Inserting reset would change
+  the quantum channel and is not a semantics-preserving workaround.
 
 ### `feedforward`
 
@@ -20,8 +20,8 @@ If the kernel has `if (m[0] == 1) { q.x(t) }`:
 - Chip with `supports.feedforward: true` → emit feedforward.
 - Chip with `"limited"` → emit if the body is a single gate and the
   condition is `cbit == 0|1`; otherwise reject.
-- Chip with `false` → fall back to **post-selection** (run all
-  branches, discard non-matching shots).
+- Chip with `false` → reject with a capability error. The owned compilation
+  path does not substitute post-selection for classical feedback.
 
 See the Phonon-side rule pages:
 [feedforward_legalisation](../../phonon/rules/feedforward_legalisation.md),

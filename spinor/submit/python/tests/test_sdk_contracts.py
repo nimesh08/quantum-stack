@@ -95,6 +95,58 @@ def test_google_real_engine_proto_roundtrip_preserves_native_operations():
     assert cirq.measurement_key_names(restored) == {"c0"}
 
 
+def test_google_repeated_classical_write_preserves_correlated_samples_and_restart(monkeypatch):
+    cirq = sdk("google", "cirq")
+    from qstack.models import JobReceipt
+    compiled = artifact("google", [
+        {"op": "measure", "qubits": [0], "clbits": [2]},
+        {"op": "measure", "qubits": [1], "clbits": [0]},
+        {"op": "measure", "qubits": [2], "clbits": [2]},
+    ])
+    compiled.physical_ir.update(num_qubits=3, num_clbits=3,
+        measurement_mapping=[{"qubit": 0, "clbit": 2}, {"qubit": 1, "clbit": 0}, {"qubit": 2, "clbit": 2}])
+    compiled.target_snapshot["qubit_labels"] = ["0_0", "0_1", "0_2"]
+    qs = [cirq.GridQubit(0, n) for n in range(3)]
+    captured = []
+    processor = NS(get_device=lambda: NS(validate_circuit=lambda circuit: None),
+        run_sweep=lambda circuit, **kwargs: (captured.append(circuit) or NS(job_id="offline", program_id="program")))
+    adapter = get_adapter("google", {"_client": NS(get_processor=lambda target: processor), "device_config_name": "offline"})
+    receipt = adapter.submit(compiled, SubmissionOptions(mode="live", shots=64))
+    # A receipt reload must retain the source-ordered write mapping.
+    receipt = JobReceipt(**json.loads(json.dumps(receipt.to_dict())))
+    assert receipt.metadata["measurement_keys"] == [
+        {"key": "c2", "clbit": 2}, {"key": "c0", "clbit": 0}, {"key": "c2__1", "clbit": 2}]
+    prepared = cirq.Circuit(cirq.H(qs[0]), cirq.CNOT(qs[0], qs[1]), cirq.X(qs[2]))
+    result = cirq.Simulator(seed=712).run(prepared + captured[0], repetitions=64)
+    monkeypatch.setattr(adapter, "job", lambda receipt: NS(results=lambda: [result]))
+    output = adapter.results(receipt)
+    assert set(output.counts) == {"100", "101"}
+    assert sum(output.counts.values()) == 64
+    assert output.raw[0]["records"]["c2"] == output.raw[0]["records"]["c0"]
+    assert all(shot == [[1]] for shot in output.raw[0]["records"]["c2__1"])
+    assert output.metadata["bit_order"] == "classical-msb-first"
+
+
+def test_google_previous_receipts_with_repeated_cirq_keys_remain_retrievable(monkeypatch):
+    cirq = sdk("google", "cirq")
+    from qstack.models import JobReceipt
+    qs = [cirq.GridQubit(0, n) for n in range(3)]
+    circuit = cirq.Circuit(cirq.H(qs[0]), cirq.CNOT(qs[0], qs[1]), cirq.X(qs[2]),
+        cirq.measure(qs[0], key="c2"), cirq.measure(qs[1], key="c0"), cirq.measure(qs[2], key="c2"))
+    result = cirq.Simulator(seed=712).run(circuit, repetitions=64)
+    with pytest.raises(ValueError, match="repeated keys"):
+        _ = result.measurements
+    receipt = JobReceipt(route="google", target="offline", job_id="offline", metadata={"num_clbits": 3,
+        "measurement_mapping": [{"qubit": 0, "clbit": 2}, {"qubit": 1, "clbit": 0}, {"qubit": 2, "clbit": 2}]})
+    adapter = get_adapter("google", {})
+    monkeypatch.setattr(adapter, "job", lambda receipt: NS(results=lambda: [result]))
+    output = adapter.results(receipt)
+    assert set(output.counts) == {"100", "101"}
+    assert sum(output.counts.values()) == 64
+    assert output.raw[0]["measurements"] is None
+    assert len(output.raw[0]["records"]["c2"][0]) == 2
+
+
 def test_aws_real_openqasm_program_preserves_physical_verbatim_payload():
     ir = sdk("aws", "braket.ir.openqasm")
     aws = sdk("aws", "braket.aws")

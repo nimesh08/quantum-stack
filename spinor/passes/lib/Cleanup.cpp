@@ -19,10 +19,10 @@ Module Cleanup::run(const Module& input) const {
         if(prev.qubits!=op.qubits||prev.kind==OpKind::Measure||prev.kind==OpKind::Reset||prev.kind==OpKind::Barrier)break;
         if(prev.kind==op.kind&&(op.kind==OpKind::Rz||op.kind==OpKind::Rx||op.kind==OpKind::Ry||op.kind==OpKind::Rxx||op.kind==OpKind::Rzz)){
           double a=parameter(prev)+parameter(op);prev.attributes={angleAttr(a)};
-          if(std::abs(a)<1e-13)ops[j].reset();consumed=true;break;
+          if(std::abs(a)<kRecognitionTolerance)ops[j].reset();consumed=true;break;
         }
         try{
-          double phase=op.qubits.size()==1?phaseDifference(la::mul2(matrix1(op),matrix1(prev)),la::identity2()):phaseDifference(la::mul4(matrix2(op),matrix2(prev)),la::identity4());
+          double phase=op.qubits.size()==1?phaseDifference(la::mul2(matrix1(op),matrix1(prev)),la::identity2(),kRecognitionTolerance):phaseDifference(la::mul4(matrix2(op),matrix2(prev)),la::identity4(),kRecognitionTolerance);
           out.globalPhase+=phase;ops[j].reset();consumed=true;
         }catch(const std::runtime_error&){ }
         break;

@@ -366,4 +366,136 @@ TEST(M4_lower, function_specialization_has_a_deterministic_depth_budget) {
   EXPECT_TRUE(bounded);
 }
 
+TEST(M4_lower, conditional_function_return_permutations_materialize_on_fixed_wires) {
+  for (const bool specialized : {false, true}) {
+    const std::string param = specialized ? ", int count" : "";
+    const std::string arg = specialized ? ", 1" : "";
+    auto parsed = pp::parse("target generic\n"
+        "def cycle(qubit a, qubit b, qubit d" + param + ") {\n"
+        "x a\nreturn b, d, a\n}\n"
+        "qubit q[4]\nbit c[4]\nc[3] = measure q[3]\n"
+        "if (c[3] == 0) {\ncycle(q[0], q[1], q[2]" + arg + ")\n"
+        "} else {\nif (c[3] == 1) {\nz q[1]\n}\n}\n"
+        "c[0] = measure q[0]\nc[1] = measure q[1]\nc[2] = measure q[2]\n");
+    EXPECT_TRUE(parsed.module.has_value());
+    if (!parsed.module) continue;
+    auto result = pl::lower(*parsed.module);
+    EXPECT_TRUE(result.module.has_value());
+    if (!result.module) continue;
+    const auto source = pl::emitSpinorSource(*result.module);
+    EXPECT_CONTAINS(source, "if c[3] == 0 {\nx q[0]\nswap q[0], q[1]\nswap q[1], q[2]\n");
+    EXPECT_CONTAINS(source, "c[0] = measure q[0]\nc[1] = measure q[1]\nc[2] = measure q[2]");
+  }
+}
+
+TEST(M4_lower, unconditional_return_aliases_preserve_existing_wire_semantics) {
+  auto parsed = pp::parse("target generic\ndef exchange(qubit a, qubit b) {\n"
+      "return b, a\n}\nqubit q[2]\nbit c[2]\nx q[0]\nexchange(q[0], q[1])\n"
+      "c[0] = measure q[0]\nc[1] = measure q[1]\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (!parsed.module) return;
+  auto result = pl::lower(*parsed.module);
+  EXPECT_TRUE(result.module.has_value());
+  if (!result.module) return;
+  const auto source = pl::emitSpinorSource(*result.module);
+  EXPECT_EQ(countOpKind(*result.module, sd::OpKind::Swap), std::size_t(0));
+  EXPECT_CONTAINS(source, "c[0] = measure q[1]\nc[1] = measure q[0]");
+}
+
+TEST(M4_lower, duplicate_returns_and_conditional_fresh_wire_returns_are_rejected) {
+  for (const bool specialized : {false, true}) for (const bool duplicate : {false, true}) {
+    const std::string param = specialized ? ", int count" : "";
+    const std::string arg = specialized ? ", 1" : "";
+    auto parsed = pp::parse("target generic\ndef invalid(qubit a, qubit b" + param + ") {\n" +
+        (duplicate ? "return a, a\n" : "qubit fresh[1]\nreturn a, fresh\n") +
+        "}\nqubit q[3]\nbit c[1]\nc = measure q[2]\n"
+        "if (c == 0) {\ninvalid(q[0], q[1]" + arg + ")\n}\n");
+    if (parsed.module) {
+      auto result = pl::lower(*parsed.module);
+      EXPECT_FALSE(result.module.has_value());
+      EXPECT_TRUE(result.diag.hasErrors());
+    } else EXPECT_TRUE(parsed.diag.hasErrors());
+  }
+}
+
+TEST(M4_lower, runtime_declarations_cannot_hide_by_reusing_an_existing_name) {
+  for (const auto* declaration : {"qubit q[1]", "bit c[1]"}) {
+    auto parsed = pp::parse(std::string("target generic\nqubit q[1]\nqubit flag[1]\nbit c[1]\n") +
+        "x q[0]\nc = measure flag\nif (c == 0) {\n" + declaration + "\n}\n");
+    EXPECT_FALSE(parsed.module.has_value());
+    EXPECT_TRUE(parsed.diag.hasErrors());
+  }
+  // The same boundary applies to callers of the programmatic logical IR API.
+  for (const bool quantum : {false, true}) {
+    phonon::dialect::Module source;
+    phonon::dialect::Builder builder(source);
+    auto q = builder.allocQubit();
+    auto bit = builder.measure(q);
+    auto one = builder.constInt(1);
+    auto predicate = builder.cmp("==", bit, one);
+    auto branch = builder.beginIf(predicate);
+    if (quantum) builder.allocQubit(); else builder.allocBit();
+    builder.endIf(branch);
+    auto result = pl::lower(source);
+    EXPECT_FALSE(result.module.has_value());
+    EXPECT_TRUE(result.diag.hasErrors());
+  }
+}
+
+TEST(M4_lower, constant_measured_bit_predicates_preserve_surviving_wire_values) {
+  for (const auto* predicate : {"c == -1", "c > 2", "c != 2", "c < 2"}) {
+    auto parsed = pp::parse(std::string("target generic\nqubit q[2]\nbit c[1]\nc = measure q[0]\n") +
+        "if (" + predicate + ") {\nh q[1]\n} else {\nx q[1]\n}\nz q[1]\n");
+    EXPECT_TRUE(parsed.module.has_value());
+    if (!parsed.module) continue;
+    auto result = pl::lower(*parsed.module);
+    EXPECT_TRUE(result.module.has_value());
+    if (!result.module) continue;
+    const auto source = pl::emitSpinorSource(*result.module);
+    EXPECT_EQ(countOpKind(*result.module, sd::OpKind::If), std::size_t(0));
+    EXPECT_CONTAINS(source, "z q[1]");
+    const bool takeThen = std::string(predicate) == "c != 2" || std::string(predicate) == "c < 2";
+    EXPECT_EQ(countOpKind(*result.module, sd::OpKind::H), std::size_t(takeThen));
+    EXPECT_EQ(countOpKind(*result.module, sd::OpKind::X), std::size_t(!takeThen));
+  }
+}
+
+TEST(M4_lower, measured_scalar_copies_do_not_alias_overwritten_readout_registers) {
+  for (const auto* copy : {"int saved = c[0]", "angle saved = c[0]", "saved = c[0]"}) {
+    auto parsed = pp::parse(std::string("target generic\nqubit q[2]\nbit c[2]\n") +
+        "x q[0]\nc[0] = measure q[0]\n" + copy +
+        "\nreset q[0]\nc[0] = measure q[0]\nif (saved == 1) {\nx q[1]\n}\n");
+    EXPECT_FALSE(parsed.module.has_value());
+    EXPECT_TRUE(parsed.diag.hasErrors());
+  }
+}
+
+TEST(M4_lower, concrete_device_names_are_quoted_and_invalid_characters_not_discarded) {
+  auto parsed = pp::parse("target \"provider:device-with-hyphens/processor\"\nqubit q[1]\nx q[0]\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (parsed.module) EXPECT_EQ(parsed.module->targetAttr, std::string("provider:device-with-hyphens/processor"));
+  for (const auto* source : {"target generic\nqubit q[1]\nrx(1!+2) q[0]\n",
+                            "target generic\nqubit q[1]\nx @q[0]\n",
+                            "target generic\nqubit q[1]\nrx(1e-) q[0]\n",
+                            "target generic\nqubit q[1]\nrx(1e2e3) q[0]\n",
+                            "target \"unterminated\nqubit q[1]\n"}) {
+    auto invalid = pp::parse(source);
+    EXPECT_FALSE(invalid.module.has_value());
+    EXPECT_TRUE(invalid.diag.hasErrors());
+  }
+}
+
+TEST(M4_lower, exponent_literals_keep_their_real_value_in_runtime_predicates) {
+  auto parsed = pp::parse("target generic\nqubit q[2]\nbit c[1]\nc = measure q[0]\n"
+      "if (c == 1e-3) {\nx q[1]\n} else {\nz q[1]\n}\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (!parsed.module) return;
+  auto result = pl::lower(*parsed.module);
+  EXPECT_TRUE(result.module.has_value());
+  if (!result.module) return;
+  EXPECT_EQ(countOpKind(*result.module, sd::OpKind::If), std::size_t(0));
+  EXPECT_EQ(countOpKind(*result.module, sd::OpKind::X), std::size_t(0));
+  EXPECT_EQ(countOpKind(*result.module, sd::OpKind::Z), std::size_t(1));
+}
+
 SPINOR_TEST_MAIN()

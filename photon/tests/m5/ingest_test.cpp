@@ -145,4 +145,14 @@ TEST(M5_ingest, counted_loop_rechecks_mutated_bound) {
   if (result.module) EXPECT_EQ(countOps(*result.module, "spinor.x"), 4);
 }
 
+TEST(M5_ingest, reset_members_lower_explicitly_with_loop_indices) {
+  auto parsed = ingestCpp("[[photon::kernel]] int sample() { QReg q(2); "
+      "for (int i = 0; i < 2; ++i) { q.reset(i); } return q.measure_int(); }", "sample");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (!parsed.module) return;
+  auto result = pl::lowerToPhonon(*parsed.module);
+  EXPECT_TRUE(result.module.has_value());
+  if (result.module) EXPECT_EQ(countOps(*result.module, "spinor.reset"), 2);
+}
+
 SPINOR_TEST_MAIN()

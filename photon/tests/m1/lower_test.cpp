@@ -127,4 +127,26 @@ TEST(M1_photon_lower, measured_bit_index_and_runtime_branches) {
   EXPECT_EQ(countOps(*result.module,"spinor.z"),1);
 }
 
+TEST(M1_photon_lower, explicit_resets_and_saved_measurements_preserve_storage) {
+  auto parsed = parse("target generic\nkernel sample() {\nQReg q(2)\n"
+      "Bit first = q.measure(0)\nfor i in 0..2 {\nq.reset(i)\n}\n"
+      "Bit second = q.measure(0)\nq.measure()\n"
+      "if (first == 1) {\nq.x(1)\n}\nreturn q.measure_int()\n}\n");
+  EXPECT_TRUE(parsed.module.has_value());
+  if (!parsed.module) return;
+  auto result = lowerToPhonon(*parsed.module);
+  EXPECT_TRUE(result.module.has_value());
+  if (!result.module) return;
+  EXPECT_EQ(countOps(*result.module, "spinor.reset"), 2);
+  std::vector<std::size_t> destinations;
+  for (const auto& operation : result.module->ops()) if (operation.kind == pd::OpKind::Measure)
+    for (const auto& attribute : operation.attributes) if (attribute.name == "clbit")
+      destinations.push_back(static_cast<std::size_t>(std::get<double>(attribute.value)));
+  EXPECT_EQ(destinations.size(), std::size_t(6));
+  EXPECT_TRUE(destinations[0] != destinations[1]);
+  EXPECT_TRUE(destinations[0] != destinations[2]);
+  EXPECT_EQ(destinations[4], std::size_t(0));
+  EXPECT_EQ(destinations[5], std::size_t(1));
+}
+
 SPINOR_TEST_MAIN()

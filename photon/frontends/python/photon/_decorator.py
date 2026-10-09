@@ -6,7 +6,7 @@ from typing import Any, Callable, Optional
 import inspect
 
 from ._errors import CompilationError, PhotonKernelError
-from ._translator import translate
+from ._translator import Translator, translate
 
 
 class _PhotonKernel:
@@ -73,7 +73,8 @@ class _PhotonKernel:
             raise CompilationError(f"kernel parameters: {error}") from error
         bound.apply_defaults()
         selected_target = target or self.target
-        source = translate(self._func, target=selected_target, bindings=bound.arguments)
+        translation = Translator(target=selected_target)
+        source = translation.translate(self._func, bindings=bound.arguments)
         try:
             import qstack
         except ImportError as error:
@@ -83,6 +84,14 @@ class _PhotonKernel:
         counts = result.counts
         if counts is None:
             raise PhotonKernelError("execution completed without measurement counts")
+        if translation.return_bits is not None:
+            selected = {}
+            for bits, count in counts.items():
+                if any(bit >= len(bits) for bit in translation.return_bits):
+                    raise PhotonKernelError("execution result is missing the declared return register")
+                key = "".join(bits[-1 - bit] for bit in reversed(translation.return_bits))
+                selected[key] = selected.get(key, 0) + count
+            return selected
         return dict(counts)
 
 

@@ -5,6 +5,7 @@ add_library(spinor_passes STATIC
   lib/Placement.cpp
   lib/Routing.cpp
   lib/ResonatorRouting.cpp
+  lib/AvailableRouting.cpp
   lib/Decomposition.cpp
   lib/Cleanup.cpp
   lib/OptimizationLevel.cpp

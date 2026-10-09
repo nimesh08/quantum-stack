@@ -68,7 +68,8 @@ inline Mat4 compose(const std::vector<dialect::WireOp>& ops,int qa=0,int qb=1) {
 
 // Factor a tensor product up to phase. Selecting the largest entry avoids
 // unstable division for zero/near-zero entries, including Pauli gates.
-inline std::pair<Mat2,Mat2> tensorFactors(const Mat4& u) {
+inline std::pair<Mat2,Mat2> tensorFactors(const Mat4& u,
+                                        double tolerance=kRecognitionTolerance) {
   int pivot=0;for(int i=1;i<16;++i)if(std::abs(u.e[i])>std::abs(u.e[pivot]))pivot=i;
   int r=pivot/4,c=pivot%4;Mat2 a,b;
   for(int i=0;i<2;++i)for(int j=0;j<2;++j){
@@ -80,7 +81,7 @@ inline std::pair<Mat2,Mat2> tensorFactors(const Mat4& u) {
     if(std::abs(d)<1e-13)throw std::runtime_error("two-qubit matrix is not a local tensor product");
     for(auto& x:factor->e)x/=d;
   }
-  phaseDifference(u,kron(a,b));
+  phaseDifference(u,kron(a,b),tolerance);
   return {a,b};
 }
 

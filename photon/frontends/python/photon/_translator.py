@@ -2,7 +2,9 @@
 from __future__ import annotations
 import ast
 import inspect
+import json
 import math
+import re
 import textwrap
 from typing import Any, Callable, List, Optional
 from ._errors import UnsupportedConstructError
@@ -12,7 +14,7 @@ _GATE_METHODS = {
     "h", "x", "y", "z", "s", "sdg", "t", "tdg",
     "rx", "ry", "rz", "cx", "cz", "swap",
     "sx", "sxdg", "ecr", "ms", "rzz", "rxx",
-    "gpi", "gpi2", "u1q",
+    "gpi", "gpi2", "u1q", "reset",
     "cnot", "hadamard", "phase",
 }
 _LIB_ROUTINES = {"bell_pair", "ghz", "qft", "iqft",
@@ -76,6 +78,11 @@ class Translator(ast.NodeVisitor):
         self.indent: int = 1  # inside a `def { ... }`.
         self.qregs: dict[str, int] = {}
         self.measured_bits: dict[str, str] = {}  # python var -> phonon ref
+        self.bit_widths: dict[str, int] = {}
+        self.saved_measurement_registers: set[str] = set()
+        self.measurement_sequence = 0
+        self.return_bits: Optional[list[int]] = None
+        self.declaration_end = 0
         self.func_name: str = ""
         self.constants: dict[str, Any] = {}
         self.expanded_iterations = 0
@@ -87,6 +94,21 @@ class Translator(ast.NodeVisitor):
     # ----- output helpers -------------------------------------------------
     def _emit(self, s: str) -> None:
         self.lines.append("  " * self.indent + s)
+
+    def _measurement_register(self, qname: str, *, saved: bool) -> str:
+        register = f"__c_{qname}"
+        if register in self.saved_measurement_registers:
+            self.measurement_sequence += 1
+            register = f"__qstack_measure_{self.measurement_sequence}"
+            while register in self.qregs or register in self.bit_widths:
+                self.measurement_sequence += 1
+                register = f"__qstack_measure_{self.measurement_sequence}"
+            self.lines.insert(self.declaration_end, f"bit {register}[{self.qregs[qname]}]")
+            self.declaration_end += 1
+            self.bit_widths[register] = self.qregs[qname]
+        if saved:
+            self.saved_measurement_registers.add(register)
+        return register
 
     def _err(self, what: str, node: ast.AST) -> "UnsupportedConstructError":
         return UnsupportedConstructError(
@@ -131,7 +153,8 @@ class Translator(ast.NodeVisitor):
                     return node
             func = BindParameters().visit(func)
         self.func_name = func.name
-        self.lines = [f"target {self.target}"]
+        target = self.target if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.target) else json.dumps(self.target)
+        self.lines = [f"target {target}"]
         # Render the kernel as a phonon `def` (the engine wraps it in a
         # module with the right target attr).
         self._emit_def(func)
@@ -161,6 +184,8 @@ class Translator(ast.NodeVisitor):
             self.qregs[name] = n
             self._emit(f"qubit {name}[{n}]")
             self._emit(f"bit __c_{name}[{n}]")
+            self.bit_widths[f"__c_{name}"] = n
+        self.declaration_end = len(self.lines)
         for index, stmt in enumerate(fn.body):
             if isinstance(stmt, ast.Return) and index + 1 != len(fn.body):
                 raise self._err("statements after an early return are unsupported", stmt)
@@ -236,11 +261,12 @@ class Translator(ast.NodeVisitor):
                 if node.value.args or node.value.keywords:
                     raise self._err("measure() accepts no arguments; index the returned measured bits", node.value)
                 qname = node.value.func.value.id
+                register = self._measurement_register(qname, saved=True)
                 # Emit per-slot measure into __c_q[i] bits.
                 for i in range(self.qregs[qname]):
                     self._emit(
-                        f"__c_{qname}[{i}] = measure {qname}[{i}]")
-                self.measured_bits[target] = f"__c_{qname}"
+                        f"{register}[{i}] = measure {qname}[{i}]")
+                self.measured_bits[target] = register
                 self.constants.pop(target, None)
                 return
             # Plain int/float assignment becomes a Phonon `int` decl.
@@ -398,12 +424,13 @@ class Translator(ast.NodeVisitor):
             self._emit(f"cx {recv}[{anc}], {recv}[{dst}]")
             self._emit(f"cx {recv}[{src}], {recv}[{anc}]")
             self._emit(f"h {recv}[{src}]")
-            self._emit(f"__c_{recv}[{src}] = measure {recv}[{src}]")
-            self._emit(f"__c_{recv}[{anc}] = measure {recv}[{anc}]")
-            self._emit(f"if (__c_{recv}[{anc}] == 1) {{")
+            register = self._measurement_register(recv, saved=False)
+            self._emit(f"{register}[{src}] = measure {recv}[{src}]")
+            self._emit(f"{register}[{anc}] = measure {recv}[{anc}]")
+            self._emit(f"if ({register}[{anc}] == 1) {{")
             self._emit(f"  x {recv}[{dst}]")
             self._emit("}")
-            self._emit(f"if (__c_{recv}[{src}] == 1) {{")
+            self._emit(f"if ({register}[{src}] == 1) {{")
             self._emit(f"  z {recv}[{dst}]")
             self._emit("}")
             return
@@ -482,13 +509,13 @@ class Translator(ast.NodeVisitor):
                 if var not in self.measured_bits or type(index) is not int:
                     raise self._err("condition requires a measured bit with a static index", node)
                 register = self.measured_bits[var]
-                width = self.qregs[register.removeprefix("__c_")]
+                width = self.bit_widths[register]
                 if not 0 <= index < width:
                     raise self._err("measured bit index out of range", node)
                 return f"{register}[{index}]"
             if isinstance(expression, ast.Name) and expression.id in self.measured_bits:
                 register = self.measured_bits[expression.id]
-                if self.qregs[register.removeprefix("__c_")] != 1:
+                if self.bit_widths[register] != 1:
                     raise self._err("comparison of a measured register requires an explicit bit index", node)
                 return f"{register}[0]"
             raise self._err("condition requires a measured bit and a compile-time numeric value", node)
@@ -528,6 +555,12 @@ class Translator(ast.NodeVisitor):
             if v.args or v.keywords:
                 raise self._err(f"{v.func.attr}() accepts no arguments", v)
             qname = v.func.value.id
+            offset = 0
+            for register, width in self.bit_widths.items():
+                if register == f"__c_{qname}":
+                    self.return_bits = list(range(offset, offset + width))
+                    break
+                offset += width
             for i in range(self.qregs[qname]):
                 self._emit(f"__c_{qname}[{i}] = measure {qname}[{i}]")
             return

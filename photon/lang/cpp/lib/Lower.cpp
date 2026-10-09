@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -31,6 +32,7 @@ struct Lowerer {
   std::unordered_map<std::string, double> angleConsts;
   std::unordered_map<std::string, std::size_t> bitBase;
   std::size_t nextBit = 0;
+  std::unordered_set<std::size_t> savedMeasurementBits;
   std::size_t expandedIterations = 0;
   bool returned = false;
   int runtimeDepth=0;
@@ -141,6 +143,7 @@ struct Lowerer {
     else if (gate == "tdg")  r = b.tdg(q, L);
     else if (gate == "sx")   r = b.sx(q, L);
     else if (gate == "sxdg") r = b.sxdg(q, L);
+    else if (gate == "reset") r = b.reset(q, L);
     else if (gate == "rx" || gate == "ry" || gate == "rz" ||
              gate == "gpi" || gate == "gpi2") {
       if (args.empty()) {
@@ -273,7 +276,10 @@ void Lowerer::lowerStmt(const Stmt& s) {
           err("measurement of a register requires an explicit valid bit index",s.loc);return;
         }
         auto bit=b.measure(qs[*index],L);
-        out.opMut(out.producerOf(bit)).attributes.push_back({"clbit",static_cast<double>(bitBase[name]+*index)});
+        auto destination = bitBase[name] + *index;
+        if (savedMeasurementBits.contains(destination)) destination = nextBit++;
+        savedMeasurementBits.insert(destination);
+        out.opMut(out.producerOf(bit)).attributes.push_back({"clbit",static_cast<double>(destination)});
         classicals[s.name]=bit;
       }
       break;
@@ -324,8 +330,10 @@ void Lowerer::lowerStmt(const Stmt& s) {
       auto& bits = bit->second;
       for (std::size_t i = 0; i < qit->second.size(); ++i) {
         bits[i] = b.measure(qit->second[i], L);
+        const auto destination = savedMeasurementBits.contains(bitBase[s.receiver] + i)
+            ? nextBit++ : bitBase[s.receiver] + i;
         out.opMut(out.producerOf(bits[i])).attributes.push_back(
-            {"clbit", static_cast<double>(bitBase[s.receiver] + i)});
+            {"clbit", static_cast<double>(destination)});
       }
       // Note: M2 will use this measurement to compute return values
       // for `q.measure_int()`. M1 leaves the measure ops in the IR

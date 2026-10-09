@@ -199,10 +199,19 @@ def test_schedule_waits_for_predicate_before_first_use_of_branch_qubit():
     target = {"calibration": {"instruction_durations": [
         {"op": "measure", "qubits": [0], "duration_ns": 100},
         *[{"op": "x", "qubits": [q], "duration_ns": duration} for q, duration in [(1, 20), (2, 40), (3, 10)]]]}}
+    incomplete = optimization_report(ir, target)
+    assert incomplete["duration_seconds"] is None and not incomplete["timing_complete"]
+    assert incomplete["untimed_feedback"] == [1]
+    assert all(entry["start_ns"] is None for entry in incomplete["schedule"])
+    target["scheduling"] = {"feedback_latency_ns": 0}
     report = optimization_report(ir, target)
     assert [(entry["instruction"], entry["start_ns"]) for entry in report["schedule"]] == [(0, 0), (2, 100), (4, 100), (6, 140)]
     assert report["depth"] == 3
     assert report["duration_seconds"] == pytest.approx(150e-9)
+    target["scheduling"]["feedback_latency_ns"] = 25
+    delayed = optimization_report(ir, target)
+    assert delayed["duration_seconds"] == pytest.approx(175e-9)
+    assert [(entry["instruction"], entry["start_ns"]) for entry in delayed["schedule"]] == [(0, 0), (2, 125), (4, 125), (6, 165)]
 
 
 def test_global_barrier_fences_qubits_not_used_before_barrier():

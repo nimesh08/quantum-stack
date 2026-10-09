@@ -16,8 +16,12 @@ def optimization_report(ir: dict, snapshot: dict) -> dict:
         if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
             durations[(entry["op"], tuple(entry["qubits"]))] = value
     resource_groups = [set(g) for g in snapshot.get("scheduling", {}).get("exclusive_qubit_groups", [])]
+    feedback_latency = snapshot.get("scheduling", {}).get("feedback_latency_ns")
+    if type(feedback_latency) not in {int, float} or not math.isfinite(feedback_latency) or feedback_latency < 0:
+        feedback_latency = None
     gate_count = two_count = 0
     unknown = []
+    untimed_feedback = []
     fence_time = fence_layer = 0
 
     def merge(left, right):
@@ -28,6 +32,10 @@ def optimization_report(ir: dict, snapshot: dict) -> dict:
         if op == "if":
             # Conservatively fence branch entry and join, including classical readout.
             t = max(fence_time, max(times.values(), default=0))
+            if feedback_latency is None:
+                untimed_feedback.append(index)
+            else:
+                t += feedback_latency
             layer = max(fence_layer, max(layers.values(), default=0))
             times = dict.fromkeys(times, t)
             layers = dict.fromkeys(layers, layer)
@@ -71,13 +79,17 @@ def optimization_report(ir: dict, snapshot: dict) -> dict:
         schedule.append({"instruction": index, "layer": layer,
                          "start_ns": start, "duration_ns": duration, "resources": resources})
     # Partial timing is not a duration estimate: unknown gates can dominate it.
-    if unknown:
+    incomplete = bool(unknown or untimed_feedback)
+    if incomplete:
         for item in schedule:
             item["start_ns"] = None
     return {"gate_count": gate_count, "two_qubit_count": two_count,
             "depth": max(layers.values(), default=0),
-            "duration_seconds": None if unknown else max(times.values(), default=0) * 1e-9,
-            "schedule": schedule, "timing_complete": not unknown,
+            "duration_seconds": None if incomplete else max(fence_time, max(times.values(), default=0)) * 1e-9,
+            "schedule": schedule, "timing_complete": not incomplete,
             "untimed_instructions": unknown, "schedule_policy": "resource-aware-asap",
+            "untimed_feedback": untimed_feedback, "feedback_latency_ns": feedback_latency,
+            "timing_assumptions": ["supplied gate durations and exclusive qubit groups", "worst-case branch joins",
+                                   "feedback latency required for every runtime condition", "provider may retime untimed output"],
             "timing_enforced_by_provider": False,
             "branch_metric": "gate counts include both branches; depth/duration use worst-case joins"}

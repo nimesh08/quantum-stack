@@ -29,7 +29,7 @@ Module CommutativeCancellation::run(const Module& input,const SynthesisTraits&) 
         if(!ops[j])continue;auto& prev=*ops[j];
         if(prev.qubits==op.qubits&&prev.kind==op.kind){
           try{
-            double phase=op.qubits.size()==1?phaseDifference(la::mul2(matrix1(op),matrix1(prev)),la::identity2()):phaseDifference(la::mul4(matrix2(op),matrix2(prev)),la::identity4());
+            double phase=op.qubits.size()==1?phaseDifference(la::mul2(matrix1(op),matrix1(prev)),la::identity2(),kRecognitionTolerance):phaseDifference(la::mul4(matrix2(op),matrix2(prev)),la::identity4(),kRecognitionTolerance);
             c.globalPhase+=phase;ops[j].reset();erased=true;
           }catch(const std::runtime_error&){}
           if(erased)break;

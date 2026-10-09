@@ -1,9 +1,14 @@
 #pragma once
 #include "Complex2x2.h"
 #include "spinor/dialect/Circuit.h"
+#include "spinor/dialect/Numerics.h"
 #include <stdexcept>
 
 namespace spinor::passes {
+// Recognition of an identity/local/special-angle gate changes the circuit.
+// Give that decision only a small allowance for roundoff in fixed 2x2/4x4
+// products, not the much broader post-reconstruction validation tolerance.
+inline constexpr double kRecognitionTolerance=dialect::kMatrixRecognitionTolerance;
 inline la::Mat2 rxy(double theta, double phi) {
   auto u=la::Rx(theta);
   u(0,1)*=std::polar(1.0,-phi); u(1,0)*=std::polar(1.0,phi); return u;
@@ -21,8 +26,15 @@ inline la::Mat2 matrix1(const dialect::WireOp& op) {
     case OpKind::Rz:return Rz(parameter(op));
     case OpKind::PhasedXZ:{
       double x=parameter(op,"x"),z=parameter(op,"z"),axis=parameter(op,"axis_phase");
-      auto u=mul2(Rz(z+axis),mul2(Rx(x),Rz(-axis)));
-      for(auto& e:u.e)e*=std::polar(1.0,(x+z)/2);return u;
+      // ZPow(z) ZPow(axis) XPow(x) ZPow(-axis), with radians rather
+      // than Cirq's half-turn exponents. Evaluate the factors separately:
+      // forming z+axis or x+z first can discard a small rotation when an
+      // input angle is large. XPow/ZPow have a 2*pi period (unlike RX/RZ).
+      const auto ex=std::polar(1.0,x),ez=std::polar(1.0,z);
+      Mat2 xp;xp(0,0)=xp(1,1)=(cdbl(1)+ex)/2.0;
+      xp(0,1)=(cdbl(1)-ex)*std::polar(1.0,-axis)/2.0;
+      xp(1,0)=(cdbl(1)-ex)*std::polar(1.0,axis)/2.0;
+      xp(1,0)*=ez;xp(1,1)*=ez;return xp;
     }
     case OpKind::U1q:return rxy(parameter(op,"theta"),parameter(op,"phi"));
     case OpKind::Gpi:{ Mat2 u; u(0,1)=std::polar(1.0,-parameter(op)); u(1,0)=std::polar(1.0,parameter(op)); return u; }
@@ -46,12 +58,13 @@ inline la::Mat4 matrix2(const dialect::WireOp& op) {
     default:throw std::runtime_error("no two-qubit matrix for "+std::string(opMnemonic(op.kind)));
   }
 }
-template<class Matrix> inline double phaseDifference(const Matrix& desired,const Matrix& actual) {
+template<class Matrix> inline double phaseDifference(const Matrix& desired,const Matrix& actual,
+                                                     double tolerance=1e-9) {
   la::cdbl overlap=0;
   for(std::size_t i=0;i<desired.e.size();++i) overlap+=desired.e[i]*std::conj(actual.e[i]);
   double phase=std::arg(overlap); auto z=std::polar(1.0,phase);
   for(std::size_t i=0;i<desired.e.size();++i)
-    if(std::abs(desired.e[i]-z*actual.e[i])>1e-9) throw std::runtime_error("native synthesis failed its unitary check");
+    if(std::abs(desired.e[i]-z*actual.e[i])>tolerance) throw std::runtime_error("native synthesis failed its unitary check");
   return phase;
 }
 } // namespace spinor::passes

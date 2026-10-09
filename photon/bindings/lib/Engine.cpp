@@ -3,7 +3,6 @@
 #include "photon/bindings/Engine.h"
 
 #include "phonon/lower/Lowering.h"
-#include "phonon/optimizer/Pipeline.h"
 #include "phonon/parser/Parser.h"
 #include "phonon/types/LinearTypeChecker.h"
 #include "spinor/dialect/Spinor.h"
@@ -47,9 +46,8 @@ CompiledProgram CompiledProgram::fromPhononModule(pd::Module mod,
     return cp;
   }
 
-  // Optimize-once pipeline (NullImpls for borrowed passes).
-  phonon::optimizer::PipelineConfig cfg;
-  // Exact optimization runs after lowering in Spinor PassManager.
+  // Exact quantum optimization runs after lowering in Spinor PassManager.
+  // The separate legacy Phonon optimizer is not part of this execution path.
 
   // Lower to flat Spinor.
   auto lr = phonon::lower::lower(cp.phn_, /*target=*/nullptr);

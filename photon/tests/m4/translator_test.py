@@ -30,6 +30,13 @@ class M4Translator(unittest.TestCase):
         self.assertIn("measure q[0]", text)
         self.assertIn("measure q[1]", text)
 
+    def test_concrete_target_identifiers_are_quoted_when_needed(self) -> None:
+        from photon._translator import translate
+        def sample():
+            q = photon.QReg(1)
+            q.reset(0)
+        self.assertTrue(translate(sample, target="processor-with-hyphens").startswith('target "processor-with-hyphens"'))
+
     def test_ghz_via_lib(self) -> None:
         from photon._translator import translate
         def ghz3():
@@ -49,6 +56,28 @@ class M4Translator(unittest.TestCase):
                 q.h(0)
         text = translate(f)
         self.assertEqual(text.count("h q[0]"), 4)
+
+    def test_explicit_reset_and_saved_measurements_keep_distinct_destinations(self) -> None:
+        from photon._translator import Translator
+        def sample():
+            q = photon.QReg(2)
+            first = q.measure()
+            for i in range(2):
+                q.reset(i)
+            second = q.measure()
+            if first[0] == 1:
+                q.x(1)
+            if second[0] == 1:
+                q.z(1)
+            return q.measure_int()
+        translator = Translator()
+        text = translator.translate(sample)
+        self.assertIn("reset q[0]", text)
+        self.assertIn("reset q[1]", text)
+        self.assertIn("bit __qstack_measure_1[2]", text)
+        self.assertIn("if (__c_q[0] == 1)", text)
+        self.assertIn("if (__qstack_measure_1[0] == 1)", text)
+        self.assertEqual(translator.return_bits, [0, 1])
 
     def test_nested_strided_ranges_bind_indices_and_angles(self) -> None:
         from photon._translator import translate

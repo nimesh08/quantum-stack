@@ -18,7 +18,6 @@
 #include "photon/lang/Module.h"
 #include "photon/lang/Parser.h"
 #include "phonon/dialect/Phonon.h"
-#include "phonon/optimizer/Pipeline.h"
 #include "qs/common/cli/Flags.h"
 #include "phonon/lower/Lowering.h"
 #include "phonon/types/LinearTypeChecker.h"
@@ -180,15 +179,9 @@ std::string emitSpinorText(const phonon::dialect::Module& m) {
   return phonon::lower::emitSpinorSource(*lowered.module);
 }
 
-// Read source, lower to phonon module, run the Phonon optimizer
-// (cancellation + rotation merging + commutation + null borrowed
-// passes by default; matches what photon::bindings::CompiledProgram
-// does for the @photon.kernel and [[photon::kernel]] paths), then
-// print the optimized module as spinor text.
-//
-// Always uses target=ibm_heron_r2 as a safe default for the photon
-// parser (it's just a stamp that the lowering writes into the printed
-// header; the chip is re-read by spinorc downstream).
+// Parse and lower Photon through Phonon into logical Spinor. The selected
+// target is preserved; native quantum optimization executes in the downstream
+// Spinor PassManager. The legacy Phonon optimizer is intentionally not invoked.
 std::string lowerPhotonToSpinorText(const std::string& src,
                                     std::string_view filename,
                                     std::string_view target) {
@@ -215,11 +208,6 @@ std::string lowerPhotonToSpinorText(const std::string& src,
     dumpDiagnostics(lr.diag);
     std::exit(1);
   }
-  // The Phonon optimizer pipeline. NullImpls are used for the
-  // borrowed adapters (Tweedledum / PyZX) by default. To opt in to
-  // PyZX, set PHONON_PYZX_LIVE=1 and ensure pyzx is on the include
-  // path; that decision is the caller's, not photonc's.
-  phonon::optimizer::PipelineConfig cfg;
   // Exact optimization runs after lowering in Spinor PassManager.
   return emitSpinorText(*lr.module);
 }
