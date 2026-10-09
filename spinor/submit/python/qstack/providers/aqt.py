@@ -8,6 +8,7 @@ import tomllib
 from qstack.models import QStackError
 from .base import RestAdapter, optional, segment
 from .native import instructions
+from . import submission_objects
 
 
 class AQTAdapter(RestAdapter):
@@ -74,12 +75,7 @@ class AQTAdapter(RestAdapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options)
-        if options.shots > 2000:
-            raise QStackError("AQT cloud supports at most 2000 shots per circuit")
-        operations = aqt_operations(artifact.physical_ir)
-        body = {"job_type": "quantum_circuit", "label": options.name,
-                "payload": {"circuits": [{"repetitions": options.shots, "quantum_circuit": operations,
-                                           "number_of_qubits": artifact.physical_ir["num_qubits"]}]}}
+        body = submission_objects.aqt_body(artifact, shots=options.shots, name=options.name)
         workspace = self.need("workspace")
         resource = self.config.get("device") or self.config.get("resource") or artifact.target
         response = self.request("POST", f"/v1/submit/{segment(workspace)}/{segment(resource)}", data=body)

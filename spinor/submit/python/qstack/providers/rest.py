@@ -1,6 +1,8 @@
 """Direct HTTP contracts. Source links and version boundaries are in CONTRACTS.md."""
 from __future__ import annotations
 
+from . import submission_objects
+
 import base64
 import json
 import re
@@ -61,18 +63,8 @@ class IonQAdapter(RestAdapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options, {"ionq-native-json", "ionq-json", "ionq.circuit.v1", "native-json"})
-        circuit = json.loads(artifact.program_text())
-        if "input" in circuit:
-            circuit = circuit["input"]
-        if circuit.get("gateset") != "native":
-            raise QStackError("IonQ direct submission requires gateset=native; no QIS compiler fallback", "UNSUPPORTED_FORMAT")
-        for op in circuit.get("circuit", []):
-            if op.get("gate") not in {"gpi", "gpi2", "ms", "zz"}:
-                raise QStackError("IonQ artifact contains a non-native instruction")
         target = self.config.get("device") or artifact.target
-        body = {"type": "ionq.circuit.v1", "backend": target, "shots": options.shots,
-                "name": options.name, "input": circuit,
-                "settings": {"error_mitigation": {"debiasing": False}}}
+        body = submission_objects.ionq_body(artifact, shots=options.shots, name=options.name, target=target)
         response = self.request("POST", "/jobs", data=body)
         return self.receipt(artifact, response.get("id"), backend=target)
 
@@ -130,15 +122,9 @@ class AnyonAdapter(RestAdapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options, {"anyon-json", "snowflurry-json", "native-json"})
-        circuit = json.loads(artifact.program_text())
-        circuit = circuit.get("circuit", circuit)
-        if not all(k in circuit for k in ("operations", "qubitCount", "bitCount")):
-            raise QStackError("Anyon artifact must contain operations, qubitCount and bitCount")
         machine = self.config.get("device") or artifact.target
-        body = {"name": options.name, "type": "circuit", "machineName": machine,
-                "circuit": circuit, "shotCount": options.shots}
-        if self.config.get("project"):
-            body["projectID"] = self.config["project"]
+        body = submission_objects.anyon_body(artifact, shots=options.shots, name=options.name,
+            target=machine, project=self.config.get("project"))
         response = self.request("POST", "/jobs", data=body)
         return self.receipt(artifact, response.get("job", {}).get("id", response.get("id")), machine=machine)
 
@@ -204,7 +190,7 @@ class AliceBobAdapter(RestAdapter):
             "inputParams": params})
         receipt = self.receipt(artifact, response.get("id"))
         try:
-            self.request("POST", f"/v1/jobs/{segment(receipt.job_id)}/input", files={"input": artifact.program_text()})
+            self.request("POST", f"/v1/jobs/{segment(receipt.job_id)}/input", files={"input": submission_objects.upload_payload(artifact)})
         except QStackError as exc:
             raise QStackError(f"Alice & Bob job {receipt.job_id} was created but input upload failed; retain this ID and do not resubmit automatically", "PARTIAL_SUBMISSION") from exc
         return receipt

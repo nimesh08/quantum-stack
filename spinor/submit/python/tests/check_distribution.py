@@ -21,7 +21,8 @@ CORE_MODULES = (
     "artifacts", "classical", "cli", "jobs", "models", "registry", "scheduling",
     "target_models", "validation_harness", "verification.__init__",
     "verification.engine", "verification.matrices", "verification.parsers",
-    "verification.qir", "verification.sdk",
+    "verification.qir", "verification.sdk", "verification.submission",
+    "providers.submission_objects",
 )
 
 REGISTRY_CHECK = r'''
@@ -41,6 +42,33 @@ assert Path(qstack.__file__).is_relative_to(Path(sys.prefix)), qstack.__file__
 print(json.dumps({'profiles': len(profiles()), 'routes': sorted(ADAPTERS),
                   'version': importlib.metadata.version('heisenberg-spinor-submit'),
                   'installed_outside_checkout': True}))
+'''
+
+MISSING_SDK_CHECK = r'''
+import copy, importlib.util, json, socket
+from qstack.models import CompiledArtifact
+from qstack.verification import verify_artifact
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('Offline verification attempted network access')
+socket.create_connection = forbidden
+socket.socket.connect = forbidden
+assert importlib.util.find_spec('qiskit') is None
+ir = {'schema_version': 2, 'num_qubits': 1, 'num_clbits': 0,
+      'instructions': [{'op': 'rx', 'qubits': [0], 'params': [.2]}]}
+artifact = CompiledArtifact('ibm', 'offline', 'qasm3',
+    'OPENQASM 3.0; qubit[1] q; rx(0.2) q[0];', ir,
+    schema_version=2, logical_ir=copy.deepcopy(ir))
+result = verify_artifact(artifact, store=False)
+checks = {check['name']: check for check in result['checks']}
+assert checks['logical_to_physical']['status'] == 'passed', result
+assert checks['physical_to_program']['status'] == 'passed', result
+assert checks['physical_to_submission']['status'] == 'not_checked', result
+assert 'ibm' in checks['physical_to_submission']['reason'].lower(), result
+assert result['status'] == 'not_checked' and not result['coverage_complete'], result
+assert not result['network_used']
+print(json.dumps({'missing_sdk_not_checked': True, 'stored_checks_preserved': True,
+                  'network_used': False}))
 '''
 
 ARTIFACT_CHECK = r'''
@@ -89,6 +117,8 @@ assert artifact_hash(restored) == artifact_hash(artifact)
 assert restored.logical_ir == ir and restored.numerical_report == artifact.numerical_report
 result = verify_artifact(restored)
 assert result['status'] == 'passed' and result['coverage_complete'], result
+assert any(check['name'] == 'physical_to_submission' and check['status'] == 'passed'
+           for check in result['checks']), result
 assert not result['certified'] and result['whole_program_error'] is None
 assert not result['network_used'] and Path(result['evidence_path']).is_file()
 
@@ -106,6 +136,7 @@ module = pyqir.Module.from_ir(pyqir.Context(), qir_text)
 assert module.verify() is None
 for format, payload in (('qir-text', qir_text), ('qir-bitcode', module.bitcode)):
     qir_artifact = copy.deepcopy(artifact)
+    qir_artifact.route = 'quantinuum'
     qir_artifact.format, qir_artifact.payload = format, payload
     qir_artifact.manifest['qir_entry_point'] = 'main'
     save_artifact(qir_artifact, format + ' artifact v2')
@@ -126,7 +157,7 @@ wide = {'schema_version': 2, 'num_qubits': 0, 'num_clbits': 64, 'global_phase': 
     'instructions': [{'op': 'c_const', 'result': 'maximum', 'inputs': [], 'value': '18446744073709551615'}]}
 payload = 'OPENQASM 3.0; bit[64] c; uint[64] value = 18446744073709551615; ' + ' '.join(
     f'c[{bit}] = (value >> {bit}) & 1;' for bit in range(64))
-typed = CompiledArtifact('ibm', 'offline', 'qasm3', payload, wide, schema_version=2, logical_ir=copy.deepcopy(wide))
+typed = CompiledArtifact('oqc', 'offline', 'qasm3', payload, wide, schema_version=2, logical_ir=copy.deepcopy(wide))
 validate_classical(wide)
 typed.feature_requirements = extract_requirements(wide)
 save_artifact(typed, 'wide classical v2')
@@ -134,7 +165,9 @@ typed = load_artifact('wide classical v2')
 assert typed.physical_ir['instructions'][0]['value'] == '18446744073709551615'
 assert typed.feature_requirements['integer_widths'] == [64]
 checked = verify_artifact(typed)
-assert checked['status'] == 'passed', checked
+assert all(check['status'] == 'passed' for check in checked['checks']
+           if check['name'] in {'logical_to_physical', 'physical_to_program'}), checked
+assert checked['status'] == 'not_checked', checked  # The OQC SDK is intentionally absent.
 
 large = copy.deepcopy(artifact)
 large.physical_ir['num_qubits'] = large.logical_ir['num_qubits'] = 5
@@ -201,9 +234,11 @@ def main(wheel: str, output: str | None = None) -> dict:
         assert "verify" in run("console_entrypoint", [cli, "--help"])
         assert "verify" in run("verify_help_without_optional_dependencies", [python, "-I", "-m", "qstack", "verify", "--help"])
         run("verification_extra_install", [python, "-m", "pip", "install", "--disable-pip-version-check", str(wheel_path) + "[verify]"])
+        run("missing_sdk_retains_stored_verification", [python, "-I", "-c", MISSING_SDK_CHECK], json_output=True)
+        run("ibm_extra_install", [python, "-m", "pip", "install", "--disable-pip-version-check", str(wheel_path) + "[ibm]"])
         run("installed_artifact_and_verifier_contracts", [python, "-I", "-c", ARTIFACT_CHECK], json_output=True)
         for artifact, status, code in (("valid artifact v2", "passed", 0), ("wrong angle v2", "failed", 1),
-                                       ("over budget v2", "not_checked", 3), ("wide classical v2", "passed", 0),
+                                       ("over budget v2", "not_checked", 3), ("wide classical v2", "not_checked", 3),
                                        ("qir-text artifact v2", "passed", 0), ("qir-bitcode artifact v2", "passed", 0)):
             result = json.loads(run("cli_" + artifact, [cli, "verify", temp / artifact, "--no-env-file", "--json"], code))
             assert result["status"] == status and result["network_used"] is False

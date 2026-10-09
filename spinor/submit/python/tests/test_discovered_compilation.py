@@ -44,7 +44,15 @@ def test_discovered_snapshot_to_native_artifact_to_real_simulation(route, vendor
     artifact = compile_file(source, target=snapshot["device"], config={"provider": route}, output=tmp_path / "bundle")
     from qstack.verification import verify_artifact
     evidence = verify_artifact(artifact)
-    assert evidence["status"] == "passed", evidence
+    checks = {check["name"]: check for check in evidence["checks"]}
+    assert checks["logical_to_physical"]["status"] == "passed", evidence
+    assert checks["physical_to_program"]["status"] == "passed", evidence
+    missing = [check for check in evidence["checks"] if check["status"] == "not_checked"]
+    # The base compiler job intentionally has only the numerical-oracle SDKs.
+    # Missing transport SDKs must be explicit without suppressing the real
+    # compilation, stored-program comparison, or local execution below.
+    assert all(check.get("code") == "MISSING_DEPENDENCY" for check in missing), evidence
+    assert evidence["status"] == ("not_checked" if missing else "passed"), evidence
     assert evidence["artifact_hash"] == artifact.manifest["artifact_hash"]
     assert evidence["network_used"] is False
     result = submit_artifact(artifact, SubmissionOptions(mode="local", shots=64), wait=True)

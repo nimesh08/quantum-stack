@@ -13,7 +13,7 @@ import pytest
 
 from qstack.models import CompiledArtifact, JobReceipt, QStackError, SubmissionOptions
 from qstack.providers import ADAPTERS, UNAVAILABLE, get_adapter
-from qstack.providers import base, cloud, specialized, native, qibolab, isolated
+from qstack.providers import base, cloud, specialized, native, qibolab, isolated, submission_objects
 
 
 def artifact(route, fmt="native", payload="", ops=None):
@@ -38,7 +38,7 @@ def modules(monkeypatch, mapping):
     def resolve(module, extra):
         assert module in mapping, f"Unexpected SDK import: {module}"
         return mapping[module]
-    for module in (cloud, specialized, native, qibolab):
+    for module in (cloud, specialized, native, qibolab, submission_objects):
         monkeypatch.setattr(module, "optional", resolve)
 
 

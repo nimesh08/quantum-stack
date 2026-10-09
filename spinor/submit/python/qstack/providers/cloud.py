@@ -6,7 +6,8 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 from qstack.models import QStackError
 from .base import Adapter, counts_dict, optional, plain
-from .native import cirq_circuit, cirq_measurement_keys, qiskit_circuit, qiskit_target_record, validate_qiskit_target
+from . import submission_objects
+from .native import qiskit_target_record, validate_qiskit_target
 
 
 class IBMAdapter(Adapter):
@@ -46,7 +47,7 @@ class IBMAdapter(Adapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options)
-        circuit = qiskit_circuit(artifact)
+        circuit = submission_objects.ibm_circuit(artifact)
         backend = self.client().backend(self.config.get("device") or artifact.target)
         validate_qiskit_target(artifact.physical_ir, getattr(backend, "target", None))
         # The ISA circuit is already mapped. SamplerV2 performs no local transpilation.
@@ -168,7 +169,7 @@ class AWSAdapter(Adapter):
         target = self.config.get("device") or artifact.target
         sdk = optional("braket.aws", "aws")
         device = sdk.AwsDevice(target, aws_session=self.session())
-        program = optional("braket.ir.openqasm", "aws").Program(source=source)
+        program = submission_objects.aws_program(artifact)
         kwargs = {"shots": options.shots, "disable_qubit_rewiring": True}
         if self.config.get("s3_uri"):
             destination = urlsplit(self.config["s3_uri"])
@@ -259,7 +260,7 @@ class GoogleAdapter(Adapter):
         config_name = self.need("device_config_name")
         if self.config.get("run_name") and self.config.get("snapshot_id"):
             raise QStackError("Google run_name and snapshot_id are mutually exclusive")
-        circuit = cirq_circuit(artifact, self.config)
+        circuit = submission_objects.google_circuit(artifact, self.config)
         target = self.config.get("device") or artifact.target
         processor = self.client().get_processor(target)
         # Device validation is not decomposition or routing.
@@ -272,7 +273,7 @@ class GoogleAdapter(Adapter):
         job = processor.run_sweep(circuit, **kwargs)
         return self.receipt(artifact, job.job_id, program_id=job.program_id,
                             project=self.config.get("project"), device=target,
-                            measurement_keys=cirq_measurement_keys(artifact.physical_ir), shots=options.shots,
+                            measurement_keys=submission_objects.google_readout(artifact), shots=options.shots,
                             serialization_precision="Engine protobuf float32 gate arguments")
 
     def job(self, receipt):
@@ -429,7 +430,7 @@ class AzureAdapter(Adapter):
             # IonQ's default debiasing changes decompositions and qubit assignments.
             params["error-mitigation"] = {"debias": False}
         if fmt in {"qir-bitcode", "qir.bc", "qir.v1"}:
-            data = artifact.program_bytes()
+            data = submission_objects.upload_payload(artifact)
             kwargs = {"input_data_format": "qir.v1", "content_type": "qir.v1"}
             entry_point = artifact.manifest.get("qir_entry_point", "main")
             if self.config.get("entry_point", entry_point) != entry_point or params.get("entryPoint", entry_point) != entry_point:
@@ -439,12 +440,12 @@ class AzureAdapter(Adapter):
         elif fmt in {"openqasm2", "qasm2"}:
             if not str(target.provider_id).lower().startswith("quantinuum"):
                 raise QStackError("Azure QASM2 route is only defined for Quantinuum targets")
-            data, kwargs = artifact.program_text(), {"input_data_format": target.input_data_format, "content_type": "application/qasm"}
+            data, kwargs = submission_objects.upload_payload(artifact), {"input_data_format": target.input_data_format, "content_type": "application/qasm"}
         else:
             if str(target.provider_id).lower() != "ionq":
                 raise QStackError("Azure IonQ JSON requires an IonQ target")
             import json
-            data, kwargs = json.loads(artifact.program_text()), {"input_data_format": "ionq.circuit.v1", "content_type": "application/json"}
+            data, kwargs = submission_objects.upload_payload(artifact), {"input_data_format": "ionq.circuit.v1", "content_type": "application/json"}
         job = target.submit(input_data=data, name=options.name, shots=options.shots, input_params=params, **kwargs)
         return self.receipt(artifact, job.id, device=target_name, provider=target.provider_id)
 

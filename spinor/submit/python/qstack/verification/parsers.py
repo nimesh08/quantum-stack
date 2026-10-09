@@ -277,6 +277,8 @@ def quil(text, ir):
 
 def decode(artifact):
     ir, fmt = _base(artifact), artifact.format
+    fmt = {"openqasm3": "qasm3", "braket-openqasm3": "qasm3", "openqasm2": "qasm2", "native-quil": "quil",
+           "llvm-ir": "qir-text"}.get(fmt, fmt)
     if fmt in {"qasm3", "qasm2"}:
         braket = "#pragma braket verbatim" in artifact.program_text()
         gaps = ["Format omits scalar phase; complete instruments checked instead"] if fmt == "qasm2" or braket else []
@@ -287,5 +289,5 @@ def decode(artifact):
         return decode_qir(artifact, ir), ["QIR omits scalar phase; complete instruments checked instead"]
     gaps = [] if fmt == "json" else ["Native sampling format; scalar phase is not observable"]
     if fmt in {"cirq-native", "aqt-native", "qibolab-native"}:
-        gaps.append("Stored native IR checked; actual transport construction is covered by separate offline SDK contracts")
+        gaps.append("Stored native IR is a pre-transport representation; see the separate per-artifact physical_to_submission check")
     return native(artifact, ir), gaps

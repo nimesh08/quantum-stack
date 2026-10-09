@@ -82,7 +82,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install the pinned provider extra in isolation
-        run: python -m pip install "./spinor/submit/python[test,${{ matrix.provider }}]"
+        run: python -m pip install "./spinor/submit/python[test,verify,${{ matrix.provider }}]"
       - name: Validate real SDK serialization and offline transport contracts
         run: >-
           python -m pytest -q -ra
@@ -90,6 +90,7 @@ jobs:
           spinor/submit/python/tests/test_sdk_specialized_contracts.py
           spinor/submit/python/tests/test_sdk_qibolab_contracts.py
           spinor/submit/python/tests/test_sdk_verification.py
+          spinor/submit/python/tests/test_artifact_submission_verification.py
           spinor/submit/python/tests/test_provider_contracts.py
           spinor/submit/python/tests/test_provider_serialization.py
 

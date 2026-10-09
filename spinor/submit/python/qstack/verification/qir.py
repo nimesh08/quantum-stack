@@ -6,7 +6,7 @@ from . import NotChecked
 def decode_qir(artifact, ir):
     import pyqir
     context = pyqir.Context()
-    module = (pyqir.Module.from_bitcode(context, artifact.program_bytes()) if artifact.format in {"qir", "qir-bitcode"}
+    module = (pyqir.Module.from_bitcode(context, artifact.program_bytes()) if artifact.format in {"qir", "qir-bitcode", "qir.bc", "qir.v1"}
               else pyqir.Module.from_ir(context, artifact.program_text()))
     problem = module.verify()
     if problem: raise ValueError("Invalid LLVM module: " + problem)

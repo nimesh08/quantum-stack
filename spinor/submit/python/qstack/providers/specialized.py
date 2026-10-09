@@ -1,7 +1,8 @@
 """Provider-specific optional SDK contracts without vendor circuit transpilers."""
 from __future__ import annotations
 
-import base64
+from . import submission_objects
+
 import json
 from uuid import UUID
 from qstack.models import QStackError
@@ -55,7 +56,7 @@ class RigettiAdapter(Adapter):
         target = self.config.get("device") or artifact.target
         # Hardware control translation is mandatory; quilc gate decomposition is never called.
         translated = optional("qcs_sdk.qpu.translation", "rigetti").translate(
-            native_quil=artifact.program_text(), num_shots=options.shots,
+            native_quil=submission_objects.upload_payload(artifact), num_shots=options.shots,
             quantum_processor_id=target, client=self.client())
         job_id = optional("qcs_sdk.qpu.api", "rigetti").submit(
             program=translated.program, patch_values={}, quantum_processor_id=target, client=self.client())
@@ -136,21 +137,13 @@ class IQMAdapter(Adapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options, {"iqm-json", "iqm-circuit-json", "native-json"})
-        data = json.loads(artifact.program_text())
-        circuit_data = data.get("circuits", [data])[0]
-        op_type = optional("iqm.pulse.builder", "iqm").CircuitOperation
-        circuit_type = optional("iqm.pulse.circuit_operations", "iqm").Circuit
-        ops = [op_type(name=i["name"], locus=tuple(i["locus"]), args=i.get("args", {}))
-               for i in circuit_data["instructions"]]
-        circuit = circuit_type(name=options.name, instructions=tuple(ops))
+        circuit = submission_objects.iqm_circuit(artifact, options.name)
+        key_mapping = submission_objects.iqm_readout(artifact, circuit)
         kwargs = {"shots": options.shots}
         calibration = artifact.target_snapshot.get("calibration_set_id") or self.config.get("calibration_set_id")
         if calibration:
             kwargs["calibration_set_id"] = UUID(calibration)
         job = self.client().submit_circuits([circuit], **kwargs)
-        physical_measurements = [i for i in artifact.physical_ir.get("instructions", []) if i.get("op") == "measure"]
-        keys = [i["args"]["key"] for i in circuit_data["instructions"] if i["name"] == "measure"]
-        key_mapping = [{"key": key, "clbit": inst["clbits"][0]} for key, inst in zip(keys, physical_measurements)]
         return self.receipt(artifact, job.job_id, calibration_set_id=calibration, measurement_keys=key_mapping)
 
     def status(self, receipt):
@@ -223,15 +216,8 @@ class OQCAdapter(Adapter):
 
     def submit(self, artifact, options):
         self.validate(artifact, options, {"openqasm2", "qasm2", "openqasm3", "qasm3", "qir", "qir-text", "qir-bitcode", "qir.bc"})
-        sdk = optional("qcaas_client.client", "oqc")
-        compiler = optional("compiler_config.config", "oqc")
-        optim = compiler.Tket()
-        optim.disable()
-        config = compiler.CompilerConfig(repeats=options.shots, optimizations=optim,
-                                         results_format=compiler.QuantumResultsFormat().binary_count())
-        program = artifact.program_text() if artifact.format.lower() in {"openqasm2", "qasm2", "openqasm3", "qasm3"} else base64.b64encode(artifact.program_bytes()).decode("ascii")
         target = self.config.get("device") or artifact.target
-        task = sdk.QPUTask(program=program, qpu_id=target, config=config)
+        task = submission_objects.oqc_task(artifact, shots=options.shots, target=target)
         scheduled = self.client().schedule_tasks(task, qpu_id=target)
         return self.receipt(artifact, scheduled[0].task_id, qpu_id=target)
 
@@ -316,9 +302,9 @@ class QuantinuumAdapter(Adapter):
         if artifact.format == "hugr":
             if not target.lower().startswith("helios"):
                 raise QStackError("HUGR submission requires a Helios target", "UNSUPPORTED_FORMAT")
-            ref = qnx.hugr.upload(artifact.program_bytes(), **kwargs)
+            ref = qnx.hugr.upload(submission_objects.upload_payload(artifact), **kwargs)
         else:
-            ref = qnx.qir.upload(qir=artifact.program_bytes(), **kwargs)
+            ref = qnx.qir.upload(qir=submission_objects.upload_payload(artifact), **kwargs)
         backend = (qnx.models.HeliosConfig(system_name=target) if target.lower().startswith("helios")
                    else qnx.models.QuantinuumConfig(device_name=target, no_opt=True,
                        allow_implicit_swaps=False, allow_2q_gate_rebase=False, simplify_initial=False))

@@ -67,6 +67,15 @@ sums cover the listed observations only; they do not certify serialization,
 all rounding operations, or dynamic execution. A v1 artifact with no report
 says evidence unavailable; it never receives an invented zero error.
 
+Measured region sums and maxima remain available when the program contains
+measurement, reset, classical operations or conditional branches. Each such
+instruction, and each barrier, separates the numbered unitary regions; branch
+entry, alternative and exit markers are separate boundaries. The sums include
+only accepted rewrites assigned to that region across passes. They are neither
+path-weighted nor combined into a whole-program estimate. Regions with no
+measured rewrite keep null sums/maxima; measured zero remains zero. Rejected
+layout or resynthesis trials contribute only to separate trial statistics.
+
 ## Offline verification
 
 Install the optional verification dependencies:
@@ -78,27 +87,55 @@ qstack verify build/bell --verify-max-qubits 4 --verify-max-paths 256
 ```
 
 This command reads the artifact and performs no authentication, discovery or
-submission. It independently compares logical versus physical IR and physical
-IR versus the stored native program. Expected operators do not use compiler
+submission. It independently compares logical versus physical IR, physical
+IR versus the stored native program, and physical IR versus the actual local
+submission object constructed for this artifact. Expected operators do not use compiler
 matrix/simulator helpers. It interprets OpenQASM 3/custom gate bodies, Braket
 verbatim, supported Quantinuum QASM2, QIR control flow, Quil and native JSON.
-Separate offline SDK contract tests interpret actual Qiskit/Cirq objects and
-include deliberate wrong-angle, operand-order and readout mutations.
+The `physical_to_submission` check calls the same pure builder as live
+submission, then interprets its output independently. It never creates a client,
+loads credentials, invokes a provider transpiler or loads laboratory Python
+configuration. Regression tests mutate the actual builder outputs (angle,
+operand and readout) while keeping the stored IR/program unchanged.
+
+| Route | Actual value checked for each artifact | Remaining boundary |
+|---|---|---|
+| IBM | Qiskit `QuantumCircuit`: scoped phase, ordered local matrices, branches, reset and readout | Supported one-bit branches; unsupported SDK classical expressions return `not_checked` |
+| Google | Cirq circuit and an additional `submission_to_engine_protobuf` serializer/deserializer comparison | The pinned Engine default serializer uses float32 arguments. The user's threshold is never relaxed; a strict threshold may fail this distinct serialization check |
+| IQM | Actual `Circuit` / `CircuitOperation` names, ordered loci, radians and readout keys | MOVE occupation/ideal semantics only; calibration-dependent phases are not certified |
+| AWS | Actual Braket `Program.source`, interpreted as OpenQASM | Service validation and execution |
+| OQC | Actual `QPUTask.program`, including decoded base64 QIR bytes | QAT processing and account capabilities |
+| AQT | Actual Arnica REST submission body, with independent R/RZ/RXX half-turn conversion | No circuit SDK is used by this adapter. Partial retained quantum outputs with implicit all-qubit measurement return `not_checked` |
+| IonQ / Anyon | Actual REST request circuit values | Provider processing and results retrieval; IonQ partial retained quantum outputs with implicit all-qubit readout return `not_checked` |
+| Quantinuum / Azure / Rigetti / Alice & Bob | The actual shared upload/input value (QIR bytes, QASM, Quil or native JSON) | Remote Nexus/QCS/Felis/target processing is outside offline verification |
+| Qibolab | The actual native assembler plan, including concrete physical identifiers and classical readout destinations | `submission_to_calibrated_pulses` remains `not_checked`: an artifact calibration fingerprint cannot establish pulse-template unitaries or fidelity. No Qibo circuit is constructed by this adapter |
+
+Install both `verify` and the route extra for SDK object checks, for example
+`python -m pip install "heisenberg-spinor-submit[verify,ibm]"`. An absent optional
+SDK adds an explicit `not_checked` reason naming the required extra. Already
+available logical/program checks retain their individual results; missing SDKs
+never turn those checks into fabricated failures or passes. Direct REST/byte
+builders need no authentication SDK for their offline value comparison.
 
 Unitary programs use complete operators with scalar phase. Measurement, reset
 and branches use complete quantum instruments, retaining every classical
 outcome and tracing reset environments. Formats that omit unobservable scalar
 phase are compared as instruments and explicitly report that coverage limit.
-Native IR transport files still require the separately tested SDK construction
-contract; an IR comparison alone does not certify a cloud service.
+Stored native IR and the actual submission value are separate evidence stages.
+Their comparison does not certify provider processing, credentials or hardware.
 
 Default limits are four logical qubits, at most two additional active ancillas,
 256 measurement/reset trajectories and 100,000 interpreted instructions. A
+pre-allocation guard also limits declared interfaces to 65,536 physical slots
+and 4,096 classical bits; active-wire bounds apply before SDK construction.
+Sparse device indices remain supported (for example, two active wires on a
+127-slot device). A
 256 MiB dense-array working-memory budget also limits the combined qubit/path
 dimensions; raising one limit does not remove the others. An
 unknown instruction, unsupported control operation or exceeded budget returns
 `not_checked` with a reason; it is never silently skipped. Results contain the
-artifact/program hashes, oracle source hash, dependency versions and limits.
+artifact/program hashes, oracle and submission-builder source hashes, dependency
+versions and limits.
 `passed` means that the finite numerical comparisons performed within those
 limits passed, not that the whole compiler or hardware is certified.
 
