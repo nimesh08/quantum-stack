@@ -8,6 +8,7 @@
 #include <cmath>
 #include <complex>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 using namespace spinor;
 using namespace spinor::dialect;
@@ -64,7 +65,9 @@ int main()try{
   require(*mutation.rewrites[1].residual>9e-11,"scalar phase discrepancy hidden");
   require(mutation.json().find("\"certified\":false")!=std::string::npos,"uncertified evidence mislabeled");
   mutation.hasNonunitaryOperations=true;
-  require(mutation.json().find("\"sum_observed_local_residuals\":null")!=std::string::npos,"dynamic program received an aggregate error estimate");
+  require(mutation.json().find("\"sum_observed_local_residuals\":null")==std::string::npos,"dynamic program lost its measured unitary-region residual sum");
+  require(mutation.json().find("\"aggregation_available\":true")!=std::string::npos,"dynamic region observations cannot be aggregated");
+  require(mutation.json().find("\"whole_program_error\":null")!=std::string::npos,"local region observations became a whole-program estimate");
   // No observations is unknown, whereas an actually measured zero is zero.
   passes::NumericalReport unmeasured;
   {passes::CompilationReportScope scope(&unmeasured);
@@ -110,13 +113,14 @@ int main()try{
   // Their observed discrepancies must not enter the selected artifact trace.
   WireCircuit initial;initial.numQubits=2;
   initial.instructions={{OpKind::Rx,{0},{angleAttr(.2)},{}},{OpKind::Rx,{0},{angleAttr(.1)},{}}};
-  passes::CompilationReport selected;int trial=0;
+  passes::CompilationReport selected;selected.hasNonunitaryOperations=true;int trial=0;
   {passes::CompilationReportScope scope(&selected);
     result=passes::OptimizationLoop<passes::MinimumPointCriterion>{}.run(rebuild(initial),[&](const Module& input){
       const auto before=flatten(input);auto next=before;++trial;
       if(trial==1)next.instructions={{OpKind::Rx,{0},{angleAttr(.3)},{}}};
       else next.instructions.push_back({OpKind::Ry,{0},{angleAttr(.7)},{}});
-      passes::observeRewrite("audit",trial==1?"kept":"discarded",before.instructions,next.instructions);
+      passes::observeRewrite("audit",trial==1?"kept":"discarded",before.instructions,next.instructions,
+                            0,0,std::nullopt,trial==1?"unitary-2":"unitary-4");
       ++passes::currentCompilationReport()->counters["audit_trials"];
       return rebuild(next);
     },passes::MinimumPointCriterion{},4);
@@ -124,7 +128,53 @@ int main()try{
   require(flatten(result).instructions.size()==1,"minimum-point scheduler lost its incumbent");
   require(selected.rewrites.size()==1&&selected.rewrites[0].rule=="kept","discarded trials contaminated accepted residual totals");
   require(selected.counters.at("audit_trials")==3,"discarded trial count was lost");
+  require(selected.json().find("\"id\":\"unitary-2\"")!=std::string::npos,"accepted dynamic region was lost");
+  require(selected.json().find("\"id\":\"unitary-4\"")==std::string::npos,"discarded candidate introduced a region aggregate");
+  require(selected.json().find("\"aggregation_available\":true")!=std::string::npos,"accepted minimum-point observations lost their sum");
   require(error(complete(initial),complete(flatten(result)))<2e-13,"retained minimum-point candidate has wrong full operator");
+  // Every pass must use the same fence numbering. In particular, recursive
+  // native range normalization must retain the enclosing branch region, and
+  // decomposition must count If/Else/EndIf as separate region boundaries.
+  registry::ChipInfo dynamicTarget=chip;
+  dynamicTarget.supports.midCircuitMeasure=true;dynamicTarget.supports.reset=true;
+  dynamicTarget.supports.feedforward=registry::CapabilityFlags::Feedforward::Full;
+  dynamicTarget.classicalFeatures["classical.const"]="supported";
+  WireCircuit dynamic;dynamic.target="generic";dynamic.numQubits=2;dynamic.numClbits=2;
+  dynamic.classicalStorage={{"scratch",1,{1},"private",true,"0"}};
+  dynamic.classicalValues={{"scratch_value","bool",1,{1},"private",false,""}};
+  auto block=[&]{
+    dynamic.instructions.push_back({OpKind::H,{0},{},{}});
+    dynamic.instructions.push_back({OpKind::Rx,{0},{angleAttr(4.1)},{}});
+  };
+  block();dynamic.instructions.push_back({OpKind::Barrier,{},{},{}});
+  block();dynamic.instructions.push_back({OpKind::Measure,{1},{},{},0});
+  block();dynamic.instructions.push_back({OpKind::If,{},{{"condition_clbit",0.0},{"condition_value",1.0}},{},0});
+  block();dynamic.instructions.push_back({OpKind::Else,{},{},{}});
+  block();dynamic.instructions.push_back({OpKind::EndIf,{},{},{}});
+  block();dynamic.instructions.push_back({OpKind::Reset,{0},{},{}});
+  block();dynamic.instructions.push_back({OpKind::CConst,{},{{"result",std::string("scratch_value")},{"value",std::string("1")}},{}});
+  block();
+  std::set<std::string> expectedRegions;
+  for(std::size_t i=0;i<8;++i)expectedRegions.insert(passes::numericalRegion(i));
+  for(const auto level:{passes::OptimizationLevel::O0,passes::OptimizationLevel::O1,
+                       passes::OptimizationLevel::O2,passes::OptimizationLevel::O3}){
+    Diagnostics dynamicDiagnostics;passes::NumericalReport dynamicReport;
+    passes::PassManager{}.compile(rebuild(dynamic),dynamicTarget,level,dynamicDiagnostics,&dynamicReport);
+    require(!dynamicDiagnostics.hasErrors(),"dynamic numerical-region fixture failed to compile");
+    require(dynamicReport.hasNonunitaryOperations,"dynamic report lost its nonunitary coverage flag");
+    std::set<std::string> decompositionRegions,canonicalRegions;
+    for(const auto& event:dynamicReport.rewrites){
+      if(event.pass=="native.decomposition")decompositionRegions.insert(event.region);
+      if(event.pass=="native.parameter-canonicalization")canonicalRegions.insert(event.region);
+      require(event.residual&&*event.residual<2e-13,"dynamic local reconstruction lacks a measured residual");
+    }
+    require(decompositionRegions==expectedRegions,"decomposition merged regions across a dynamic fence");
+    require(canonicalRegions==expectedRegions,"native parameter normalization lost the enclosing region");
+    const auto json=dynamicReport.json();
+    require(json.find("\"sum_observed_local_residuals\":null")==std::string::npos,"measured dynamic region sum was suppressed");
+    require(json.find("\"whole_program_error\":null")!=std::string::npos,"dynamic region sum mislabeled as global error");
+    require(json.find("\"certified\":false")!=std::string::npos,"dynamic local evidence was certified");
+  }
   // Explicit controller/output contracts take precedence over legacy flags.
   registry::ChipInfo controller=chip;controller.supports.midCircuitMeasure=true;
   controller.supports.feedforward=registry::CapabilityFlags::Feedforward::Full;

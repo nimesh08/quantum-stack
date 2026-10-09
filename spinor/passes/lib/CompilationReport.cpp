@@ -139,10 +139,13 @@ std::string CompilationReport::json() const {
     out<<"{\"id\":"<<quoted(region)<<",\"accepted_rewrites\":"<<a.checked+a.unmeasured
        <<",\"checked_rewrites\":"<<a.checked<<",\"unmeasured_rewrites\":"<<a.unmeasured
        <<",\"sum_observed_local_residuals\":";
-    if(hasNonunitaryOperations||!a.checked)out<<"null";else out<<a.sum;
+    // These are sums of the accepted local observations assigned to this
+    // region, not a composition theorem or an estimate for a dynamic path.
+    // A measurement elsewhere in the program cannot erase that evidence.
+    if(!a.checked)out<<"null";else out<<a.sum;
     out<<",\"max_observed_local_residual\":";
     if(a.checked)out<<a.maximum;else out<<"null";
-    out<<",\"aggregation_available\":"<<(!hasNonunitaryOperations&&a.checked?"true":"false")<<'}';}
+    out<<",\"aggregation_available\":"<<(a.checked?"true":"false")<<'}';}
   out<<"],\"trial_statistics\":{";comma=false;
   for(const auto& [key,value]:counters){if(comma)out<<',';comma=true;out<<quoted(key)<<':'<<value;}
   out<<"},\"notes\":{";comma=false;

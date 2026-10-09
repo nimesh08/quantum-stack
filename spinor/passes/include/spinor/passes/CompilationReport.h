@@ -22,6 +22,9 @@ struct CompilationReport {
   std::vector<std::string> gaps;
   std::map<std::string, std::size_t> counters;
   std::map<std::string, std::string> notes;
+  // Describes the whole input; it does not invalidate observations within
+  // separate unitary regions. Those sums remain diagnostics, never a bound
+  // on an executed branch, quantum instrument or the complete program.
   bool hasNonunitaryOperations = false;
   std::string stage = "native";
   void addGap(const std::string& message);

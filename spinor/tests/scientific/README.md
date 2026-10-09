@@ -109,9 +109,11 @@ The compiler's optional numerical report is a separate internal diagnostic.
 It measures local complete-phase residuals for accepted rewrites, records
 rejected trials separately, and always marks `certified: false`. An absent
 numeric reconstruction guard is reported as `null`; it is not a zero residual
-or a claimed threshold. Dynamic programs do not receive an aggregate estimate.
-Even for unitary regions, a sum of observed local residuals covers only the
-listed observations, not all rounding, permutation or serialization steps.
+or a claimed threshold. Each unitary region retains its sum and maximum of
+accepted local residuals, including in a program with measurement, reset,
+classical operations or branches. These are unweighted observation summaries;
+they cover neither all rounding, permutation and serialization steps nor a
+dynamic execution path. Whole-program error remains unknown.
 
 Algorithm references for the independently implemented candidates:
 
@@ -177,8 +179,12 @@ selection and rejection, so future comparisons need not infer it from counts.
 The matrix suite covers unitary numerical behavior; it does not establish
 dynamic program semantics. The separate semantic-instrument tests compare
 measurement branches and quantum channels, while provider contract tests and
-SDK object tests cover serialization. Report aggregation stays unavailable for
-programs with measurement, reset, control flow or classical operations.
+SDK object tests cover serialization. Report regions are separated at each
+measurement, reset, classical instruction, barrier and branch marker. Region
+sums/maxima include accepted observations only. A region without a measured
+observation keeps null summaries, while a measured zero is retained. Rejected
+optimization candidates contribute separate trial counters, never accepted
+region totals.
 Placement permutations, final scalar accumulation, compiler-to-text rounding
 and remote provider processing are not all observed by the local report.
 The report therefore retains `whole_program_error: null` and incomplete

@@ -82,7 +82,9 @@ Module Decomposition::run(const Module& input,const registry::ChipInfo& chip,Dia
   std::size_t region=0;
   for(const auto& op:in.instructions)try{
     if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){
-      out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;continue;
+      out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;
+      if(isNumericalRegionBoundary(op))++region;
+      continue;
     }
     double phaseBefore=out.globalPhase;
     const auto instructionStart=out.instructions.size();

@@ -66,27 +66,33 @@ dialect::Module boundedInputParameters(const dialect::Module& module) {
   }
   return rebuild(circuit);
 }
-dialect::Module canonicalParameters(const dialect::Module& module) {
+dialect::Module canonicalParameters(const dialect::Module& module,std::size_t region=0) {
   using namespace dialect;
   auto in=flatten(module),out=in;out.instructions.clear();
   if(hasControlFlow(module)){
     int depth=0;
     for(const auto& op:in.instructions){
-      if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;continue;}
+      if(isControl(op.kind)||op.kind==OpKind::GlobalPhase){
+        out.instructions.push_back(op);if(op.kind==OpKind::If)++depth;if(op.kind==OpKind::EndIf)--depth;
+        if(isNumericalRegionBoundary(op))++region;
+        continue;
+      }
       auto single=in;single.instructions={op};single.globalPhase=0;
-      auto normalized=flatten(canonicalParameters(rebuild(single)));
+      auto normalized=flatten(canonicalParameters(rebuild(single),region));
       out.instructions.insert(out.instructions.end(),normalized.instructions.begin(),normalized.instructions.end());
       if(depth){if(std::abs(normalized.globalPhase)>kRecognitionTolerance)out.instructions.push_back({OpKind::GlobalPhase,{}, {angleAttr(normalized.globalPhase)},op.loc});}
       else out.globalPhase+=normalized.globalPhase;
+      if(isNumericalRegionBoundary(op))++region;
     }
     return rebuild(out);
   }
   auto wrap=[](double x){double r=boundedPhase(x);return r<0?r+2*M_PI:r;};
   for(auto op:in.instructions){
+    if(isNumericalRegionBoundary(op)){out.instructions.push_back(op);++region;continue;}
     const auto original=op;
     const auto start=out.instructions.size();const auto phaseBefore=out.globalPhase;
     auto record=[&]{observeRewrite("parameter-canonicalization","native-range",{original},
-      std::vector<WireOp>(out.instructions.begin()+start,out.instructions.end()),0,out.globalPhase-phaseBefore);};
+      std::vector<WireOp>(out.instructions.begin()+start,out.instructions.end()),0,out.globalPhase-phaseBefore,std::nullopt,numericalRegion(region));};
     if(op.kind==OpKind::U1q){
       auto desired=matrix1(op);double theta=boundedRotation(parameter(op,"theta")),phi=boundedPhase(parameter(op,"phi"));
       if(theta<0)theta+=2*M_PI;
